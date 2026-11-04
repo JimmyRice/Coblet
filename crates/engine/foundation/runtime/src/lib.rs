@@ -9,6 +9,7 @@ mod events;
 mod extension;
 mod future;
 mod ids;
+mod plan;
 mod platform_probe;
 mod secret;
 mod storage;
@@ -23,6 +24,7 @@ pub use events::{
 pub use extension::{Extension, Registry, RegistryError};
 pub use future::BoxFuture;
 pub use ids::{IdError, OperationId, PlanId, StepId};
+pub use plan::{PathRoot, PlanPath, RelPath, RelPathError};
 pub use platform_probe::{PlatformProbe, ProbeError, StdPlatformProbe};
 pub use secret::{
     MemorySecretStore, Secret, SecretKey, SecretKeyError, SecretStore, SecretStoreError,
