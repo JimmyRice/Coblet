@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/bindings/ffi",
+    "crates/bindings/uniffi",
     "crates/engine/facade/coblet",
     "crates/engine/foundation/runtime",
     "crates/engine/foundation/types",
