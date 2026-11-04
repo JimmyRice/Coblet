@@ -9,6 +9,7 @@ mod extension_id;
 mod game_version;
 mod hash;
 mod maven;
+mod platform;
 
 pub use extension_id::{ExtensionId, ExtensionIdError};
 pub use game_version::{GameVersionId, GameVersionIdError, VersionType};
@@ -17,3 +18,6 @@ pub use hash::{
     Sha512Digest,
 };
 pub use maven::{MavenCoordinate, MavenCoordinateError};
+pub use platform::{
+    Arch, ArchName, Libc, LibcName, OsFamily, OsName, Platform, PlatformNameError, PlatformTrait,
+};
