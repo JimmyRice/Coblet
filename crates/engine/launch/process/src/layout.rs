@@ -13,13 +13,18 @@ pub struct GameLayout {
     game_directory: PathBuf,
 }
 
+fn absolute(path: PathBuf) -> PathBuf {
+    std::path::absolute(&path).unwrap_or(path)
+}
+
 impl GameLayout {
-    /// Creates a layout.
+    /// Creates a layout; relative paths are made absolute against the
+    /// current directory, because the game runs in the game directory.
     #[must_use]
     pub fn new(data_root: impl Into<PathBuf>, game_directory: impl Into<PathBuf>) -> Self {
         Self {
-            data_root: data_root.into(),
-            game_directory: game_directory.into(),
+            data_root: absolute(data_root.into()),
+            game_directory: absolute(game_directory.into()),
         }
     }
 
@@ -101,5 +106,26 @@ impl GameLayout {
     #[must_use]
     pub fn natives(&self, version: &GameVersionId) -> PathBuf {
         self.data_root.join("natives").join(version.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GameLayout;
+
+    #[test]
+    fn makes_relative_paths_absolute() {
+        let layout = GameLayout::new("data", "games/a");
+        assert!(layout.data_root().is_absolute());
+        assert!(layout.game_directory().ends_with("games/a"));
+        assert_eq!(
+            layout.library("a/b/c.jar"),
+            layout
+                .data_root()
+                .join("libraries")
+                .join("a")
+                .join("b")
+                .join("c.jar")
+        );
     }
 }
