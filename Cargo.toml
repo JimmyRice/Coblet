@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/engine/foundation/types",
+    "xtask",
 ]
 
 [workspace.package]
