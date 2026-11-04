@@ -1,0 +1,26 @@
+# Linux on arm64: Mojang's metadata only lists x86_64 Linux natives, so the
+# LWJGL natives are replaced by the arm64 builds LWJGL publishes on Maven
+# Central (from 3.3.0 on). Mojang has no Java runtime for this platform.
+id = "coblet:linux-arm64"
+display_name = "Linux arm64"
+priority = 0
+
+[match]
+os = ["linux"]
+arch = ["aarch64"]
+requires_component = { uid = "org.lwjgl3", min = "3.3.0" }
+
+[rules]
+mojang_os = "linux"
+
+[[natives]]
+match = "org.lwjgl:*:*:natives-linux"
+source = { maven = "https://repo1.maven.org/maven2/", classifier = "natives-linux-arm64" }
+
+# The Tracy profiler bindings only load their natives when profiling is enabled.
+[[natives]]
+match = "com.mojang:jtracy:*:natives-*"
+source = "none"
+
+[java]
+source = "any"

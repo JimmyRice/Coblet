@@ -1,0 +1,20 @@
+# Linux on riscv64: LWJGL publishes riscv64 natives on Maven Central from 3.3.6 on.
+id = "coblet:linux-riscv64"
+display_name = "Linux riscv64"
+priority = 0
+
+[match]
+os = ["linux"]
+arch = ["riscv64"]
+requires_component = { uid = "org.lwjgl3", min = "3.3.6" }
+
+[rules]
+mojang_os = "linux"
+
+[[natives]]
+match = "org.lwjgl:*:*:natives-linux"
+source = { maven = "https://repo1.maven.org/maven2/", classifier = "natives-linux-riscv64" }
+
+[[natives]]
+match = "com.mojang:jtracy:*:natives-*"
+source = "none"

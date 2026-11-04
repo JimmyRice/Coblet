@@ -1,0 +1,22 @@
+[package]
+name = "coblet-platform"
+description = "Platform Profile engine for coblet: turns version metadata into a launch profile for one machine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+coblet-catalog.workspace = true
+coblet-mojang.workspace = true
+coblet-runtime.workspace = true
+coblet-types.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
+

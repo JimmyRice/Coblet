@@ -1,0 +1,21 @@
+# macOS on Apple Silicon without arm64 LWJGL natives (LWJGL 2 and LWJGL 3
+# before 3.3.0): the game runs on an x86_64 Java under Rosetta 2. Mojang's
+# arm64 runtime index has no jre-legacy, so this also covers Java 8.
+id = "coblet:macos-arm64-rosetta"
+display_name = "macOS arm64 (Rosetta 2)"
+priority = 0
+warnings = ["this version has no arm64 natives and runs under Rosetta 2"]
+
+[match]
+os = ["macos"]
+arch = ["aarch64"]
+lacks_component = { uid = "org.lwjgl3", min = "3.3.0" }
+
+[rules]
+mojang_os = "osx"
+mojang_arch = "x86_64"
+native = true
+
+[java]
+runtime = "mac-os"
+arch = "x86_64"

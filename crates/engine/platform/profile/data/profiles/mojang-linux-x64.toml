@@ -1,0 +1,15 @@
+# Linux on x86_64.
+id = "coblet:mojang-linux-x64"
+display_name = "Linux x86_64"
+priority = 0
+
+[match]
+os = ["linux"]
+arch = ["x86_64"]
+
+[rules]
+mojang_os = "linux"
+native = true
+
+[java]
+runtime = "linux"

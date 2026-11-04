@@ -109,6 +109,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "coblet-platform"
+version = "0.1.0"
+dependencies = [
+ "coblet-catalog",
+ "coblet-mojang",
+ "coblet-runtime",
+ "coblet-types",
+ "serde",
+ "thiserror",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "coblet-runtime"
 version = "0.1.0"
 dependencies = [

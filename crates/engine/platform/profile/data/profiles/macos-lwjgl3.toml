@@ -1,0 +1,12 @@
+# GLFW on macOS must run on the main thread. Versions from 1.13 on list the
+# flag in their metadata; the profile adds it where it is missing.
+id = "coblet:macos-lwjgl3"
+display_name = "macOS LWJGL 3"
+priority = 100
+
+[match]
+os = ["macos"]
+requires_component = { uid = "org.lwjgl3" }
+
+[jvm]
+append = ["-XstartOnFirstThread"]

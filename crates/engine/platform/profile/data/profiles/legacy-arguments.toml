@@ -1,0 +1,26 @@
+# Versions before 1.13 only list game arguments. These are the JVM
+# arguments the official launcher adds for them, plus the demo and window
+# size options newer metadata expresses as feature rules.
+id = "coblet:legacy-arguments"
+display_name = "Legacy arguments"
+priority = 50
+
+[match]
+legacy_arguments = true
+
+[jvm]
+append = [
+    "-Djava.library.path=${natives_directory}",
+    "-Dminecraft.launcher.brand=${launcher_name}",
+    "-Dminecraft.launcher.version=${launcher_version}",
+    "-cp",
+    "${classpath}",
+]
+
+[[game.conditional]]
+features = { is_demo_user = true }
+values = ["--demo"]
+
+[[game.conditional]]
+features = { has_custom_resolution = true }
+values = ["--width", "${resolution_width}", "--height", "${resolution_height}"]
