@@ -1,0 +1,21 @@
+# Windows on arm64 without arm64 LWJGL natives (LWJGL 2 and LWJGL 3 before
+# 3.3.0): the game runs as an x64 process under Windows emulation.
+id = "coblet:windows-arm64-x64-emulation"
+display_name = "Windows arm64 (x64 emulation)"
+priority = 0
+warnings = ["this version has no arm64 natives and runs under x64 emulation"]
+
+[match]
+os = ["windows"]
+arch = ["aarch64"]
+lacks_component = { uid = "org.lwjgl3", min = "3.3.0" }
+
+[rules]
+mojang_os = "windows"
+mojang_arch = "x86_64"
+natives_arch = "64"
+native = true
+
+[java]
+runtime = "windows-x64"
+arch = "x86_64"

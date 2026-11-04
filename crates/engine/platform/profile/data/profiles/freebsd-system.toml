@@ -1,0 +1,28 @@
+# Sample profile for a platform Mojang does not support: FreeBSD evaluates
+# the rules as Linux, loads LWJGL from the system packages in /usr/local/lib
+# and uses an installed Java only.
+id = "coblet:freebsd-system"
+display_name = "FreeBSD (system libraries)"
+priority = 200
+
+[match]
+os = ["freebsd"]
+arch = ["x86_64", "aarch64"]
+requires_component = { uid = "org.lwjgl3" }
+
+[rules]
+mojang_os = "linux"
+
+[[natives]]
+match = "org.lwjgl:*:*:natives-linux*"
+source = { system = "/usr/local/lib" }
+
+[[natives]]
+match = "com.mojang:jtracy:*:natives-*"
+source = "none"
+
+[jvm]
+append = ["-Dorg.lwjgl.librarypath=/usr/local/lib"]
+
+[java]
+source = "system-only"

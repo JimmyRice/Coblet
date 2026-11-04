@@ -1,0 +1,15 @@
+# macOS on Intel.
+id = "coblet:mojang-macos-x64"
+display_name = "macOS x86_64"
+priority = 0
+
+[match]
+os = ["macos"]
+arch = ["x86_64"]
+
+[rules]
+mojang_os = "osx"
+native = true
+
+[java]
+runtime = "mac-os"

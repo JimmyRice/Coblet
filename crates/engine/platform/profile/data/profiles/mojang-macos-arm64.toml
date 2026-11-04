@@ -1,0 +1,17 @@
+# macOS on Apple Silicon with LWJGL 3.3 or later, whose metadata lists
+# natives-macos-arm64 jars.
+id = "coblet:mojang-macos-arm64"
+display_name = "macOS arm64"
+priority = 0
+
+[match]
+os = ["macos"]
+arch = ["aarch64"]
+requires_component = { uid = "org.lwjgl3", min = "3.3.0" }
+
+[rules]
+mojang_os = "osx"
+native = true
+
+[java]
+runtime = "mac-os-arm64"

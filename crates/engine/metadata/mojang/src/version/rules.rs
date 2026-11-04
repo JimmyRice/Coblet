@@ -187,6 +187,14 @@ pub struct FeatureClause {
     pub features: BTreeMap<String, bool>,
 }
 
+impl FeatureClause {
+    /// Creates a clause.
+    #[must_use]
+    pub fn new(action: RuleAction, features: BTreeMap<String, bool>) -> Self {
+        Self { action, features }
+    }
+}
+
 impl Condition {
     /// Decides the condition for a set of launch features; missing features count as `false`.
     #[must_use]

@@ -1,0 +1,15 @@
+# Linux on 32-bit x86.
+id = "coblet:mojang-linux-x86"
+display_name = "Linux x86"
+priority = 0
+
+[match]
+os = ["linux"]
+arch = ["x86"]
+
+[rules]
+mojang_os = "linux"
+native = true
+
+[java]
+runtime = "linux-i386"

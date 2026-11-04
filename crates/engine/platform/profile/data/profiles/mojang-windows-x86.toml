@@ -1,0 +1,15 @@
+# Windows on 32-bit x86.
+id = "coblet:mojang-windows-x86"
+display_name = "Windows x86"
+priority = 0
+
+[match]
+os = ["windows"]
+arch = ["x86"]
+
+[rules]
+mojang_os = "windows"
+native = true
+
+[java]
+runtime = "windows-x86"

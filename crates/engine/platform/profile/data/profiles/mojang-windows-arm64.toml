@@ -1,0 +1,17 @@
+# Windows on arm64 with LWJGL 3.3 or later, whose metadata lists
+# natives-windows-arm64 jars.
+id = "coblet:mojang-windows-arm64"
+display_name = "Windows arm64"
+priority = 0
+
+[match]
+os = ["windows"]
+arch = ["aarch64"]
+requires_component = { uid = "org.lwjgl3", min = "3.3.0" }
+
+[rules]
+mojang_os = "windows"
+native = true
+
+[java]
+runtime = "windows-arm64"
