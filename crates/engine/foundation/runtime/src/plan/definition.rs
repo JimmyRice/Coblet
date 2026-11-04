@@ -6,7 +6,7 @@ use serde::de::{DeserializeOwned, Error as _};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{PlanPath, Step, StepGraph};
-use crate::PlanId;
+use crate::{ExecutionReport, PlanId};
 
 /// Kind of change a Plan describes, such as installing an Instance or importing a pack.
 ///
@@ -21,7 +21,10 @@ pub trait PlanKind: 'static {
     type Summary: Serialize + DeserializeOwned + Clone + fmt::Debug + Send + Sync;
 
     /// Result of executing the Plan.
-    type Output: Send;
+    type Output: Send + 'static;
+
+    /// Builds the result once every step has finished.
+    fn finish(summary: Self::Summary, report: &ExecutionReport) -> Self::Output;
 }
 
 /// Condition rechecked right before execution; a failed check stops the Plan as stale.
@@ -46,7 +49,7 @@ pub enum Precondition {
 /// # Examples
 ///
 /// ```
-/// use coblet_runtime::{Plan, PlanKind, StepGraph};
+/// use coblet_runtime::{ExecutionReport, Plan, PlanKind, StepGraph};
 ///
 /// struct Cleanup;
 ///
@@ -54,6 +57,7 @@ pub enum Precondition {
 ///     const NAME: &'static str = "cleanup";
 ///     type Summary = Vec<String>;
 ///     type Output = ();
+///     fn finish(_: Vec<String>, _: &ExecutionReport) {}
 /// }
 ///
 /// let plan: Plan<Cleanup> = Plan::new(vec!["remove logs/".to_owned()], StepGraph::new(), Vec::new());
@@ -106,6 +110,11 @@ impl<K: PlanKind> Plan<K> {
     #[must_use]
     pub fn preconditions(&self) -> &[Precondition] {
         &self.preconditions
+    }
+
+    /// Splits the Plan into its ID, summary, steps and preconditions.
+    pub(crate) fn into_parts(self) -> (PlanId, K::Summary, StepGraph, Vec<Precondition>) {
+        (self.id, self.summary, self.steps, self.preconditions)
     }
 
     /// Reports whether the Plan contains a custom step and therefore cannot be serialized.
@@ -203,7 +212,10 @@ mod tests {
     use coblet_types::FileHash;
 
     use super::{Plan, PlanKind, Precondition};
-    use crate::{CustomStep, MetadataStep, PlanPath, RelPath, Step, StepGraph};
+    use crate::{
+        BoxFuture, CustomStep, ExecutionReport, MetadataStep, PlanPath, RelPath, Step, StepContext,
+        StepError, StepGraph, StepOutcome,
+    };
 
     struct Rename;
 
@@ -211,6 +223,7 @@ mod tests {
         const NAME: &'static str = "rename";
         type Summary = String;
         type Output = ();
+        fn finish(_: String, _: &ExecutionReport) {}
     }
 
     struct Other;
@@ -219,6 +232,7 @@ mod tests {
         const NAME: &'static str = "other";
         type Summary = String;
         type Output = ();
+        fn finish(_: String, _: &ExecutionReport) {}
     }
 
     fn sample() -> Plan<Rename> {
@@ -276,6 +290,12 @@ mod tests {
             }
             fn describe(&self) -> String {
                 String::new()
+            }
+            fn run<'a>(
+                &'a self,
+                _cx: &'a StepContext,
+            ) -> BoxFuture<'a, Result<StepOutcome, StepError>> {
+                Box::pin(async { Ok(StepOutcome::Succeeded) })
             }
         }
 

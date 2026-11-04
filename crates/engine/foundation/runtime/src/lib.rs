@@ -47,6 +47,7 @@ mod extension;
 mod future;
 mod hashing;
 mod ids;
+mod operation;
 mod plan;
 mod platform_probe;
 mod process;
@@ -64,6 +65,11 @@ pub use extension::{Extension, Registry, RegistryError};
 pub use future::BoxFuture;
 pub use hashing::{ComputedHashes, StreamHasher, VerifyError};
 pub use ids::{IdError, OperationId, PlanId, StepId};
+pub use operation::{
+    DEFAULT_STEP_CONCURRENCY, DownloadHandler, ExecutionReport, ExtractHandler, OperationError,
+    OperationEvents, OperationHandle, OperationProgress, Operations, ProcessHandler, StepContext,
+    StepError,
+};
 pub use plan::{
     ArtifactKind, CustomStep, DownloadStep, Expectation, ExpectedOutput, ExtractStep, MetadataStep,
     MoveStep, PathRoot, Plan, PlanKind, PlanPath, Precondition, ProcessArg, ProcessStep, Program,

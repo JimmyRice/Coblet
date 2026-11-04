@@ -14,17 +14,18 @@ reqwest = { workspace = true, optional = true, features = ["rustls-no-provider",
 rustls = { workspace = true, optional = true, features = ["ring", "std", "tls12"] }
 rustls-platform-verifier = { workspace = true, optional = true }
 serde.workspace = true
+serde_json.workspace = true
 sha1.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync", "macros"] }
+tokio = { workspace = true, features = ["sync", "macros", "rt"] }
 tokio-util.workspace = true
 uuid = { workspace = true, features = ["v4", "serde"] }
 
 [dev-dependencies]
-serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
+coblet-runtime = { path = ".", features = ["fs"] }
 
 [features]
 # TokioStorage on tokio::fs.

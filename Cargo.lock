@@ -62,6 +62,7 @@ name = "coblet-runtime"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "coblet-runtime",
  "coblet-types",
  "reqwest",
  "rustls",
