@@ -1,12 +1,13 @@
 use std::borrow::Cow;
 use std::fmt;
 
+use super::GameLogLine;
 use crate::{OperationId, StepId};
 
 /// Event published while coblet works: Operation progress and warnings.
 ///
-/// Later milestones add game log lines and authentication prompts, which is
-/// why the enum is non-exhaustive.
+/// Later milestones add authentication prompts, which is why the enum is
+/// non-exhaustive.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -46,6 +47,8 @@ pub enum Event {
     },
     /// Something went wrong without stopping the work, such as falling back to cached metadata.
     Warning(Warning),
+    /// A line of a running game's output.
+    GameLog(GameLogLine),
 }
 
 /// Final state of a step.
