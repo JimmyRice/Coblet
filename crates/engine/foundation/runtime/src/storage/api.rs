@@ -13,10 +13,16 @@ use crate::BoxFuture;
 /// (such as [`coblet_types::MavenCoordinate::relative_path`]) so metadata
 /// cannot steer writes outside the data root.
 ///
-/// The default implementation on `tokio::fs` comes with the downloader.
+/// [`TokioStorage`](crate::TokioStorage) (feature `fs`) implements it on `tokio::fs`.
 pub trait Storage: Send + Sync + 'static {
     /// Reads a whole file.
     fn read<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<Bytes, StorageError>>;
+
+    /// Opens a file for reading chunk by chunk, for hashing large files.
+    fn open<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> BoxFuture<'a, Result<Box<dyn FileReader>, StorageError>>;
 
     /// Writes a whole file atomically: readers see the old content or the new
     /// content, never a mix. Parent directories are created as needed.
@@ -51,6 +57,21 @@ pub trait Storage: Send + Sync + 'static {
         original: &'a Path,
         link: &'a Path,
     ) -> BoxFuture<'a, Result<(), StorageError>>;
+
+    /// Copies a file, replacing `to` and creating its parent directories.
+    fn copy<'a>(&'a self, from: &'a Path, to: &'a Path) -> BoxFuture<'a, Result<(), StorageError>>;
+
+    /// Creates a symbolic link at `link` whose content is `target`.
+    ///
+    /// On Windows the link is created as a file link.
+    fn symlink<'a>(
+        &'a self,
+        target: &'a Path,
+        link: &'a Path,
+    ) -> BoxFuture<'a, Result<(), StorageError>>;
+
+    /// Marks a file executable for its owner, group and others; does nothing on Windows.
+    fn set_executable<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<(), StorageError>>;
 
     /// Removes a file. Removing a missing file succeeds.
     fn remove_file<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, Result<(), StorageError>>;
@@ -95,6 +116,12 @@ pub trait FileWriter: Send {
 
     /// Flushes and syncs the file to disk.
     fn finish(self: Box<Self>) -> BoxFuture<'static, Result<(), StorageError>>;
+}
+
+/// Streaming reader returned by [`Storage::open`].
+pub trait FileReader: Send {
+    /// Returns the next chunk, or `None` at the end of the file.
+    fn next_chunk(&mut self) -> BoxFuture<'_, Result<Option<Bytes>, StorageError>>;
 }
 
 /// Held advisory lock; dropping it releases the lock.

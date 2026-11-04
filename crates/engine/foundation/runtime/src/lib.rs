@@ -5,7 +5,7 @@
 //! clock directly. They take these traits as `Arc<dyn Trait>`:
 //!
 //! - [`Transport`] for HTTP, with [`Request`] / [`Response`] and a streaming [`Body`]
-//! - [`Storage`] for files, directories and advisory locks
+//! - [`Storage`] for files, directories and advisory locks, with `TokioStorage` (feature `fs`)
 //! - [`SecretStore`] for tokens, with [`MemorySecretStore`] as the built-in store
 //! - [`Clock`] for wall-clock time
 //! - [`PlatformProbe`] for describing the current machine
@@ -71,8 +71,10 @@ pub use platform_probe::{PlatformProbe, ProbeError, StdPlatformProbe};
 pub use secret::{
     MemorySecretStore, Secret, SecretKey, SecretKeyError, SecretStore, SecretStoreError,
 };
+#[cfg(feature = "fs")]
+pub use storage::TokioStorage;
 pub use storage::{
-    DirEntry, EntryKind, FileMetadata, FileWriter, LockGuard, Storage, StorageError,
+    DirEntry, EntryKind, FileMetadata, FileReader, FileWriter, LockGuard, Storage, StorageError,
 };
 pub use transport::{
     Body, HttpUrl, HttpUrlError, MemoryBody, Method, Request, Response, Transport, TransportError,

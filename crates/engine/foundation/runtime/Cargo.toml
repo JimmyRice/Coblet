@@ -20,7 +20,12 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 
 [dev-dependencies]
 serde_json.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
+
+[features]
+# TokioStorage on tokio::fs.
+fs = ["tokio/fs", "tokio/io-util", "tokio/rt"]
 
 [lints]
 workspace = true
