@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/engine/foundation/runtime",
     "crates/engine/foundation/types",
+    "crates/engine/launch/command",
     "crates/engine/metadata/catalog",
     "crates/engine/metadata/mojang",
     "crates/engine/platform/java",
@@ -25,12 +26,14 @@ coblet-catalog = { path = "crates/engine/metadata/catalog" }
 coblet-mojang = { path = "crates/engine/metadata/mojang" }
 coblet-platform = { path = "crates/engine/platform/profile" }
 coblet-java = { path = "crates/engine/platform/java" }
+coblet-launch-command = { path = "crates/engine/launch/command" }
 coblet-download = { path = "crates/engine/transfer/download" }
 
 bytes = { version = "1.12.1", default-features = false, features = ["std"] }
 sha1 = { version = "0.11.0", default-features = false }
 sha2 = { version = "0.11.0", default-features = false }
 httpdate = { version = "1.0.3", default-features = false }
+md-5 = { version = "0.11.0", default-features = false }
 regex-lite = { version = "0.1.9", default-features = false, features = ["std", "string"] }
 reqwest = { version = "0.13.5", default-features = false }
 rustls = { version = "0.23.27", default-features = false }
