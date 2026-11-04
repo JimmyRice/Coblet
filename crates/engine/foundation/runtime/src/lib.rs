@@ -3,6 +3,8 @@
 
 #![forbid(unsafe_code)]
 
+mod extension;
 mod future;
 
+pub use extension::{Extension, Registry, RegistryError};
 pub use future::BoxFuture;

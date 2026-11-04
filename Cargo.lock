@@ -5,6 +5,10 @@ version = 4
 [[package]]
 name = "coblet-runtime"
 version = "0.1.0"
+dependencies = [
+ "coblet-types",
+ "thiserror",
+]
 
 [[package]]
 name = "coblet-types"
