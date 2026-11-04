@@ -1,8 +1,43 @@
-//! Services that coblet crates receive by injection instead of reaching for
-//! the outside world directly, plus the shared infrastructure built on them.
+//! Services that coblet crates receive by injection, and the infrastructure
+//! built on them.
+//!
+//! Business crates never open a socket, touch the file system or read the
+//! clock directly. They take these traits as `Arc<dyn Trait>`:
+//!
+//! - [`Transport`] for HTTP, with [`Request`] / [`Response`] and a streaming [`Body`]
+//! - [`Storage`] for files, directories and advisory locks
+//! - [`SecretStore`] for tokens, with [`MemorySecretStore`] as the built-in store
+//! - [`Clock`] for wall-clock time
+//! - [`PlatformProbe`] for describing the current machine
+//!
+//! The same crate holds the pieces shared by every subsystem: [`Registry`]
+//! for extension points keyed by [`coblet_types::ExtensionId`], the
+//! [`EventBus`] for progress and warnings, [`CancellationToken`], and the
+//! [`Plan`] model ([`StepGraph`], [`Step`], [`Precondition`]) that every
+//! change goes through before it touches disk.
+//!
+//! Methods of these traits return [`BoxFuture`] so the traits stay object safe.
+//!
+//! ```
+//! use std::sync::Arc;
+//!
+//! use coblet_runtime::{Clock, MemorySecretStore, Secret, SecretKey, SecretStore, SystemClock};
+//!
+//! # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
+//! let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+//! let secrets: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::new());
+//!
+//! let key = SecretKey::new("acme:auth/alice/refresh_token")?;
+//! secrets.put(&key, Secret::new("token")).await?;
+//! assert_eq!(secrets.get(&key).await?.map(|s| s.expose().to_owned()), Some("token".to_owned()));
+//! assert!(clock.now() > std::time::SystemTime::UNIX_EPOCH);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # }).unwrap();
+//! ```
 
 #![forbid(unsafe_code)]
 
+mod assertions;
 mod cancel;
 mod clock;
 mod events;
