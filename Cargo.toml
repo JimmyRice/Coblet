@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/bindings/ffi",
     "crates/engine/facade/coblet",
     "crates/engine/foundation/runtime",
     "crates/engine/foundation/types",
