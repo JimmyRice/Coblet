@@ -10,6 +10,9 @@ publish.workspace = true
 [dependencies]
 bytes.workspace = true
 coblet-types.workspace = true
+reqwest = { workspace = true, optional = true, features = ["rustls-no-provider", "http2"] }
+rustls = { workspace = true, optional = true, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = { workspace = true, optional = true }
 serde.workspace = true
 sha1.workspace = true
 sha2.workspace = true
@@ -28,6 +31,10 @@ tokio = { workspace = true, features = ["rt", "macros", "time"] }
 fs = ["tokio/fs", "tokio/io-util", "tokio/rt"]
 # TokioSpawner on tokio::process.
 process = ["tokio/process", "tokio/io-util", "tokio/rt"]
+# ReqwestTransport: reqwest with rustls (ring) and the platform certificate verifier.
+reqwest = ["dep:reqwest", "dep:rustls", "dep:rustls-platform-verifier"]
+# Tests that talk to real services; they are also #[ignore]d.
+online-tests = []
 
 [lints]
 workspace = true

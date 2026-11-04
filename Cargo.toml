@@ -20,6 +20,9 @@ coblet-types = { path = "crates/engine/foundation/types" }
 bytes = { version = "1.12.1", default-features = false, features = ["std"] }
 sha1 = { version = "0.11.0", default-features = false }
 sha2 = { version = "0.11.0", default-features = false }
+reqwest = { version = "0.13.5", default-features = false }
+rustls = { version = "0.23.27", default-features = false }
+rustls-platform-verifier = { version = "0.7.1", default-features = false }
 serde = { version = "1.0.229", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
 tokio = { version = "1.54.1", default-features = false }
