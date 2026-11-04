@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/engine/foundation/runtime",
     "crates/engine/foundation/types",
+    "crates/engine/metadata/catalog",
     "crates/engine/transfer/download",
     "xtask",
 ]
@@ -17,6 +18,7 @@ publish = false
 [workspace.dependencies]
 coblet-runtime = { path = "crates/engine/foundation/runtime" }
 coblet-types = { path = "crates/engine/foundation/types" }
+coblet-catalog = { path = "crates/engine/metadata/catalog" }
 coblet-download = { path = "crates/engine/transfer/download" }
 
 bytes = { version = "1.12.1", default-features = false, features = ["std"] }
