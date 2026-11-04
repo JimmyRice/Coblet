@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod clock;
+mod events;
 mod extension;
 mod future;
 mod ids;
@@ -13,6 +14,10 @@ mod storage;
 mod transport;
 
 pub use clock::{Clock, FixedClock, SystemClock};
+pub use events::{
+    DEFAULT_PROGRESS_INTERVAL, Event, EventBus, EventSubscription, OperationOutcome,
+    ProgressThrottle, Received, StepOutcome, Warning, WarningCode,
+};
 pub use extension::{Extension, Registry, RegistryError};
 pub use future::BoxFuture;
 pub use ids::{IdError, OperationId, PlanId, StepId};
