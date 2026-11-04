@@ -4,3 +4,7 @@
 //! validates itself on construction.
 
 #![forbid(unsafe_code)]
+
+mod extension_id;
+
+pub use extension_id::{ExtensionId, ExtensionIdError};
