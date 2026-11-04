@@ -24,7 +24,11 @@ pub use events::{
 pub use extension::{Extension, Registry, RegistryError};
 pub use future::BoxFuture;
 pub use ids::{IdError, OperationId, PlanId, StepId};
-pub use plan::{PathRoot, PlanPath, RelPath, RelPathError};
+pub use plan::{
+    ArtifactKind, CustomStep, DownloadStep, Expectation, ExpectedOutput, ExtractStep, MetadataStep,
+    MoveStep, PathRoot, PlanPath, ProcessArg, ProcessStep, Program, RelPath, RelPathError,
+    RemoveMode, RemoveStep, Sources, Step, VerifyHashStep, WriteFileStep,
+};
 pub use platform_probe::{PlatformProbe, ProbeError, StdPlatformProbe};
 pub use secret::{
     MemorySecretStore, Secret, SecretKey, SecretKeyError, SecretStore, SecretStoreError,

@@ -2,6 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 
 /// Absolute `http://` or `https://` URL.
 ///
@@ -19,7 +20,8 @@ use bytes::Bytes;
 /// assert!(HttpUrl::new("file:///etc/passwd").is_err());
 /// # Ok::<(), coblet_runtime::HttpUrlError>(())
 /// ```
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct HttpUrl(String);
 
 /// Reason a URL was rejected.
@@ -80,6 +82,20 @@ impl HttpUrl {
 impl fmt::Display for HttpUrl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+impl TryFrom<String> for HttpUrl {
+    type Error = HttpUrlError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<HttpUrl> for String {
+    fn from(value: HttpUrl) -> Self {
+        value.0
     }
 }
 
