@@ -8,6 +8,7 @@ mod extension;
 mod future;
 mod platform_probe;
 mod secret;
+mod storage;
 mod transport;
 
 pub use clock::{Clock, FixedClock, SystemClock};
@@ -16,6 +17,9 @@ pub use future::BoxFuture;
 pub use platform_probe::{PlatformProbe, ProbeError, StdPlatformProbe};
 pub use secret::{
     MemorySecretStore, Secret, SecretKey, SecretKeyError, SecretStore, SecretStoreError,
+};
+pub use storage::{
+    DirEntry, EntryKind, FileMetadata, FileWriter, LockGuard, Storage, StorageError,
 };
 pub use transport::{
     Body, HttpUrl, HttpUrlError, MemoryBody, Method, Request, Response, Transport, TransportError,
