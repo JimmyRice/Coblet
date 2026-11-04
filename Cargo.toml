@@ -4,6 +4,7 @@ members = [
     "crates/engine/foundation/runtime",
     "crates/engine/foundation/types",
     "crates/engine/metadata/catalog",
+    "crates/engine/metadata/mojang",
     "crates/engine/transfer/download",
     "xtask",
 ]
@@ -19,12 +20,14 @@ publish = false
 coblet-runtime = { path = "crates/engine/foundation/runtime" }
 coblet-types = { path = "crates/engine/foundation/types" }
 coblet-catalog = { path = "crates/engine/metadata/catalog" }
+coblet-mojang = { path = "crates/engine/metadata/mojang" }
 coblet-download = { path = "crates/engine/transfer/download" }
 
 bytes = { version = "1.12.1", default-features = false, features = ["std"] }
 sha1 = { version = "0.11.0", default-features = false }
 sha2 = { version = "0.11.0", default-features = false }
 httpdate = { version = "1.0.3", default-features = false }
+regex-lite = { version = "0.1.9", default-features = false, features = ["std", "string"] }
 reqwest = { version = "0.13.5", default-features = false }
 rustls = { version = "0.23.27", default-features = false }
 rustls-platform-verifier = { version = "0.7.1", default-features = false }
@@ -32,6 +35,7 @@ serde = { version = "1.0.229", default-features = false, features = ["std", "der
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
 tokio = { version = "1.54.1", default-features = false }
 tokio-util = { version = "0.7.20", default-features = false }
+toml = { version = "1.2.0", default-features = false, features = ["std", "serde", "parse"] }
 tempfile = { version = "3.27.0", default-features = false }
 thiserror = { version = "2.0.21", default-features = false, features = ["std"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }

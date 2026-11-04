@@ -1,0 +1,30 @@
+# Built-in version traits that cannot be derived from version metadata alone.
+#
+# A rule applies when every condition it sets holds:
+#   ids             - version IDs
+#   released_before - release time strictly earlier than this (RFC 3339)
+#   released_after  - release time strictly later than this (RFC 3339)
+#   assets          - asset index IDs; needs the version JSON, so catalog
+#                     entries built from the version manifest skip such rules
+#
+# Release times do not follow development order around 1.5.2 (released after
+# the first 1.6 snapshot), so rules about pre-1.6 behavior match on the asset
+# index instead.
+
+# Launchwrapper tweakers that host an Applet. A version whose main class is
+# net.minecraft.launchwrapper.Launch and that passes one of these with
+# --tweakClass gets the `applet` trait.
+applet_tweakers = [
+    "net.minecraft.launchwrapper.AlphaVanillaTweaker",
+    "net.minecraft.launchwrapper.IndevVanillaTweaker",
+]
+
+[[rule]]
+traits = ["legacy-online-services"]
+released_before = "2014-04-09T07:52:06Z"
+note = "skins are loaded from the retired skins.minecraft.net service (changed in 1.7.6)"
+
+[[rule]]
+traits = ["legacy-macos-rendering"]
+assets = ["pre-1.6"]
+note = "red and blue are swapped on Apple Silicon in versions before 13w16a"

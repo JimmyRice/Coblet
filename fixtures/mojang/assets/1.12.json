@@ -1,0 +1,20 @@
+{
+  "objects": {
+    "icons/icon_16x16.png": {
+      "hash": "5ff04807c356f1beed0b86ccf659b44b9983e3fa",
+      "size": 781
+    },
+    "icons/icon_32x32.png": {
+      "hash": "af96f55a90eaf11b327f1b5f8834a051027dc506",
+      "size": 2063
+    },
+    "icons/minecraft.icns": {
+      "hash": "f00657542252858a721e715a2e888a9226404e35",
+      "size": 374665
+    },
+    "minecraft/icons/icon_16x16.png": {
+      "hash": "5ff04807c356f1beed0b86ccf659b44b9983e3fa",
+      "size": 781
+    }
+  }
+}
