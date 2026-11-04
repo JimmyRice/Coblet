@@ -2,11 +2,13 @@
 //!
 //! ```text
 //! cargo run -p coblet --example launch -- <version|latest> [--demo] [--name NAME]
-//!     [--data DIR] [--game DIR] [--java PATH] [--until TEXT] [--timeout SECONDS]
+//!     [--data DIR] [--game DIR] [--java PATH] [--until TEXT] [--run-for SECONDS]
+//!     [--timeout SECONDS]
 //! ```
 //!
-//! With `--until`, the game is stopped once a log message contains TEXT and
-//! the example exits with 0; without it, the example waits for the game.
+//! With `--until`, the game is stopped once a log message contains TEXT;
+//! with `--run-for`, once it ran that long. The example then exits with 0.
+//! Without either, it waits for the game.
 #![expect(
     clippy::print_stdout,
     clippy::print_stderr,
@@ -31,7 +33,14 @@ struct Args {
     game: Option<PathBuf>,
     java: Option<PathBuf>,
     until: Option<String>,
+    run_for: Option<Duration>,
     timeout: Duration,
+}
+
+fn seconds(text: &str) -> Result<Duration, String> {
+    text.parse()
+        .map(Duration::from_secs)
+        .map_err(|_| format!("bad number of seconds {text}"))
 }
 
 fn parse() -> Result<Args, String> {
@@ -44,6 +53,7 @@ fn parse() -> Result<Args, String> {
         game: None,
         java: None,
         until: None,
+        run_for: None,
         timeout: Duration::from_secs(600),
     };
     while let Some(arg) = args.next() {
@@ -55,20 +65,14 @@ fn parse() -> Result<Args, String> {
             "--game" => parsed.game = Some(value()?.into()),
             "--java" => parsed.java = Some(value()?.into()),
             "--until" => parsed.until = Some(value()?),
-            "--timeout" => {
-                let seconds = value()?;
-                parsed.timeout = Duration::from_secs(
-                    seconds
-                        .parse()
-                        .map_err(|_| format!("bad --timeout {seconds}"))?,
-                );
-            }
+            "--run-for" => parsed.run_for = Some(seconds(&value()?)?),
+            "--timeout" => parsed.timeout = seconds(&value()?)?,
             other if other.starts_with("--") => return Err(format!("unknown option {other}")),
             other => other.clone_into(&mut parsed.version),
         }
     }
     if parsed.version.is_empty() {
-        return Err("usage: launch <version|latest> [--demo] [--name NAME] [--data DIR] [--game DIR] [--java PATH] [--until TEXT] [--timeout SECONDS]".to_owned());
+        return Err("usage: launch <version|latest> [--demo] [--name NAME] [--data DIR] [--game DIR] [--java PATH] [--until TEXT] [--run-for SECONDS] [--timeout SECONDS]".to_owned());
     }
     Ok(parsed)
 }
@@ -114,11 +118,19 @@ async fn run(args: Args) -> Result<bool, Box<dyn std::error::Error>> {
     println!("== started pid {:?}: {}", session.pid(), session.command());
     let mut logs = session.logs();
     let mut reached = false;
-    let deadline = tokio::time::Instant::now() + args.timeout;
+    let deadline = tokio::time::Instant::now() + args.run_for.unwrap_or(args.timeout);
     loop {
         let item = tokio::time::timeout_at(deadline, logs.next()).await;
         let Ok(item) = item else {
-            eprintln!("== timed out after {}s", args.timeout.as_secs());
+            if let Some(run_for) = args.run_for {
+                println!(
+                    "== still running after {}s, stopping the game",
+                    run_for.as_secs()
+                );
+                reached = true;
+            } else {
+                eprintln!("== timed out after {}s", args.timeout.as_secs());
+            }
             session.kill();
             break;
         };
@@ -146,9 +158,10 @@ async fn run(args: Args) -> Result<bool, Box<dyn std::error::Error>> {
         exit.suspected_crash,
         exit.crash_reports
     );
-    Ok(match args.until {
-        Some(_) => reached,
-        None => !exit.suspected_crash,
+    Ok(if args.until.is_some() || args.run_for.is_some() {
+        reached
+    } else {
+        !exit.suspected_crash
     })
 }
 
