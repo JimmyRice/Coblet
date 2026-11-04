@@ -67,7 +67,8 @@ impl Sdk {
 }
 
 impl SdkBuilder<NoRoot> {
-    /// Sets the directory for shared game files, caches and runtimes.
+    /// Sets the directory for shared game files, caches and runtimes; a
+    /// relative path is resolved against the current directory.
     pub fn data_root(self, path: impl Into<PathBuf>) -> SdkBuilder<WithRoot> {
         SdkBuilder {
             data_root: Some(path.into()),
@@ -156,7 +157,10 @@ impl SdkBuilder<WithRoot> {
     /// [`SdkError::Platform`] when the platform cannot be detected.
     pub fn build(mut self) -> Result<Sdk, SdkError> {
         let transport = self.transport_or_default()?;
+        // The game and the Java runtime run with other working directories,
+        // so every path derived from the data root must be absolute.
         let data_root = self.data_root.take().unwrap_or_default();
+        let data_root = std::path::absolute(&data_root).unwrap_or(data_root);
         let storage = self
             .storage
             .take()

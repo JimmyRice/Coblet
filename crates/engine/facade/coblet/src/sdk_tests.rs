@@ -48,6 +48,13 @@ fn the_default_transport_needs_a_user_agent() {
         .build()
         .unwrap();
     assert_eq!(sdk.data_root(), std::path::Path::new("/tmp/x"));
+    let relative = Sdk::builder()
+        .data_root("data")
+        .transport(Arc::new(Fixtures))
+        .platform(Platform::new(OsFamily::Linux, Arch::X86_64))
+        .build()
+        .unwrap();
+    assert!(relative.data_root().is_absolute());
 }
 
 #[tokio::test]
