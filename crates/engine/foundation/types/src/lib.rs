@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod assertions;
 mod extension_id;
 mod game_version;
 mod hash;
