@@ -91,6 +91,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "coblet-java"
+version = "0.1.0"
+dependencies = [
+ "coblet-catalog",
+ "coblet-download",
+ "coblet-mojang",
+ "coblet-platform",
+ "coblet-runtime",
+ "coblet-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "coblet-mojang"
 version = "0.1.0"
 dependencies = [
