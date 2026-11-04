@@ -1,0 +1,13 @@
+[package]
+name = "coblet-runtime"
+description = "Injected services for coblet (transport, storage, clock, secrets, platform probe), extension registries, events and the Plan / Operation model."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

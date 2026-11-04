@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "coblet-runtime"
+version = "0.1.0"
+
+[[package]]
 name = "coblet-types"
 version = "0.1.0"
 dependencies = [

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/engine/foundation/runtime",
     "crates/engine/foundation/types",
     "xtask",
 ]
@@ -13,6 +14,7 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
+coblet-runtime = { path = "crates/engine/foundation/runtime" }
 coblet-types = { path = "crates/engine/foundation/types" }
 
 serde = { version = "1.0.229", default-features = false, features = ["std", "derive"] }
