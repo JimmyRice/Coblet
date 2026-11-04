@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+mod cancel;
 mod clock;
 mod events;
 mod extension;
@@ -13,6 +14,7 @@ mod secret;
 mod storage;
 mod transport;
 
+pub use cancel::{CancellationToken, Cancelled, ensure_not_cancelled};
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use events::{
     DEFAULT_PROGRESS_INTERVAL, Event, EventBus, EventSubscription, OperationOutcome,
