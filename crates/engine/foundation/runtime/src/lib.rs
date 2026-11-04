@@ -17,4 +17,7 @@ pub use platform_probe::{PlatformProbe, ProbeError, StdPlatformProbe};
 pub use secret::{
     MemorySecretStore, Secret, SecretKey, SecretKeyError, SecretStore, SecretStoreError,
 };
-pub use transport::{UserAgent, UserAgentError};
+pub use transport::{
+    Body, HttpUrl, HttpUrlError, MemoryBody, Method, Request, Response, Transport, TransportError,
+    UserAgent, UserAgentError,
+};
