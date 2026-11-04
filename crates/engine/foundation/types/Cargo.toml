@@ -1,0 +1,13 @@
+[package]
+name = "coblet-types"
+description = "Shared value types for coblet: version IDs, Maven coordinates, hashes, platform descriptions and ID newtypes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
