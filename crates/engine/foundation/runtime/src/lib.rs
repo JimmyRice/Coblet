@@ -6,6 +6,7 @@
 mod clock;
 mod extension;
 mod future;
+mod ids;
 mod platform_probe;
 mod secret;
 mod storage;
@@ -14,6 +15,7 @@ mod transport;
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use extension::{Extension, Registry, RegistryError};
 pub use future::BoxFuture;
+pub use ids::{IdError, OperationId, PlanId, StepId};
 pub use platform_probe::{PlatformProbe, ProbeError, StdPlatformProbe};
 pub use secret::{
     MemorySecretStore, Secret, SecretKey, SecretKeyError, SecretStore, SecretStoreError,
