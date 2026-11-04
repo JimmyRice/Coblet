@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/engine/foundation/runtime",
     "crates/engine/foundation/types",
     "xtask",
 ]
@@ -13,11 +14,16 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
+coblet-runtime = { path = "crates/engine/foundation/runtime" }
 coblet-types = { path = "crates/engine/foundation/types" }
 
+bytes = { version = "1.12.1", default-features = false, features = ["std"] }
 serde = { version = "1.0.229", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
+tokio = { version = "1.54.1", default-features = false }
+tokio-util = { version = "0.7.20", default-features = false }
 thiserror = { version = "2.0.21", default-features = false, features = ["std"] }
+uuid = { version = "1.29.0", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
