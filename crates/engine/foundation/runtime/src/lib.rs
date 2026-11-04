@@ -8,6 +8,7 @@ mod extension;
 mod future;
 mod platform_probe;
 mod secret;
+mod transport;
 
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use extension::{Extension, Registry, RegistryError};
@@ -16,3 +17,4 @@ pub use platform_probe::{PlatformProbe, ProbeError, StdPlatformProbe};
 pub use secret::{
     MemorySecretStore, Secret, SecretKey, SecretKeyError, SecretStore, SecretStoreError,
 };
+pub use transport::{UserAgent, UserAgentError};
