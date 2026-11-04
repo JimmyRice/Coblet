@@ -8,25 +8,31 @@
 
 use std::process::ExitCode;
 
+mod module_roots;
+mod workspace;
+
 const USAGE: &str = "\
 usage: cargo xtask <command>
 
 commands:
+  check-module-roots   reject definitions inside lib.rs and mod.rs files
   help                 print this message";
 
 fn main() -> ExitCode {
     let command = std::env::args().nth(1);
-    match command.as_deref() {
+    let outcome = match command.as_deref() {
+        Some("check-module-roots") => module_roots::run(&workspace::root()),
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}");
-            ExitCode::SUCCESS
+            Ok(())
         }
-        Some(other) => {
-            eprintln!("error: unknown command `{other}`\n\n{USAGE}");
-            ExitCode::FAILURE
-        }
-        None => {
-            eprintln!("{USAGE}");
+        Some(other) => Err(format!("unknown command `{other}`\n\n{USAGE}")),
+        None => Err(USAGE.to_owned()),
+    };
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("error: {message}");
             ExitCode::FAILURE
         }
     }

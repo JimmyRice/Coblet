@@ -8,6 +8,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+proc-macro2 = { version = "1.0.107", default-features = false, features = ["span-locations"] }
+syn = { version = "3.0.9", default-features = false, features = ["full", "parsing", "printing"] }
 
 [lints]
 workspace = true
