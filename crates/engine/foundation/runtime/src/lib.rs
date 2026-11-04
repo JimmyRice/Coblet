@@ -58,8 +58,8 @@ mod transport;
 pub use cancel::{CancellationToken, Cancelled, ensure_not_cancelled};
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use events::{
-    DEFAULT_PROGRESS_INTERVAL, Event, EventBus, EventSubscription, OperationOutcome,
-    ProgressThrottle, Received, StepOutcome, Warning, WarningCode,
+    DEFAULT_PROGRESS_INTERVAL, Event, EventBus, EventSubscription, GameLogLine, LogLevel,
+    LogSource, OperationOutcome, ProgressThrottle, Received, StepOutcome, Warning, WarningCode,
 };
 pub use extension::{Extension, Registry, RegistryError};
 pub use future::BoxFuture;

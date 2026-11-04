@@ -1,0 +1,6 @@
+---
+source: crates/engine/launch/process/src/convert_tests.rs
+expression: text
+---
+error: freebsd x86_64 is not supported: no native code for com.mojang:text2speech:1.10.3:natives-linux
+missing: no native code for com.mojang:text2speech:1.10.3:natives-linux

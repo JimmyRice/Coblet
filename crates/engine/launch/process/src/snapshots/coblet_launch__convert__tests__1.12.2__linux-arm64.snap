@@ -1,0 +1,11 @@
+---
+source: crates/engine/launch/process/src/convert_tests.rs
+expression: text
+---
+error: linux aarch64 is not supported: no native code for ca.weblite:java-objc-bridge:1.0.0; no native code for com.mojang:text2speech:1.10.3; no native code for net.java.jinput:jinput-platform:2.0.5; no native code for org.lwjgl.lwjgl:lwjgl-platform:2.9.2-nightly-20140822; no native code for org.lwjgl.lwjgl:lwjgl-platform:2.9.4-nightly-20150209; java 8: no Mojang runtime for this platform and no profile allows a system Java
+missing: no native code for ca.weblite:java-objc-bridge:1.0.0
+missing: no native code for com.mojang:text2speech:1.10.3
+missing: no native code for net.java.jinput:jinput-platform:2.0.5
+missing: no native code for org.lwjgl.lwjgl:lwjgl-platform:2.9.2-nightly-20140822
+missing: no native code for org.lwjgl.lwjgl:lwjgl-platform:2.9.4-nightly-20150209
+missing: java 8: no Mojang runtime for this platform and no profile allows a system Java
