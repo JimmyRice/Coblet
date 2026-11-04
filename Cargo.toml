@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/engine/facade/coblet",
     "crates/engine/foundation/runtime",
     "crates/engine/foundation/types",
     "crates/engine/launch/command",
@@ -29,6 +30,7 @@ coblet-platform = { path = "crates/engine/platform/profile" }
 coblet-java = { path = "crates/engine/platform/java" }
 coblet-launch-command = { path = "crates/engine/launch/command" }
 coblet-launch = { path = "crates/engine/launch/process" }
+coblet = { path = "crates/engine/facade/coblet", default-features = false }
 coblet-download = { path = "crates/engine/transfer/download" }
 
 bytes = { version = "1.12.1", default-features = false, features = ["std"] }
