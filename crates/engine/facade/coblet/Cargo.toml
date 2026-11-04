@@ -1,0 +1,42 @@
+[package]
+name = "coblet"
+description = "Minecraft launcher SDK: version catalog, Java management and game launch behind one Sdk."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = ["launch", "mojang", "java", "tls-rustls"]
+# Official version metadata and game file downloads.
+mojang = ["dep:coblet-mojang"]
+# Java discovery and Mojang runtime downloads.
+java = ["dep:coblet-java"]
+# Launch command construction and process management.
+launch = ["mojang", "java", "dep:coblet-launch", "dep:coblet-launch-command", "dep:coblet-platform"]
+# Default transport: reqwest with rustls.
+tls-rustls = ["coblet-runtime/reqwest"]
+
+[dependencies]
+coblet-catalog.workspace = true
+coblet-download.workspace = true
+coblet-java = { workspace = true, optional = true }
+coblet-launch = { workspace = true, optional = true }
+coblet-launch-command = { workspace = true, optional = true }
+coblet-mojang = { workspace = true, optional = true }
+coblet-platform = { workspace = true, optional = true }
+coblet-runtime = { workspace = true, features = ["fs", "process"] }
+coblet-types.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
+
+[[example]]
+name = "launch"
+required-features = ["launch", "tls-rustls"]
+
+[lints]
+workspace = true
