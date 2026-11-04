@@ -1,0 +1,9 @@
+---
+source: crates/engine/launch/process/src/convert_tests.rs
+expression: text
+---
+error: freebsd x86_64 is not supported: no native code for net.java.jinput:jinput-platform:2.0.5; no native code for org.lwjgl.lwjgl:lwjgl-platform:2.9.0; no native code for org.lwjgl.lwjgl:lwjgl-platform:2.9.1-nightly-20130708-debug3; java 8: no Mojang runtime for this platform and no profile allows a system Java
+missing: no native code for net.java.jinput:jinput-platform:2.0.5
+missing: no native code for org.lwjgl.lwjgl:lwjgl-platform:2.9.0
+missing: no native code for org.lwjgl.lwjgl:lwjgl-platform:2.9.1-nightly-20130708-debug3
+missing: java 8: no Mojang runtime for this platform and no profile allows a system Java

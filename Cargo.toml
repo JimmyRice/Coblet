@@ -4,6 +4,7 @@ members = [
     "crates/engine/foundation/runtime",
     "crates/engine/foundation/types",
     "crates/engine/launch/command",
+    "crates/engine/launch/process",
     "crates/engine/metadata/catalog",
     "crates/engine/metadata/mojang",
     "crates/engine/platform/java",
@@ -27,12 +28,14 @@ coblet-mojang = { path = "crates/engine/metadata/mojang" }
 coblet-platform = { path = "crates/engine/platform/profile" }
 coblet-java = { path = "crates/engine/platform/java" }
 coblet-launch-command = { path = "crates/engine/launch/command" }
+coblet-launch = { path = "crates/engine/launch/process" }
 coblet-download = { path = "crates/engine/transfer/download" }
 
 bytes = { version = "1.12.1", default-features = false, features = ["std"] }
 sha1 = { version = "0.11.0", default-features = false }
 sha2 = { version = "0.11.0", default-features = false }
 httpdate = { version = "1.0.3", default-features = false }
+insta = { version = "1.49.0", default-features = false }
 md-5 = { version = "0.11.0", default-features = false }
 regex-lite = { version = "0.1.9", default-features = false, features = ["std", "string"] }
 reqwest = { version = "0.13.5", default-features = false }
@@ -44,6 +47,7 @@ tokio = { version = "1.54.1", default-features = false }
 tokio-util = { version = "0.7.20", default-features = false }
 toml = { version = "1.2.0", default-features = false, features = ["std", "serde", "parse"] }
 tempfile = { version = "3.27.0", default-features = false }
+zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 thiserror = { version = "2.0.21", default-features = false, features = ["std"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 uuid = { version = "1.29.0", default-features = false, features = ["std"] }

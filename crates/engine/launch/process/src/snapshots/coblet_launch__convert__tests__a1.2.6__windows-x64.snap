@@ -1,0 +1,30 @@
+---
+source: crates/engine/launch/process/src/convert_tests.rs
+expression: text
+---
+profiles: coblet:mojang-windows-x64, coblet:legacy-arguments
+java: 8 x86_64 runtime windows-x64/jre-legacy
+extract: org/lwjgl/lwjgl/lwjgl-platform/2.9.0/lwjgl-platform-2.9.0-natives-windows.jar
+extract: net/java/jinput/jinput-platform/2.0.5/jinput-platform-2.0.5-natives-windows.jar
+extract: net/java/jinput/jinput-platform/2.0.5/jinput-platform-2.0.5-natives-windows.jar
+cwd: /game
+/java/bin/java
+  -Djava.library.path=/data/natives/a1.2.6
+  -Dminecraft.launcher.brand=coblet
+  -Dminecraft.launcher.version=test
+  -cp
+  /data/libraries/net/minecraft/launchwrapper/1.5/launchwrapper-1.5.jar;
+  /data/libraries/net/sf/jopt-simple/jopt-simple/4.5/jopt-simple-4.5.jar;
+  /data/libraries/org/ow2/asm/asm-all/4.1/asm-all-4.1.jar;
+  /data/libraries/net/java/jinput/jinput/2.0.5/jinput-2.0.5.jar;
+  /data/libraries/net/java/jutils/jutils/1.0.0/jutils-1.0.0.jar;
+  /data/libraries/org/lwjgl/lwjgl/lwjgl/2.9.0/lwjgl-2.9.0.jar;
+  /data/libraries/org/lwjgl/lwjgl/lwjgl_util/2.9.0/lwjgl_util-2.9.0.jar;
+  /data/versions/a1.2.6/a1.2.6.jar;
+  net.minecraft.launchwrapper.Launch
+  Steve
+  -
+  --gameDir
+  /game
+  --assetsDir
+  /game/resources
