@@ -6,5 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod extension_id;
+mod game_version;
 
 pub use extension_id::{ExtensionId, ExtensionIdError};
+pub use game_version::{GameVersionId, GameVersionIdError, VersionType};
