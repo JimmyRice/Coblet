@@ -14,18 +14,20 @@ serde.workspace = true
 sha1.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "macros"] }
 tokio-util.workspace = true
 uuid = { workspace = true, features = ["v4", "serde"] }
 
 [dev-dependencies]
 serde_json.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [features]
 # TokioStorage on tokio::fs.
 fs = ["tokio/fs", "tokio/io-util", "tokio/rt"]
+# TokioSpawner on tokio::process.
+process = ["tokio/process", "tokio/io-util", "tokio/rt"]
 
 [lints]
 workspace = true

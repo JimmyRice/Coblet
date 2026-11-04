@@ -9,6 +9,7 @@
 //! - [`SecretStore`] for tokens, with [`MemorySecretStore`] as the built-in store
 //! - [`Clock`] for wall-clock time
 //! - [`PlatformProbe`] for describing the current machine
+//! - [`ProcessSpawner`] for child processes, with `TokioSpawner` (feature `process`)
 //!
 //! The same crate holds the pieces shared by every subsystem: [`Registry`]
 //! for extension points keyed by [`coblet_types::ExtensionId`], the
@@ -47,6 +48,7 @@ mod hashing;
 mod ids;
 mod plan;
 mod platform_probe;
+mod process;
 mod secret;
 mod storage;
 mod transport;
@@ -68,6 +70,12 @@ pub use plan::{
     StepNode, VerifyHashStep, WriteFileStep,
 };
 pub use platform_probe::{PlatformProbe, ProbeError, StdPlatformProbe};
+#[cfg(feature = "process")]
+pub use process::TokioSpawner;
+pub use process::{
+    CapturedOutput, KillHandle, OutputStream, ProcessError, ProcessExit, ProcessSpawner,
+    ProcessSpec, SpawnedProcess,
+};
 pub use secret::{
     MemorySecretStore, Secret, SecretKey, SecretKeyError, SecretStore, SecretStoreError,
 };
