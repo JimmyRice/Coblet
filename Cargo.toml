@@ -1,6 +1,46 @@
-[package]
-name = "coblet"
+[workspace]
+resolver = "3"
+members = [
+    "crates/engine/foundation/types",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+publish = false
 
-[dependencies]
+[workspace.dependencies]
+coblet-types = { path = "crates/engine/foundation/types" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+self_named_module_files = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+undocumented_unsafe_blocks = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.release-small]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
