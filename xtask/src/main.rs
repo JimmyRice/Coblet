@@ -8,6 +8,7 @@
 
 use std::process::ExitCode;
 
+mod layers;
 mod module_roots;
 mod workspace;
 
@@ -15,12 +16,14 @@ const USAGE: &str = "\
 usage: cargo xtask <command>
 
 commands:
+  check-layers         reject dependencies that break the crate layering rules
   check-module-roots   reject definitions inside lib.rs and mod.rs files
   help                 print this message";
 
 fn main() -> ExitCode {
     let command = std::env::args().nth(1);
     let outcome = match command.as_deref() {
+        Some("check-layers") => layers::run(&workspace::root()),
         Some("check-module-roots") => module_roots::run(&workspace::root()),
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}");
