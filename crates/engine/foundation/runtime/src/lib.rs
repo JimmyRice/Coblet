@@ -26,9 +26,9 @@ pub use future::BoxFuture;
 pub use ids::{IdError, OperationId, PlanId, StepId};
 pub use plan::{
     ArtifactKind, CustomStep, DownloadStep, Expectation, ExpectedOutput, ExtractStep, MetadataStep,
-    MoveStep, PathRoot, PlanPath, ProcessArg, ProcessStep, Program, RelPath, RelPathError,
-    RemoveMode, RemoveStep, Sources, Step, StepGraph, StepGraphError, StepNode, VerifyHashStep,
-    WriteFileStep,
+    MoveStep, PathRoot, Plan, PlanKind, PlanPath, Precondition, ProcessArg, ProcessStep, Program,
+    RelPath, RelPathError, RemoveMode, RemoveStep, Sources, Step, StepGraph, StepGraphError,
+    StepNode, VerifyHashStep, WriteFileStep,
 };
 pub use platform_probe::{PlatformProbe, ProbeError, StdPlatformProbe};
 pub use secret::{
