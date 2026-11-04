@@ -4,11 +4,13 @@
 //! Business crates never open a socket, touch the file system or read the
 //! clock directly. They take these traits as `Arc<dyn Trait>`:
 //!
-//! - [`Transport`] for HTTP, with [`Request`] / [`Response`] and a streaming [`Body`]
-//! - [`Storage`] for files, directories and advisory locks
+//! - [`Transport`] for HTTP, with [`Request`] / [`Response`] and a streaming [`Body`];
+//!   `ReqwestTransport` (feature `reqwest`) is the default client
+//! - [`Storage`] for files, directories and advisory locks, with `TokioStorage` (feature `fs`)
 //! - [`SecretStore`] for tokens, with [`MemorySecretStore`] as the built-in store
 //! - [`Clock`] for wall-clock time
 //! - [`PlatformProbe`] for describing the current machine
+//! - [`ProcessSpawner`] for child processes, with `TokioSpawner` (feature `process`)
 //!
 //! The same crate holds the pieces shared by every subsystem: [`Registry`]
 //! for extension points keyed by [`coblet_types::ExtensionId`], the
@@ -43,9 +45,12 @@ mod clock;
 mod events;
 mod extension;
 mod future;
+mod hashing;
 mod ids;
+mod operation;
 mod plan;
 mod platform_probe;
+mod process;
 mod secret;
 mod storage;
 mod transport;
@@ -58,7 +63,13 @@ pub use events::{
 };
 pub use extension::{Extension, Registry, RegistryError};
 pub use future::BoxFuture;
+pub use hashing::{ComputedHashes, StreamHasher, VerifyError};
 pub use ids::{IdError, OperationId, PlanId, StepId};
+pub use operation::{
+    DEFAULT_STEP_CONCURRENCY, DownloadHandler, ExecutionReport, ExtractHandler, OperationError,
+    OperationEvents, OperationHandle, OperationProgress, Operations, ProcessHandler, StepContext,
+    StepError,
+};
 pub use plan::{
     ArtifactKind, CustomStep, DownloadStep, Expectation, ExpectedOutput, ExtractStep, MetadataStep,
     MoveStep, PathRoot, Plan, PlanKind, PlanPath, Precondition, ProcessArg, ProcessStep, Program,
@@ -66,12 +77,22 @@ pub use plan::{
     StepNode, VerifyHashStep, WriteFileStep,
 };
 pub use platform_probe::{PlatformProbe, ProbeError, StdPlatformProbe};
+#[cfg(feature = "process")]
+pub use process::TokioSpawner;
+pub use process::{
+    CapturedOutput, KillHandle, OutputStream, ProcessError, ProcessExit, ProcessSpawner,
+    ProcessSpec, SpawnedProcess,
+};
 pub use secret::{
     MemorySecretStore, Secret, SecretKey, SecretKeyError, SecretStore, SecretStoreError,
 };
+#[cfg(feature = "fs")]
+pub use storage::TokioStorage;
 pub use storage::{
-    DirEntry, EntryKind, FileMetadata, FileWriter, LockGuard, Storage, StorageError,
+    DirEntry, EntryKind, FileMetadata, FileReader, FileWriter, LockGuard, Storage, StorageError,
 };
+#[cfg(feature = "reqwest")]
+pub use transport::ReqwestTransport;
 pub use transport::{
     Body, HttpUrl, HttpUrlError, MemoryBody, Method, Request, Response, Transport, TransportError,
     UserAgent, UserAgentError,

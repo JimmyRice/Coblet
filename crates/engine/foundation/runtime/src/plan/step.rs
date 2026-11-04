@@ -5,7 +5,7 @@ use coblet_types::FileHash;
 use serde::{Deserialize, Serialize};
 
 use super::PlanPath;
-use crate::HttpUrl;
+use crate::{BoxFuture, HttpUrl, StepContext, StepError, StepOutcome};
 
 /// One unit of work in a Plan, interpreted by the Operation executor.
 ///
@@ -37,14 +37,15 @@ pub enum Step {
 }
 
 /// Step implemented outside the engine.
-///
-/// The execution hook is added together with the Operation executor.
 pub trait CustomStep: fmt::Debug + Send + Sync + 'static {
     /// Returns a short kind name such as `acme:patch-options`.
     fn kind(&self) -> &str;
 
     /// Describes the step for a Plan preview.
     fn describe(&self) -> String;
+
+    /// Does the work. The executor calls this once the step's dependencies have finished.
+    fn run<'a>(&'a self, cx: &'a StepContext) -> BoxFuture<'a, Result<StepOutcome, StepError>>;
 }
 
 impl PartialEq for dyn CustomStep {
@@ -293,7 +294,7 @@ mod tests {
         ArtifactKind, CustomStep, DownloadStep, Expectation, ProcessArg, ProcessStep, Program,
         Sources, Step,
     };
-    use crate::{HttpUrl, PlanPath, RelPath};
+    use crate::{BoxFuture, HttpUrl, PlanPath, RelPath, StepContext, StepError, StepOutcome};
 
     fn path(root: fn(RelPath) -> PlanPath, rel: &str) -> PlanPath {
         root(RelPath::new(rel).unwrap())
@@ -348,6 +349,12 @@ mod tests {
             }
             fn describe(&self) -> String {
                 "patch options.txt".to_owned()
+            }
+            fn run<'a>(
+                &'a self,
+                _cx: &'a StepContext,
+            ) -> BoxFuture<'a, Result<StepOutcome, StepError>> {
+                Box::pin(async { Ok(StepOutcome::Succeeded) })
             }
         }
         let shared: Arc<dyn CustomStep> = Arc::new(Patch);
