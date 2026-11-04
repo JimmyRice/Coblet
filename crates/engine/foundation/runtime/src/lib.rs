@@ -43,6 +43,7 @@ mod clock;
 mod events;
 mod extension;
 mod future;
+mod hashing;
 mod ids;
 mod plan;
 mod platform_probe;
@@ -58,6 +59,7 @@ pub use events::{
 };
 pub use extension::{Extension, Registry, RegistryError};
 pub use future::BoxFuture;
+pub use hashing::{ComputedHashes, StreamHasher, VerifyError};
 pub use ids::{IdError, OperationId, PlanId, StepId};
 pub use plan::{
     ArtifactKind, CustomStep, DownloadStep, Expectation, ExpectedOutput, ExtractStep, MetadataStep,
