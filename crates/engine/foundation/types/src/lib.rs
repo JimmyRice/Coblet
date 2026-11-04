@@ -7,6 +7,8 @@
 
 mod extension_id;
 mod game_version;
+mod maven;
 
 pub use extension_id::{ExtensionId, ExtensionIdError};
 pub use game_version::{GameVersionId, GameVersionIdError, VersionType};
+pub use maven::{MavenCoordinate, MavenCoordinateError};
