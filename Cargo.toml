@@ -5,6 +5,7 @@ members = [
     "crates/engine/foundation/types",
     "crates/engine/metadata/catalog",
     "crates/engine/metadata/mojang",
+    "crates/engine/platform/java",
     "crates/engine/platform/profile",
     "crates/engine/transfer/download",
     "xtask",
@@ -23,6 +24,7 @@ coblet-types = { path = "crates/engine/foundation/types" }
 coblet-catalog = { path = "crates/engine/metadata/catalog" }
 coblet-mojang = { path = "crates/engine/metadata/mojang" }
 coblet-platform = { path = "crates/engine/platform/profile" }
+coblet-java = { path = "crates/engine/platform/java" }
 coblet-download = { path = "crates/engine/transfer/download" }
 
 bytes = { version = "1.12.1", default-features = false, features = ["std"] }
