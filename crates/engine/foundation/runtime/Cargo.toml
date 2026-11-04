@@ -11,5 +11,8 @@ publish.workspace = true
 coblet-types.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
+
 [lints]
 workspace = true
