@@ -5,6 +5,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use bytes::BytesMut;
 use coblet_launch_command::LaunchCommand;
+use coblet_platform::EffectiveLaunchProfile;
 use coblet_runtime::{
     EntryKind, Event, EventBus, GameLogLine, KillHandle, LogLevel, LogSource, OutputStream,
     ProcessExit, ProcessSpawner, SpawnedProcess, Storage,
@@ -38,6 +39,7 @@ pub struct GameExit {
 pub struct GameSession {
     pid: Option<u32>,
     command: LaunchCommand,
+    profile: EffectiveLaunchProfile,
     logs: Arc<LogBuffer>,
     kill: KillHandle,
     killed: Arc<AtomicBool>,
@@ -223,7 +225,12 @@ impl Monitor {
 }
 
 impl GameSession {
-    pub(crate) fn start(command: LaunchCommand, process: SpawnedProcess, monitor: Monitor) -> Self {
+    pub(crate) fn start(
+        command: LaunchCommand,
+        profile: EffectiveLaunchProfile,
+        process: SpawnedProcess,
+        monitor: Monitor,
+    ) -> Self {
         let pid = process.id();
         let kill = process.kill_handle();
         let killed = Arc::new(AtomicBool::new(false));
@@ -232,6 +239,7 @@ impl GameSession {
         Self {
             pid,
             command,
+            profile,
             logs,
             kill,
             killed,
@@ -249,6 +257,14 @@ impl GameSession {
     #[must_use]
     pub fn command(&self) -> &LaunchCommand {
         &self.command
+    }
+
+    /// Returns the profile the game was started with, including the changes
+    /// of launch customizers; its [`explain`](EffectiveLaunchProfile::explain)
+    /// is the launch report.
+    #[must_use]
+    pub fn profile(&self) -> &EffectiveLaunchProfile {
+        &self.profile
     }
 
     /// Subscribes to the log: kept lines first, then live ones.

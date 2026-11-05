@@ -306,6 +306,12 @@ async fn customizer_changes_reach_the_game_command() {
     );
     cx.request = cx.request.with_customizer(id);
     let session = launcher.launch(cx).await.unwrap();
+    assert!(
+        session
+            .profile()
+            .explain()
+            .contains("[customize] coblet-test:agent: jvm `-javaagent:/opt/fix.jar` added")
+    );
     session.wait().await.unwrap();
     let args = std::fs::read_to_string(dir.path().join("game/args.txt")).unwrap();
     let args: Vec<&str> = args.lines().collect();
