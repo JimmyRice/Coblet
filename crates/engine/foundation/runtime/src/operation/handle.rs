@@ -162,7 +162,7 @@ impl OperationEvents {
                             Some(*op)
                         }
                         Event::Warning(warning) => warning.op,
-                        Event::GameLog(_) => None,
+                        Event::GameLog(_) | Event::AuthPrompt(_) => None,
                     };
                     if op == Some(self.op) {
                         return Some(Received::Event(event));
