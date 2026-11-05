@@ -1,6 +1,7 @@
 use std::ffi::c_char;
 use std::sync::Arc;
 
+use coblet::auth::{EncryptedFileStore, EncryptionKey, MsaClientId};
 use coblet::platform::{DataProfile, PlatformProfile, ProfileEngine, ProfileLayer};
 use coblet::runtime::{Extension, UserAgent};
 use coblet::types::{ExtensionId, Platform, PlatformNameError, PlatformTrait};
@@ -9,6 +10,7 @@ use crate::context::Coblet;
 use crate::customize::{CobletCustomizer, ForeignCustomizer};
 use crate::guard::{guard, put};
 use crate::profile::{CobletPlatformProfile, ForeignProfile};
+use crate::secrets::{CobletSecretStore, ForeignSecrets, encryption_key};
 use crate::types::{CobletError, CobletErrorKind, CobletStatus, Failure, text};
 
 /// Settings of a `Coblet` handle before it is built.
@@ -22,6 +24,15 @@ pub struct CobletBuilder {
     auth_grants: Vec<ExtensionId>,
     profiles: Vec<Arc<dyn PlatformProfile>>,
     platform: Option<Platform>,
+    msa_client_id: Option<MsaClientId>,
+    secrets: Secrets,
+}
+
+/// Where tokens are kept.
+enum Secrets {
+    Memory,
+    Foreign(ForeignSecrets),
+    File(String, EncryptionKey),
 }
 
 impl std::fmt::Debug for CobletBuilder {
@@ -96,6 +107,8 @@ pub unsafe extern "C" fn coblet_builder_new(
                 auth_grants: Vec::new(),
                 profiles: Vec::new(),
                 platform: None,
+                msa_client_id: None,
+                secrets: Secrets::Memory,
             });
             put(out_builder, Box::into_raw(builder), "out_builder")?;
             Ok(CobletStatus::Ok)
@@ -316,6 +329,99 @@ pub unsafe extern "C" fn coblet_builder_allow_auth_changes(
     }
 }
 
+/// Enables Microsoft login with the launcher's Azure application Client
+/// ID, which Minecraft services must have approved. Without one,
+/// `coblet_login_begin` fails with `COBLET_ERROR_KIND_UNSUPPORTED`.
+///
+/// # Safety
+///
+/// `builder` must be a live builder handle; `client_id` must be NULL or
+/// NUL-terminated; `out_err` must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_builder_set_msa_client_id(
+    builder: *mut CobletBuilder,
+    client_id: *const c_char,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let builder = builder_mut(builder)?;
+            let client_id = MsaClientId::new(text(client_id, "client_id")?)
+                .map_err(|error| Failure::argument("client_id", &error.to_string()))?;
+            builder.msa_client_id = Some(client_id);
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+/// Keeps refresh tokens and other secrets in a store written in C, such
+/// as the system keychain. Replaces an earlier
+/// `coblet_builder_set_encrypted_secret_file`. Without either, secrets
+/// live in memory and every Microsoft account needs a new login after a
+/// restart.
+///
+/// The library owns the table's user data from this call on, even when it
+/// fails.
+///
+/// # Safety
+///
+/// `builder` must be a live builder handle; `store` must point to a
+/// callback table whose callbacks and user data may be used from any
+/// thread until `free`; `out_err` must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_builder_set_secret_store(
+    builder: *mut CobletBuilder,
+    store: *const CobletSecretStore,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let table = store
+                .as_ref()
+                .ok_or_else(|| Failure::argument("store", "is NULL"))?;
+            let store = ForeignSecrets::new(table)?;
+            builder_mut(builder)?.secrets = Secrets::Foreign(store);
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+/// Keeps secrets in one file encrypted with a key of
+/// `COBLET_SECRET_KEY_LEN` bytes, such as one from
+/// `coblet_generate_secret_key`. Keep the key somewhere safer than next to
+/// the file, such as a system keychain. Replaces an earlier
+/// `coblet_builder_set_secret_store`.
+///
+/// # Safety
+///
+/// `builder` must be a live builder handle; `path` must be NULL or
+/// NUL-terminated; `key` must point to `key_len` readable bytes; `out_err`
+/// must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_builder_set_encrypted_secret_file(
+    builder: *mut CobletBuilder,
+    path: *const c_char,
+    key: *const u8,
+    key_len: usize,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let builder = builder_mut(builder)?;
+            let path = text(path, "path")?.to_owned();
+            let key = encryption_key(key, key_len)?;
+            builder.secrets = Secrets::File(path, key);
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
 /// Builds the `Coblet` handle and frees the builder, whether or not it succeeds.
 ///
 /// On success `*out_coblet` receives a handle to free with `coblet_free`.
@@ -347,6 +453,8 @@ pub unsafe extern "C" fn coblet_builder_build(
                 auth_grants,
                 profiles,
                 platform,
+                msa_client_id,
+                secrets,
             } = *builder;
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -367,6 +475,18 @@ pub unsafe extern "C" fn coblet_builder_build(
             }
             for id in auth_grants {
                 options = options.allow_auth_changes(id);
+            }
+            if let Some(client_id) = msa_client_id {
+                options = options.msa_client_id(client_id);
+            }
+            match secrets {
+                Secrets::Memory => {}
+                Secrets::Foreign(store) => options = options.secret_store(Arc::new(store)),
+                Secrets::File(path, key) => {
+                    let storage = Arc::new(coblet::runtime::TokioStorage::new());
+                    let store = EncryptedFileStore::new(storage, path, key);
+                    options = options.secret_store(Arc::new(store));
+                }
             }
             let inner = runtime.block_on(async { options.build() })?;
             let handle = Box::into_raw(Box::new(Coblet { runtime, inner }));

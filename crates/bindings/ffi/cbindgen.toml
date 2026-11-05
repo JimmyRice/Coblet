@@ -9,10 +9,13 @@ header = """
  * coblet C ABI.
  *
  * Threading: every function may be called from any thread. Functions that
- * wait (coblet_versions_json, coblet_launch, coblet_game_next_log,
- * coblet_game_wait) block the calling thread while the Coblet handle's own runtime
+ * wait (coblet_versions_json, coblet_launch, coblet_launch_account,
+ * coblet_login_begin, coblet_login_finish, coblet_account_*,
+ * coblet_game_next_log, coblet_game_wait) block the calling thread while the Coblet handle's own runtime
  * threads do the work. A CobletGame must not be used from two threads at
  * once; coblet_game_kill is the exception and may be called concurrently.
+ * Likewise coblet_login_cancel and coblet_login_submit_redirect may be
+ * called while another thread waits in coblet_login_finish.
  *
  * Errors: functions return a CobletStatus. When out_err is not NULL and the
  * status is not COBLET_STATUS_OK, *out_err receives an error that the caller

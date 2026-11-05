@@ -120,29 +120,113 @@ pub unsafe extern "C" fn coblet_launch_customized(
                 CobletLaunchMode::Offline => LaunchAuth::offline(name),
                 CobletLaunchMode::Demo => LaunchAuth::demo(name),
             };
-            let mut request = LaunchRequest::new(auth);
-            if count > 0 {
-                if customizers.is_null() {
-                    return Err(Failure::argument("customizers", "is NULL"));
-                }
-                for &id in std::slice::from_raw_parts(customizers, count) {
-                    let id = ExtensionId::new(text(id, "customizer id")?)
-                        .map_err(|error| Failure::argument("customizer id", &error.to_string()))?;
-                    request = request.with_customizer(id);
-                }
+            let request = with_customizers(LaunchRequest::new(auth), customizers, count)?;
+            start(handle, version, game_dir, request, out_game)
+        })
+    }
+}
+
+/// Adds the customizers listed in a C array to a request.
+///
+/// # Safety
+///
+/// `customizers` must point to `count` NUL-terminated strings, or be NULL
+/// when `count` is 0.
+#[allow(unsafe_code, reason = "reads a C string array")]
+unsafe fn with_customizers(
+    mut request: LaunchRequest,
+    customizers: *const *const c_char,
+    count: usize,
+) -> Result<LaunchRequest, Failure> {
+    if count == 0 {
+        return Ok(request);
+    }
+    if customizers.is_null() {
+        return Err(Failure::argument("customizers", "is NULL"));
+    }
+    // SAFETY: the caller guarantees `count` readable pointers.
+    for &id in unsafe { std::slice::from_raw_parts(customizers, count) } {
+        // SAFETY: the caller guarantees each pointer is NUL-terminated.
+        let id = ExtensionId::new(unsafe { text(id, "customizer id") }?)
+            .map_err(|error| Failure::argument("customizer id", &error.to_string()))?;
+        request = request.with_customizer(id);
+    }
+    Ok(request)
+}
+
+/// Launches a request and hands the game handle out.
+///
+/// # Safety
+///
+/// `out_game` must be writable.
+#[allow(unsafe_code, reason = "writes the game out-parameter")]
+unsafe fn start(
+    handle: &Coblet,
+    version: &str,
+    game_dir: std::path::PathBuf,
+    request: LaunchRequest,
+    out_game: *mut *mut CobletGame,
+) -> Result<CobletStatus, Failure> {
+    let session = handle
+        .runtime
+        .block_on(handle.inner.launch(version, game_dir, request))?;
+    let logs = session.logs();
+    let game = Box::into_raw(Box::new(CobletGame {
+        runtime: handle.runtime.handle().clone(),
+        report: session.profile().explain(),
+        session: Some(session),
+        logs,
+    }));
+    // SAFETY: forwarded from the caller's guarantee.
+    unsafe { put(out_game, game, "out_game") }.inspect_err(|_| {
+        // SAFETY: the handle was created above and never handed out.
+        drop(unsafe { Box::from_raw(game) });
+    })?;
+    Ok(CobletStatus::Ok)
+}
+
+/// Starts a version with a saved account, renewing its tokens first when
+/// needed, and runs the customizers listed in `customizers`, in order.
+///
+/// `game_dir` may be NULL for `<data_root>/games/<version>`. Fails with
+/// `COBLET_ERROR_KIND_NO_LICENSE` for an account that does not own the
+/// game and `COBLET_ERROR_KIND_AUTH` when the user has to sign in again.
+///
+/// # Safety
+///
+/// As `coblet_launch_customized`; `account_id` must be NULL or NUL-terminated.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_launch_account(
+    coblet: *const Coblet,
+    version_id: *const c_char,
+    account_id: *const c_char,
+    game_dir: *const c_char,
+    customizers: *const *const c_char,
+    count: usize,
+    out_game: *mut *mut CobletGame,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let handle = coblet
+                .as_ref()
+                .ok_or_else(|| Failure::argument("coblet", "is NULL"))?;
+            let version = text(version_id, "version_id")?;
+            let account = crate::accounts::account_id(account_id, "account_id")?;
+            if out_game.is_null() {
+                return Err(Failure::argument("out_game", "is NULL"));
             }
-            let session = handle
+            let game_dir = match optional_text(game_dir, "game_dir")? {
+                Some(dir) => dir.into(),
+                None => handle.inner.data_root().join("games").join(version),
+            };
+            let request = handle
                 .runtime
-                .block_on(handle.inner.launch(version, game_dir, request))?;
-            let logs = session.logs();
-            let game = Box::new(CobletGame {
-                runtime: handle.runtime.handle().clone(),
-                report: session.profile().explain(),
-                session: Some(session),
-                logs,
-            });
-            put(out_game, Box::into_raw(game), "out_game")?;
-            Ok(CobletStatus::Ok)
+                .block_on(handle.inner.launch_request(&account))?;
+            let request = with_customizers(request, customizers, count)?;
+            start(handle, version, game_dir, request, out_game)
         })
     }
 }

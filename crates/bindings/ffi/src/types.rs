@@ -1,9 +1,11 @@
 use std::ffi::{CStr, c_char};
 
+use coblet::auth::AuthError;
 use coblet::platform::ProfileError;
+use coblet::player::PlayerError;
 
 /// Version of the C ABI; it grows with every incompatible change.
-pub const COBLET_ABI_VERSION: u32 = 6;
+pub const COBLET_ABI_VERSION: u32 = 7;
 
 /// Result of a call.
 #[repr(C)]
@@ -41,6 +43,14 @@ pub enum CobletErrorKind {
     InvalidState = 6,
     /// A panic was caught.
     Panic = 7,
+    /// A login failed or the account has to sign in again.
+    Auth = 8,
+    /// The account does not own the game; it can launch in demo mode.
+    NoLicense = 9,
+    /// The account has no player profile yet.
+    NoProfile = 10,
+    /// The operation was cancelled.
+    Cancelled = 11,
 }
 
 /// UTF-8 string owned by the library; `ptr` is NUL-terminated and `len`
@@ -144,11 +154,69 @@ impl From<coblet::Error> for Failure {
             coblet::Error::Transport(_) | coblet::Error::Catalog(_) => CobletErrorKind::Network,
             coblet::Error::UnknownVersion(_) => CobletErrorKind::NotFound,
             coblet::Error::Profile(ProfileError::Failed { .. }) => CobletErrorKind::Other,
-            coblet::Error::Profile(_) => CobletErrorKind::Unsupported,
+            coblet::Error::Profile(_) | coblet::Error::Unsupported(_) => {
+                CobletErrorKind::Unsupported
+            }
             coblet::Error::Launch(_) => CobletErrorKind::Launch,
+            coblet::Error::Auth(error) => auth_kind(error),
+            coblet::Error::Player(error) => player_kind(error),
             _ => CobletErrorKind::Other,
         };
         Self::new(kind, error.to_string())
+    }
+}
+
+impl From<AuthError> for Failure {
+    fn from(error: AuthError) -> Self {
+        Self::from(coblet::Error::Auth(error))
+    }
+}
+
+fn auth_kind(error: &AuthError) -> CobletErrorKind {
+    match error {
+        AuthError::Unsupported(_) => CobletErrorKind::Unsupported,
+        AuthError::UnknownMethod(_) | AuthError::UnknownAccount(_) => CobletErrorKind::NotFound,
+        AuthError::InvalidName(_)
+        | AuthError::InvalidOptions(_)
+        | AuthError::InvalidCallback(_)
+        | AuthError::SecretKey(_) => CobletErrorKind::InvalidArgument,
+        AuthError::Transport { .. }
+        | AuthError::Http { .. }
+        | AuthError::InvalidResponse { .. }
+        | AuthError::RateLimited { .. } => CobletErrorKind::Network,
+        AuthError::Cancelled => CobletErrorKind::Cancelled,
+        AuthError::CallbackClosed => CobletErrorKind::InvalidState,
+        AuthError::NoLicense => CobletErrorKind::NoLicense,
+        AuthError::NoProfile => CobletErrorKind::NoProfile,
+        AuthError::Declined
+        | AuthError::Expired
+        | AuthError::StateMismatch
+        | AuthError::OAuth { .. }
+        | AuthError::InvalidGrant
+        | AuthError::NoXboxAccount
+        | AuthError::ChildAccount
+        | AuthError::AdultVerificationRequired
+        | AuthError::RegionUnavailable
+        | AuthError::XboxBanned
+        | AuthError::Xbox(_)
+        | AuthError::ClientNotApproved => CobletErrorKind::Auth,
+        _ => CobletErrorKind::Other,
+    }
+}
+
+fn player_kind(error: &PlayerError) -> CobletErrorKind {
+    match error {
+        PlayerError::Unauthorized => CobletErrorKind::Auth,
+        PlayerError::Offline => CobletErrorKind::Unsupported,
+        PlayerError::InvalidSkin(_) | PlayerError::CapeNotOwned(_) => {
+            CobletErrorKind::InvalidArgument
+        }
+        PlayerError::NoSkin => CobletErrorKind::InvalidState,
+        PlayerError::UnknownPlayer(_) | PlayerError::UnknownSkin(_) => CobletErrorKind::NotFound,
+        PlayerError::Transport { .. }
+        | PlayerError::Http { .. }
+        | PlayerError::InvalidResponse { .. } => CobletErrorKind::Network,
+        _ => CobletErrorKind::Other,
     }
 }
 
