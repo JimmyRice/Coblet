@@ -36,6 +36,8 @@ pub struct SdkBuilder<State> {
     events: Option<EventBus>,
     #[cfg(feature = "launch")]
     launcher: Option<coblet_launch::Launcher>,
+    #[cfg(feature = "launch")]
+    customizers: Vec<Arc<dyn coblet_launch::LaunchCustomizer>>,
     state: PhantomData<State>,
 }
 
@@ -61,6 +63,8 @@ impl Sdk {
             events: None,
             #[cfg(feature = "launch")]
             launcher: None,
+            #[cfg(feature = "launch")]
+            customizers: Vec::new(),
             state: PhantomData,
         }
     }
@@ -80,6 +84,8 @@ impl SdkBuilder<NoRoot> {
             events: self.events,
             #[cfg(feature = "launch")]
             launcher: self.launcher,
+            #[cfg(feature = "launch")]
+            customizers: self.customizers,
             state: PhantomData,
         }
     }
@@ -128,6 +134,57 @@ impl<State> SdkBuilder<State> {
         self.launcher = Some(launcher);
         self
     }
+
+    /// Registers a launch customizer on the launcher.
+    ///
+    /// It runs only for launches whose
+    /// [`LaunchRequest`](coblet_launch::LaunchRequest) names its ID.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::sync::Arc;
+    /// # use coblet::launch::{CustomizeCtx, LaunchCustomizer, LaunchError, LaunchRequest};
+    /// # use coblet::launch_command::LaunchAuth;
+    /// # use coblet::mojang::{VersionTrait, VersionTraits};
+    /// # use coblet::platform::{EffectiveLaunchProfile, ProfileArg};
+    /// # use coblet::runtime::{Extension, UserAgent};
+    /// # use coblet::types::{ExtensionId, PlayerName};
+    /// # struct Agent(ExtensionId);
+    /// # impl Extension for Agent {
+    /// #     fn id(&self) -> &ExtensionId { &self.0 }
+    /// #     fn display_name(&self) -> &str { "Agent" }
+    /// # }
+    /// # impl LaunchCustomizer for Agent {
+    /// #     fn applies_to(&self, traits: &VersionTraits) -> bool {
+    /// #         traits.contains(&VersionTrait::LegacyOnlineServices)
+    /// #     }
+    /// #     fn customize(&self, profile: &mut EffectiveLaunchProfile, _: &CustomizeCtx) -> Result<(), LaunchError> {
+    /// #         profile.jvm_args.push(ProfileArg::always("-javaagent:/opt/acme/fix.jar"));
+    /// #         Ok(())
+    /// #     }
+    /// # }
+    /// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+    /// use coblet::Sdk;
+    ///
+    /// let id = ExtensionId::new("acme:agent")?;
+    /// let sdk = Sdk::builder()
+    ///     .data_root("/path/to/launcher-data")
+    ///     .user_agent(UserAgent::new("MyLauncher/1.0 (contact@example.com)")?)
+    ///     .customizer(Arc::new(Agent(id.clone())))
+    ///     .build()?;
+    /// let request = LaunchRequest::new(LaunchAuth::offline(PlayerName::new("Steve")?))
+    ///     .with_customizer(id);
+    /// let session = sdk.launch("b1.7.3", "/path/to/game", request).await?;
+    /// print!("{}", session.profile().explain());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "launch")]
+    pub fn customizer(mut self, customizer: Arc<dyn coblet_launch::LaunchCustomizer>) -> Self {
+        self.customizers.push(customizer);
+        self
+    }
 }
 
 impl SdkBuilder<WithRoot> {
@@ -153,9 +210,18 @@ impl SdkBuilder<WithRoot> {
     /// # Errors
     ///
     /// Returns [`SdkError::Config`] without a transport or User-Agent,
-    /// [`SdkError::Transport`] when the default transport cannot start and
-    /// [`SdkError::Platform`] when the platform cannot be detected.
+    /// [`SdkError::Transport`] when the default transport cannot start,
+    /// [`SdkError::Platform`] when the platform cannot be detected and
+    /// [`SdkError::Registry`] when two customizers share an ID.
     pub fn build(mut self) -> Result<Sdk, SdkError> {
+        #[cfg(feature = "launch")]
+        let launcher = {
+            let mut launcher = self.launcher.take().unwrap_or_default();
+            for customizer in std::mem::take(&mut self.customizers) {
+                launcher.register_customizer(customizer)?;
+            }
+            launcher
+        };
         let transport = self.transport_or_default()?;
         // The game and the Java runtime run with other working directories,
         // so every path derived from the data root must be absolute.
@@ -193,7 +259,7 @@ impl SdkBuilder<WithRoot> {
             #[cfg(feature = "mojang")]
             versions: crate::versions::version_catalog(meta.clone(), events.clone()),
             #[cfg(feature = "launch")]
-            launcher: self.launcher.take().unwrap_or_default(),
+            launcher,
             data_root,
             transport,
             storage,

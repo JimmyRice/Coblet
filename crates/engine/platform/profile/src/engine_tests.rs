@@ -6,8 +6,8 @@ use coblet_types::{Arch, ExtensionId, OsFamily, OsName, Platform};
 
 use super::ProfileEngine;
 use crate::{
-    Draft, EffectiveLaunchProfile, FileSource, JavaSource, Missing, Natives, PlatformProfile,
-    ProfileError, ResolvedProfile, Target,
+    Change, ChangeSource, Draft, EffectiveLaunchProfile, FileSource, JavaSource, Missing, Natives,
+    PipelineStep, PlatformProfile, ProfileError, ResolvedProfile, Target,
 };
 
 fn resolved(name: &str) -> ResolvedProfile {
@@ -328,4 +328,25 @@ fn explain_lists_every_step() {
     ] {
         assert!(explain.contains(needle), "missing {needle:?} in\n{explain}");
     }
+}
+
+#[test]
+fn explain_puts_customizer_changes_last() {
+    let mut profile = resolve("1.12.2", &mac_arm()).unwrap();
+    let id = ExtensionId::new("acme:proxy").unwrap();
+    profile.changes.insert(
+        0,
+        Change::new(
+            PipelineStep::Customize,
+            ChangeSource::Customizer(id),
+            "jvm `-Dhttp.proxyHost=127.0.0.1`",
+            "appended",
+        ),
+    );
+    let explain = profile.explain();
+    let last = explain.lines().last().unwrap();
+    assert_eq!(
+        last,
+        "[customize] acme:proxy: jvm `-Dhttp.proxyHost=127.0.0.1` appended"
+    );
 }

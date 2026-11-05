@@ -393,7 +393,12 @@ async fn spawn(cx: &mut LaunchContext) -> Result<(), LaunchError> {
         game_directory: cx.layout.game_directory().to_path_buf(),
         post_exit: cx.request.post_exit.clone(),
     };
-    cx.session = Some(GameSession::start(command, process, monitor));
+    cx.session = Some(GameSession::start(
+        command,
+        cx.profile.clone(),
+        process,
+        monitor,
+    ));
     Ok(())
 }
 

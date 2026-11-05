@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use coblet_download::VerifyMode;
 use coblet_launch_command::{LaunchAuth, Memory, QuickPlay, Resolution};
 use coblet_runtime::ProcessSpec;
+use coblet_types::ExtensionId;
 
 use crate::DEFAULT_LOG_CAPACITY;
 
@@ -69,6 +70,8 @@ pub struct LaunchRequest {
     pub log_capacity: usize,
     /// `${launcher_name}` and `${launcher_version}`.
     pub launcher: Option<(String, String)>,
+    /// Launch customizers to run, in order; none by default.
+    pub customizers: Vec<ExtensionId>,
 }
 
 impl LaunchRequest {
@@ -89,6 +92,7 @@ impl LaunchRequest {
             verify: VerifyMode::Fast,
             log_capacity: DEFAULT_LOG_CAPACITY,
             launcher: None,
+            customizers: Vec::new(),
         }
     }
 
@@ -132,5 +136,12 @@ impl LaunchRequest {
     #[must_use]
     pub fn with_verify(self, verify: VerifyMode) -> Self {
         Self { verify, ..self }
+    }
+
+    /// Runs the launch customizer registered as `id`, after those already chosen.
+    #[must_use]
+    pub fn with_customizer(mut self, id: ExtensionId) -> Self {
+        self.customizers.push(id);
+        self
     }
 }

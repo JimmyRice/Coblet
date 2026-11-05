@@ -5,6 +5,7 @@ use coblet_download::DownloadError;
 use coblet_java::JavaError;
 use coblet_launch_command::CommandError;
 use coblet_runtime::{ProcessError, ProcessExit, StorageError};
+use coblet_types::ExtensionId;
 
 /// Failure to prepare or start the game.
 #[non_exhaustive]
@@ -86,6 +87,9 @@ pub enum LaunchError {
     /// No launch step has this name.
     #[error("no launch step named `{0}`")]
     UnknownStep(String),
+    /// The request names a launch customizer the launcher does not have.
+    #[error("no launch customizer registered as `{0}`")]
+    UnknownCustomizer(ExtensionId),
     /// The launch was cancelled.
     #[error("launch was cancelled")]
     Cancelled,

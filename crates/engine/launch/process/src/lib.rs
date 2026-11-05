@@ -10,6 +10,8 @@
 
 mod buffer;
 mod convert;
+mod customize;
+mod diff;
 mod error;
 mod files;
 mod launcher;
@@ -23,6 +25,7 @@ mod steps;
 
 pub use buffer::{DEFAULT_LOG_CAPACITY, LogBuffer, LogItem, LogStream};
 pub use convert::command_profile;
+pub use customize::{CustomizeCtx, LaunchCustomizer};
 pub use error::LaunchError;
 pub use launcher::Launcher;
 pub use layout::GameLayout;
