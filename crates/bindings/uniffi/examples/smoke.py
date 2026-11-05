@@ -1,5 +1,7 @@
-"""Smoke test of the coblet UniFFI bindings: list versions, launch one, stop
-it once a log message contains a marker.
+"""Smoke test of the coblet UniFFI bindings: list versions, launch one with a
+customizer that adds a JVM property and an extra step, print the customizer
+lines of the launch report, stop the game once a log message contains a
+marker.
 
     cargo build -p coblet-uniffi
     cargo run -p coblet-uniffi --features cli --bin uniffi-bindgen -- \
@@ -15,15 +17,55 @@ import sys
 import coblet_uniffi as coblet
 
 
+class Step(coblet.LaunchStep):
+    def __init__(self) -> None:
+        self.ran = False
+
+    def name(self) -> str:
+        return "coblet-smoke-step"
+
+    def run(self, info: coblet.StepInfo) -> None:
+        print(f"extra step ran: {info}")
+        self.ran = True
+
+
+class Marker(coblet.LaunchCustomizer):
+    def __init__(self) -> None:
+        self.step = Step()
+
+    def id(self) -> str:
+        return "coblet-smoke:marker"
+
+    def display_name(self) -> str:
+        return "Smoke marker"
+
+    def applies_to(self, traits: list[str]) -> bool:
+        return True
+
+    def customize(self, editor: coblet.ProfileEditor) -> None:
+        editor.add_jvm_arg("-Dcoblet.smoke=customized", False)
+        editor.add_step_after("pre-launch", self.step)
+
+
 async def main(data_root: str, version: str, mode: str, marker: str) -> int:
-    sdk = coblet.CobletSdk(data_root, "coblet-uniffi-smoke/0.1")
+    marker_customizer = Marker()
+    sdk = coblet.CobletSdk.with_customizers(
+        data_root, "coblet-uniffi-smoke/0.1", [marker_customizer]
+    )
     versions = await sdk.versions()
     latest = await sdk.latest_release()
     print(f"{len(versions)} versions, latest release {latest.id}")
 
     launch_mode = coblet.LaunchMode.DEMO if mode == "demo" else coblet.LaunchMode.OFFLINE
-    game = await sdk.launch(version, "Steve", launch_mode, None)
+    options = coblet.LaunchOptions(
+        player_name="Steve", mode=launch_mode, customizers=["coblet-smoke:marker"]
+    )
+    game = await sdk.launch_with(version, options)
     print(f"started pid {game.pid()}")
+    for report_line in game.report().splitlines():
+        if report_line.startswith("[customize]"):
+            print(f"report: {report_line}")
+    print(f"extra step ran before start: {marker_customizer.step.ran}")
     reached = False
     while (line := await game.next_log()) is not None:
         print(f"[{line.source} {line.level}] {line.message}")
