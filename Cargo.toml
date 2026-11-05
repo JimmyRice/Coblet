@@ -4,6 +4,7 @@ members = [
     "crates/bindings/ffi",
     "crates/bindings/uniffi",
     "crates/engine/auth/account",
+    "crates/engine/auth/profile",
     "crates/engine/facade/coblet",
     "crates/engine/foundation/runtime",
     "crates/engine/foundation/types",
@@ -26,6 +27,7 @@ publish = false
 
 [workspace.dependencies]
 coblet-auth = { path = "crates/engine/auth/account" }
+coblet-player = { path = "crates/engine/auth/profile" }
 coblet-runtime = { path = "crates/engine/foundation/runtime" }
 coblet-types = { path = "crates/engine/foundation/types" }
 coblet-catalog = { path = "crates/engine/metadata/catalog" }
