@@ -1,25 +1,25 @@
-//! Minecraft launcher SDK.
+//! Minecraft launcher library.
 //!
-//! [`Sdk`] ties the subsystems together: the version catalog, Java
+//! [`Coblet`] ties the subsystems together: the version catalog, Java
 //! discovery and runtime downloads, platform profiles and the launcher.
 //! Each subsystem crate is re-exported, so downstream code can also use
-//! them without the `Sdk`.
+//! them without the `Coblet`.
 //!
 //! Features: `mojang`, `java` and `launch` (all default) select subsystems;
 //! `tls-rustls` (default) provides the default transport.
 #![forbid(unsafe_code)]
 
 mod builder;
+mod context;
 mod error;
 #[cfg(feature = "launch")]
 mod launching;
-mod sdk;
 #[cfg(feature = "mojang")]
 mod versions;
 
-pub use builder::{NoRoot, SdkBuilder, WithRoot};
-pub use error::SdkError;
-pub use sdk::Sdk;
+pub use builder::{CobletBuilder, NoRoot, WithRoot};
+pub use context::Coblet;
+pub use error::Error;
 
 pub use coblet_catalog as catalog;
 pub use coblet_download as download;

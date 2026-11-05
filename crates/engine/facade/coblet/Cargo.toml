@@ -1,6 +1,6 @@
 [package]
 name = "coblet"
-description = "Minecraft launcher SDK: version catalog, Java management and game launch behind one Sdk."
+description = "Minecraft launcher library: version catalog, Java management and game launch behind one Coblet value."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

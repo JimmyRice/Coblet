@@ -46,16 +46,16 @@ int main(int argc, char **argv) {
     }
     printf("abi version %u\n", coblet_abi_version());
 
-    CobletSdk *sdk = NULL;
+    Coblet *coblet = NULL;
     CobletError *err = NULL;
     CobletCustomizer customizer = {"coblet-smoke:marker", "Smoke marker", NULL, NULL, customize, NULL};
-    if (coblet_sdk_new_with_customizers(argv[1], "coblet-ffi-smoke/0.1", &customizer, 1, &sdk,
+    if (coblet_new_with_customizers(argv[1], "coblet-ffi-smoke/0.1", &customizer, 1, &coblet,
                                         &err) != COBLET_STATUS_OK) {
-        return fail("coblet_sdk_new_with_customizers", err);
+        return fail("coblet_new_with_customizers", err);
     }
 
     CobletString versions = {0};
-    if (coblet_versions_json(sdk, &versions, &err) != COBLET_STATUS_OK) {
+    if (coblet_versions_json(coblet, &versions, &err) != COBLET_STATUS_OK) {
         return fail("coblet_versions_json", err);
     }
     printf("versions json: %zu bytes, starts with %.120s\n", versions.len, versions.ptr);
@@ -65,7 +65,7 @@ int main(int argc, char **argv) {
                                                          : COBLET_LAUNCH_MODE_OFFLINE;
     CobletGame *game = NULL;
     const char *chosen[] = {"coblet-smoke:marker"};
-    if (coblet_launch_customized(sdk, argv[2], "Steve", mode, NULL, chosen, 1, &game, &err) !=
+    if (coblet_launch_customized(coblet, argv[2], "Steve", mode, NULL, chosen, 1, &game, &err) !=
         COBLET_STATUS_OK) {
         return fail("coblet_launch_customized", err);
     }
@@ -105,6 +105,6 @@ int main(int argc, char **argv) {
            exit_info.has_code, exit_info.killed, exit_info.suspected_crash,
            (unsigned long long)exit_info.duration_ms);
     coblet_game_free(game);
-    coblet_sdk_free(sdk);
+    coblet_free(coblet);
     return reached ? 0 : 1;
 }

@@ -4,8 +4,8 @@ use coblet::launch::{GameSession, LaunchRequest, LogItem, LogStream};
 use coblet::launch_command::LaunchAuth;
 use coblet::types::{ExtensionId, PlayerName};
 
+use crate::context::Coblet;
 use crate::guard::{guard, put};
-use crate::sdk::CobletSdk;
 use crate::types::{
     CobletError, CobletErrorKind, CobletStatus, CobletString, Failure, optional_text, text,
 };
@@ -51,12 +51,12 @@ pub struct CobletGame {
 ///
 /// # Safety
 ///
-/// `sdk` must be a live handle; strings must be NULL or NUL-terminated;
+/// `coblet` must be a live handle; strings must be NULL or NUL-terminated;
 /// `out_game` must be writable; `out_err` must be NULL or writable.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn coblet_launch(
-    sdk: *const CobletSdk,
+    coblet: *const Coblet,
     version_id: *const c_char,
     player_name: *const c_char,
     mode: CobletLaunchMode,
@@ -67,7 +67,7 @@ pub unsafe extern "C" fn coblet_launch(
     // SAFETY: forwarded from the caller's guarantees; no customizers.
     unsafe {
         coblet_launch_customized(
-            sdk,
+            coblet,
             version_id,
             player_name,
             mode,
@@ -90,7 +90,7 @@ pub unsafe extern "C" fn coblet_launch(
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn coblet_launch_customized(
-    sdk: *const CobletSdk,
+    coblet: *const Coblet,
     version_id: *const c_char,
     player_name: *const c_char,
     mode: CobletLaunchMode,
@@ -103,9 +103,9 @@ pub unsafe extern "C" fn coblet_launch_customized(
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
         guard(out_err, || {
-            let handle = sdk
+            let handle = coblet
                 .as_ref()
-                .ok_or_else(|| Failure::argument("sdk", "is NULL"))?;
+                .ok_or_else(|| Failure::argument("coblet", "is NULL"))?;
             let version = text(version_id, "version_id")?;
             let name = PlayerName::new(text(player_name, "player_name")?)
                 .map_err(|error| Failure::argument("player_name", &error.to_string()))?;
@@ -114,7 +114,7 @@ pub unsafe extern "C" fn coblet_launch_customized(
             }
             let game_dir = match optional_text(game_dir, "game_dir")? {
                 Some(dir) => dir.into(),
-                None => handle.sdk.data_root().join("games").join(version),
+                None => handle.inner.data_root().join("games").join(version),
             };
             let auth = match mode {
                 CobletLaunchMode::Offline => LaunchAuth::offline(name),
@@ -133,7 +133,7 @@ pub unsafe extern "C" fn coblet_launch_customized(
             }
             let session = handle
                 .runtime
-                .block_on(handle.sdk.launch(version, game_dir, request))?;
+                .block_on(handle.inner.launch(version, game_dir, request))?;
             let logs = session.logs();
             let game = Box::new(CobletGame {
                 runtime: handle.runtime.handle().clone(),

@@ -8,9 +8,9 @@ use coblet_mojang::{GameVersion, fetch_version_json};
 use coblet_platform::{EffectiveLaunchProfile, ProfileEngine, ResolvedProfile};
 use coblet_runtime::Event;
 
-use crate::{Sdk, SdkError};
+use crate::{Coblet, Error};
 
-impl Sdk {
+impl Coblet {
     fn catalog_context(&self) -> CatalogContext {
         CatalogContext::new(self.inner.meta.clone(), CachePolicy::PreferCache)
     }
@@ -25,10 +25,10 @@ impl Sdk {
     ///
     /// # Errors
     ///
-    /// Returns [`SdkError::Catalog`] when the version JSON is unavailable and
-    /// [`SdkError::Profile`] when the version cannot run here; the error
+    /// Returns [`Error::Catalog`] when the version JSON is unavailable and
+    /// [`Error::Profile`] when the version cannot run here; the error
     /// lists what is missing.
-    pub async fn resolve(&self, version: &GameVersion) -> Result<EffectiveLaunchProfile, SdkError> {
+    pub async fn resolve(&self, version: &GameVersion) -> Result<EffectiveLaunchProfile, Error> {
         let cx = self.catalog_context();
         let document = fetch_version_json(&cx, version).await;
         self.forward_warnings(&cx);
@@ -64,13 +64,13 @@ impl Sdk {
     ///
     /// # Errors
     ///
-    /// Returns [`SdkError::Launch`] when a launch step fails.
+    /// Returns [`Error::Launch`] when a launch step fails.
     pub async fn launch_profile(
         &self,
         profile: EffectiveLaunchProfile,
         game_directory: impl Into<PathBuf>,
         request: LaunchRequest,
-    ) -> Result<GameSession, SdkError> {
+    ) -> Result<GameSession, Error> {
         let services = self.launch_services();
         let catalog = Arc::clone(&services.catalog);
         let layout = GameLayout::new(&self.inner.data_root, game_directory);
@@ -84,14 +84,14 @@ impl Sdk {
     ///
     /// # Errors
     ///
-    /// Returns [`SdkError::UnknownVersion`], [`SdkError::Profile`] or
-    /// [`SdkError::Launch`] for the step that failed.
+    /// Returns [`Error::UnknownVersion`], [`Error::Profile`] or
+    /// [`Error::Launch`] for the step that failed.
     pub async fn launch(
         &self,
         version_id: &str,
         game_directory: impl Into<PathBuf>,
         request: LaunchRequest,
-    ) -> Result<GameSession, SdkError> {
+    ) -> Result<GameSession, Error> {
         let version = self.version(version_id).await?;
         let profile = self.resolve(&version).await?;
         self.launch_profile(profile, game_directory, request).await

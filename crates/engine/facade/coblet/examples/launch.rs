@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use coblet::Sdk;
+use coblet::Coblet;
 use coblet::launch::{LaunchRequest, LogItem};
 use coblet::launch_command::LaunchAuth;
 use coblet::runtime::UserAgent;
@@ -78,7 +78,7 @@ fn parse() -> Result<Args, String> {
 }
 
 async fn run(args: Args) -> Result<bool, Box<dyn std::error::Error>> {
-    let sdk = Sdk::builder()
+    let coblet = Coblet::builder()
         .data_root(&args.data)
         .user_agent(UserAgent::new(concat!(
             "coblet-example/",
@@ -86,16 +86,16 @@ async fn run(args: Args) -> Result<bool, Box<dyn std::error::Error>> {
         ))?)
         .build()?;
     let version = if args.version == "latest" {
-        sdk.latest_release().await?
+        coblet.latest_release().await?
     } else {
-        sdk.version(&args.version).await?
+        coblet.version(&args.version).await?
     };
-    let profile = sdk.resolve(&version).await?;
+    let profile = coblet.resolve(&version).await?;
     println!(
         "== {} on {} {}",
         version.id,
-        sdk.platform().os(),
-        sdk.platform().arch()
+        coblet.platform().os(),
+        coblet.platform().arch()
     );
     println!("{}", profile.explain());
     for warning in &profile.warnings {
@@ -114,7 +114,7 @@ async fn run(args: Args) -> Result<bool, Box<dyn std::error::Error>> {
     let game = args
         .game
         .unwrap_or_else(|| args.data.join("games").join(version.id.as_str()));
-    let session = sdk.launch_profile(profile, game, request).await?;
+    let session = coblet.launch_profile(profile, game, request).await?;
     println!("== started pid {:?}: {}", session.pid(), session.command());
     let mut logs = session.logs();
     let mut reached = false;

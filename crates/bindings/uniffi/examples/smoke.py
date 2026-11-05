@@ -49,18 +49,18 @@ class Marker(coblet.LaunchCustomizer):
 
 async def main(data_root: str, version: str, mode: str, marker: str) -> int:
     marker_customizer = Marker()
-    sdk = coblet.CobletSdk.with_customizers(
+    launcher = coblet.Coblet.with_customizers(
         data_root, "coblet-uniffi-smoke/0.1", [marker_customizer]
     )
-    versions = await sdk.versions()
-    latest = await sdk.latest_release()
+    versions = await launcher.versions()
+    latest = await launcher.latest_release()
     print(f"{len(versions)} versions, latest release {latest.id}")
 
     launch_mode = coblet.LaunchMode.DEMO if mode == "demo" else coblet.LaunchMode.OFFLINE
     options = coblet.LaunchOptions(
         player_name="Steve", mode=launch_mode, customizers=["coblet-smoke:marker"]
     )
-    game = await sdk.launch_with(version, options)
+    game = await launcher.launch_with(version, options)
     print(f"started pid {game.pid()}")
     for report_line in game.report().splitlines():
         if report_line.startswith("[customize]"):

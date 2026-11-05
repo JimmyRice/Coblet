@@ -6,7 +6,7 @@ use coblet_runtime::{
 };
 use coblet_types::{Arch, ExtensionId, OsFamily, Platform};
 
-use crate::{Sdk, SdkError};
+use crate::{Coblet, Error};
 
 /// Serves the Mojang fixtures by file name.
 struct Fixtures;
@@ -28,8 +28,8 @@ impl Transport for Fixtures {
     }
 }
 
-fn sdk(root: &std::path::Path) -> Sdk {
-    Sdk::builder()
+fn coblet(root: &std::path::Path) -> Coblet {
+    Coblet::builder()
         .data_root(root)
         .transport(Arc::new(Fixtures))
         .platform(Platform::new(OsFamily::MacOs, Arch::Aarch64))
@@ -39,16 +39,16 @@ fn sdk(root: &std::path::Path) -> Sdk {
 
 #[test]
 fn the_default_transport_needs_a_user_agent() {
-    let error = Sdk::builder().data_root("/tmp/x").build().unwrap_err();
-    assert!(matches!(error, SdkError::Config(_)), "{error}");
-    let sdk = Sdk::builder()
+    let error = Coblet::builder().data_root("/tmp/x").build().unwrap_err();
+    assert!(matches!(error, Error::Config(_)), "{error}");
+    let coblet = Coblet::builder()
         .data_root("/tmp/x")
         .user_agent(UserAgent::new("coblet-test/1.0").unwrap())
         .platform(Platform::new(OsFamily::Linux, Arch::X86_64))
         .build()
         .unwrap();
-    assert_eq!(sdk.data_root(), std::path::Path::new("/tmp/x"));
-    let relative = Sdk::builder()
+    assert_eq!(coblet.data_root(), std::path::Path::new("/tmp/x"));
+    let relative = Coblet::builder()
         .data_root("data")
         .transport(Arc::new(Fixtures))
         .platform(Platform::new(OsFamily::Linux, Arch::X86_64))
@@ -60,17 +60,20 @@ fn the_default_transport_needs_a_user_agent() {
 #[tokio::test]
 async fn lists_versions_and_resolves_one() {
     let dir = tempfile::tempdir().unwrap();
-    let sdk = sdk(dir.path());
-    let versions = sdk.versions(&coblet_catalog::Filter::new()).await.unwrap();
+    let coblet = coblet(dir.path());
+    let versions = coblet
+        .versions(&coblet_catalog::Filter::new())
+        .await
+        .unwrap();
     assert!(versions.len() > 5);
-    assert_eq!(sdk.latest_release().await.unwrap().id.as_str(), "26.3");
+    assert_eq!(coblet.latest_release().await.unwrap().id.as_str(), "26.3");
     assert!(matches!(
-        sdk.version("0.0").await,
-        Err(SdkError::UnknownVersion(_))
+        coblet.version("0.0").await,
+        Err(Error::UnknownVersion(_))
     ));
 
-    let version = sdk.version("1.20.1").await.unwrap();
-    let profile = sdk.resolve(&version).await.unwrap();
+    let version = coblet.version("1.20.1").await.unwrap();
+    let profile = coblet.resolve(&version).await.unwrap();
     let ids: Vec<&str> = profile.profiles.iter().map(ExtensionId::as_str).collect();
     assert_eq!(ids, ["coblet:mojang-macos-arm64", "coblet:macos-lwjgl3"]);
     assert_eq!(profile.java.major, 17);
@@ -106,7 +109,7 @@ impl coblet_launch::LaunchCustomizer for Noop {
 fn customizers_need_distinct_ids() {
     let id = ExtensionId::new("acme:noop").unwrap();
     let builder = || {
-        Sdk::builder()
+        Coblet::builder()
             .data_root("/tmp/x")
             .transport(Arc::new(Fixtures))
             .platform(Platform::new(OsFamily::Linux, Arch::X86_64))
@@ -116,7 +119,7 @@ fn customizers_need_distinct_ids() {
         .customizer(Arc::new(Noop(id.clone())))
         .build()
         .unwrap_err();
-    assert!(matches!(error, SdkError::Registry(_)), "{error}");
-    let sdk = builder().build().unwrap();
-    assert!(sdk.inner.launcher.customizers().get(&id).is_some());
+    assert!(matches!(error, Error::Registry(_)), "{error}");
+    let coblet = builder().build().unwrap();
+    assert!(coblet.inner.launcher.customizers().get(&id).is_some());
 }
