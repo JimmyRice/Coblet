@@ -21,6 +21,8 @@ tokio = { workspace = true, features = ["sync"] }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+coblet-runtime = { workspace = true, features = ["fs"] }
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
 
 [features]

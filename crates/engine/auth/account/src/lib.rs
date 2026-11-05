@@ -45,6 +45,7 @@ mod offline;
 mod secrets;
 mod services;
 mod session;
+mod store;
 
 pub use account::{
     Account, AccountId, AccountIdError, AccountState, Cape, PlayerProfile, ProfileUuidError, Skin,
@@ -64,3 +65,4 @@ pub use offline::{OFFLINE_METHOD, OfflineMethod};
 pub use secrets::AccountSecrets;
 pub use services::ProfileJsonError;
 pub use session::LaunchSession;
+pub use store::{ACCOUNTS_FILE, AccountStore};
