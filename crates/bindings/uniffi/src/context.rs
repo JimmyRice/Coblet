@@ -4,11 +4,9 @@ use coblet::catalog::Filter;
 use coblet::launch::LaunchRequest;
 use coblet::launch_command::LaunchAuth;
 use coblet::mojang::GameVersion;
-use coblet::runtime::UserAgent;
 use coblet::types::{ExtensionId, PlayerName};
 
-use crate::customize::ForeignCustomizer;
-use crate::{CobletError, ErrorKind, GameHandle, LaunchCustomizer};
+use crate::{CobletError, ErrorKind, GameHandle};
 
 /// Game version from the catalog.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
@@ -58,50 +56,56 @@ pub struct LaunchOptions {
     pub customizers: Vec<String>,
 }
 
+/// Platform as Platform Profiles see it.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct PlatformInfo {
+    /// Operating system, such as `macos` or `freebsd`.
+    pub os: String,
+    /// Architecture, such as `aarch64` or `loongarch64`.
+    pub arch: String,
+    /// Operating system version, when known.
+    pub os_version: Option<String>,
+    /// C library, such as `glibc` or `musl`, when known.
+    pub libc: Option<String>,
+}
+
 /// coblet library handle: version catalog and launching.
 #[derive(Debug, uniffi::Object)]
 pub struct Coblet {
-    inner: coblet::Coblet,
+    pub(crate) inner: coblet::Coblet,
+}
+
+impl Coblet {
+    pub(crate) fn from_inner(inner: coblet::Coblet) -> Self {
+        Self { inner }
+    }
 }
 
 #[uniffi::export(async_runtime = "tokio")]
 impl Coblet {
-    /// Creates a `Coblet` with the default transport.
+    /// Creates a `Coblet` with the default transport and nothing added.
+    ///
+    /// Use [`CobletBuilder`](crate::CobletBuilder) to add Platform Profiles
+    /// or launch customizers.
     ///
     /// # Errors
     ///
     /// Fails when the User-Agent is malformed or the transport cannot start.
     #[uniffi::constructor]
     pub fn new(data_root: String, user_agent: String) -> Result<Arc<Self>, CobletError> {
-        Self::with_customizers(data_root, user_agent, Vec::new())
+        crate::CobletBuilder::new(data_root, user_agent)?.build()
     }
 
-    /// Creates a `Coblet` with the default transport and these launch customizers.
-    ///
-    /// A customizer runs only for launches that name its ID in
-    /// [`LaunchOptions::customizers`].
-    ///
-    /// # Errors
-    ///
-    /// Fails when the User-Agent or a customizer ID is malformed, two
-    /// customizers share an ID or the transport cannot start.
-    #[uniffi::constructor]
-    pub fn with_customizers(
-        data_root: String,
-        user_agent: String,
-        customizers: Vec<Arc<dyn LaunchCustomizer>>,
-    ) -> Result<Arc<Self>, CobletError> {
-        let user_agent = UserAgent::new(user_agent)
-            .map_err(|error| CobletError::new(ErrorKind::InvalidArgument, error.to_string()))?;
-        let mut builder = coblet::Coblet::builder()
-            .data_root(data_root)
-            .user_agent(user_agent);
-        for customizer in customizers {
-            builder = builder.customizer(Arc::new(ForeignCustomizer::new(customizer)?));
+    /// Returns the platform launches are adapted to, as Platform Profiles
+    /// match it.
+    pub fn platform(&self) -> PlatformInfo {
+        let platform = self.inner.platform();
+        PlatformInfo {
+            os: platform.os().as_str().to_owned(),
+            arch: platform.arch().as_str().to_owned(),
+            os_version: platform.os_version().map(str::to_owned),
+            libc: platform.libc().map(|libc| libc.as_str().to_owned()),
         }
-        Ok(Arc::new(Self {
-            inner: builder.build()?,
-        }))
     }
 
     /// Lists game versions, newest first.

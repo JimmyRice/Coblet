@@ -15,7 +15,7 @@ use crate::{CobletError, ErrorKind};
 ///
 /// It edits the launch of versions it applies to through a
 /// [`ProfileEditor`]; coblet records every change in the launch report.
-/// Register it with `Coblet.with_customizers` and choose it per launch
+/// Register it with `CobletBuilder.add_customizer` and choose it per launch
 /// with `LaunchOptions.customizers`.
 #[uniffi::export(foreign)]
 pub trait LaunchCustomizer: Send + Sync {

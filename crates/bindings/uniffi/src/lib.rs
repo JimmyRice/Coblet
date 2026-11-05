@@ -1,5 +1,6 @@
 //! UniFFI bindings for coblet.
 //!
+//! `CobletBuilder` adds Platform Profiles and launch customizers;
 //! `Coblet` lists versions and launches games; `GameHandle` streams the
 //! log, kills and waits. Foreign code can implement `LaunchCustomizer` and
 //! `LaunchStep` to change launches, as Rust code does with
@@ -9,12 +10,14 @@
 
 uniffi::setup_scaffolding!();
 
+mod builder;
 mod context;
 mod customize;
 mod error;
 mod game;
 
-pub use context::{Coblet, LaunchMode, LaunchOptions, VersionInfo};
+pub use builder::CobletBuilder;
+pub use context::{Coblet, LaunchMode, LaunchOptions, PlatformInfo, VersionInfo};
 pub use customize::{LaunchCustomizer, LaunchStep, LibrarySpec, ProfileEditor, StepInfo};
 pub use error::{CobletError, ErrorKind};
 pub use game::{GameExitInfo, GameHandle, LogLine};

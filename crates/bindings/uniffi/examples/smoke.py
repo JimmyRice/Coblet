@@ -1,7 +1,7 @@
 """Smoke test of the coblet UniFFI bindings: list versions, launch one with a
-customizer that adds a JVM property and an extra step, print the customizer
-lines of the launch report, stop the game once a log message contains a
-marker.
+Platform Profile and a customizer that each add a JVM property, plus an
+extra step, print their lines of the launch report, stop the game once a log
+message contains a marker.
 
     cargo build -p coblet-uniffi
     cargo run -p coblet-uniffi --features cli --bin uniffi-bindgen -- \
@@ -15,6 +15,14 @@ import asyncio
 import sys
 
 import coblet_uniffi as coblet
+
+
+# Matches every platform; a real profile would adapt a new OS or architecture.
+SMOKE_PROFILE = """
+id = "coblet-smoke:profile"
+[jvm]
+append = ["-Dcoblet.smoke.profile=applied"]
+"""
 
 
 class Step(coblet.LaunchStep):
@@ -49,9 +57,11 @@ class Marker(coblet.LaunchCustomizer):
 
 async def main(data_root: str, version: str, mode: str, marker: str) -> int:
     marker_customizer = Marker()
-    launcher = coblet.Coblet.with_customizers(
-        data_root, "coblet-uniffi-smoke/0.1", [marker_customizer]
-    )
+    builder = coblet.CobletBuilder(data_root, "coblet-uniffi-smoke/0.1")
+    builder.add_platform_profile(SMOKE_PROFILE)
+    builder.add_customizer(marker_customizer)
+    launcher = builder.build()
+    print(f"platform: {launcher.platform()}")
     versions = await launcher.versions()
     latest = await launcher.latest_release()
     print(f"{len(versions)} versions, latest release {latest.id}")
@@ -63,7 +73,7 @@ async def main(data_root: str, version: str, mode: str, marker: str) -> int:
     game = await launcher.launch_with(version, options)
     print(f"started pid {game.pid()}")
     for report_line in game.report().splitlines():
-        if report_line.startswith("[customize]"):
+        if "coblet-smoke:" in report_line:
             print(f"report: {report_line}")
     print(f"extra step ran before start: {marker_customizer.step.ran}")
     reached = False
