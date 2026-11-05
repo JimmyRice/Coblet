@@ -22,8 +22,11 @@ cli = ["uniffi/cli"]
 [dependencies]
 coblet = { workspace = true, default-features = true }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["rt", "sync"] }
 uniffi = { version = "0.32.2", default-features = false, features = ["tokio"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

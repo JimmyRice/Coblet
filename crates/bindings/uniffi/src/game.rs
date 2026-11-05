@@ -36,6 +36,7 @@ pub struct GameExitInfo {
 #[derive(uniffi::Object)]
 pub struct GameHandle {
     pid: Option<u32>,
+    report: String,
     session: Mutex<Option<GameSession>>,
     logs: tokio::sync::Mutex<LogStream>,
 }
@@ -52,6 +53,7 @@ impl GameHandle {
     pub(crate) fn new(session: GameSession) -> Self {
         Self {
             pid: session.pid(),
+            report: session.profile().explain(),
             logs: tokio::sync::Mutex::new(session.logs()),
             session: Mutex::new(Some(session)),
         }
@@ -70,6 +72,12 @@ impl GameHandle {
     /// Returns the process ID, when known.
     pub fn pid(&self) -> Option<u32> {
         self.pid
+    }
+
+    /// Returns the launch report: where every library, argument and the Java
+    /// requirement came from, including the changes of customizers.
+    pub fn report(&self) -> String {
+        self.report.clone()
     }
 
     /// Waits for the next log line; `None` once the game ended and all lines were read.

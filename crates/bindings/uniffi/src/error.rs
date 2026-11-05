@@ -41,10 +41,19 @@ impl CobletError {
     }
 }
 
+impl From<uniffi::UnexpectedUniFFICallbackError> for CobletError {
+    fn from(error: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::new(
+            ErrorKind::Other,
+            format!("callback failed: {}", error.reason),
+        )
+    }
+}
+
 impl From<SdkError> for CobletError {
     fn from(error: SdkError) -> Self {
         let kind = match &error {
-            SdkError::Config(_) => ErrorKind::InvalidArgument,
+            SdkError::Config(_) | SdkError::Registry(_) => ErrorKind::InvalidArgument,
             SdkError::Transport(_) | SdkError::Catalog(_) => ErrorKind::Network,
             SdkError::UnknownVersion(_) => ErrorKind::NotFound,
             SdkError::Profile(_) => ErrorKind::Unsupported,
