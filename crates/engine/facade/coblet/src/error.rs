@@ -1,5 +1,5 @@
 use coblet_catalog::CatalogError;
-use coblet_runtime::{ProbeError, TransportError};
+use coblet_runtime::{ProbeError, RegistryError, TransportError};
 
 /// Failure of an [`Sdk`](crate::Sdk) call.
 #[non_exhaustive]
@@ -12,6 +12,9 @@ pub enum SdkError {
     /// The default transport could not be created.
     #[error(transparent)]
     Transport(#[from] TransportError),
+    /// Two extensions were given with the same ID.
+    #[error(transparent)]
+    Registry(#[from] RegistryError),
     /// The current platform could not be detected.
     #[error(transparent)]
     Platform(#[from] ProbeError),

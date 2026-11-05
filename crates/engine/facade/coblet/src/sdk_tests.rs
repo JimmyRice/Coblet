@@ -75,3 +75,48 @@ async fn lists_versions_and_resolves_one() {
     assert_eq!(ids, ["coblet:mojang-macos-arm64", "coblet:macos-lwjgl3"]);
     assert_eq!(profile.java.major, 17);
 }
+
+struct Noop(ExtensionId);
+
+impl coblet_runtime::Extension for Noop {
+    fn id(&self) -> &ExtensionId {
+        &self.0
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Noop"
+    }
+}
+
+impl coblet_launch::LaunchCustomizer for Noop {
+    fn applies_to(&self, _traits: &coblet_mojang::VersionTraits) -> bool {
+        true
+    }
+
+    fn customize(
+        &self,
+        _profile: &mut coblet_platform::EffectiveLaunchProfile,
+        _ctx: &coblet_launch::CustomizeCtx,
+    ) -> Result<(), coblet_launch::LaunchError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn customizers_need_distinct_ids() {
+    let id = ExtensionId::new("acme:noop").unwrap();
+    let builder = || {
+        Sdk::builder()
+            .data_root("/tmp/x")
+            .transport(Arc::new(Fixtures))
+            .platform(Platform::new(OsFamily::Linux, Arch::X86_64))
+            .customizer(Arc::new(Noop(id.clone())))
+    };
+    let error = builder()
+        .customizer(Arc::new(Noop(id.clone())))
+        .build()
+        .unwrap_err();
+    assert!(matches!(error, SdkError::Registry(_)), "{error}");
+    let sdk = builder().build().unwrap();
+    assert!(sdk.inner.launcher.customizers().get(&id).is_some());
+}
