@@ -134,7 +134,7 @@ pub(crate) fn auth_error(error: AuthError) -> Error {
     match error {
         AuthError::UnknownMethod(id) if id.as_str() == MICROSOFT => Error::Unsupported(
             if cfg!(feature = "auth-msa") {
-                "microsoft login needs a client id, set one with CobletBuilder::msa_client_id"
+                "microsoft login needs a client id and none was configured"
             } else {
                 "microsoft login needs the auth-msa feature and a client id"
             }

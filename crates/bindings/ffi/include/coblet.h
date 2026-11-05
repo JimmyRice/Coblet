@@ -2,10 +2,13 @@
  * coblet C ABI.
  *
  * Threading: every function may be called from any thread. Functions that
- * wait (coblet_versions_json, coblet_launch, coblet_game_next_log,
- * coblet_game_wait) block the calling thread while the Coblet handle's own runtime
+ * wait (coblet_versions_json, coblet_launch, coblet_launch_account,
+ * coblet_login_begin, coblet_login_finish, coblet_account_*,
+ * coblet_game_next_log, coblet_game_wait) block the calling thread while the Coblet handle's own runtime
  * threads do the work. A CobletGame must not be used from two threads at
  * once; coblet_game_kill is the exception and may be called concurrently.
+ * Likewise coblet_login_cancel and coblet_login_submit_redirect may be
+ * called while another thread waits in coblet_login_finish.
  *
  * Errors: functions return a CobletStatus. When out_err is not NULL and the
  * status is not COBLET_STATUS_OK, *out_err receives an error that the caller
@@ -22,8 +25,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Size in bytes of a key for `coblet_builder_set_encrypted_secret_file`.
+#define COBLET_SECRET_KEY_LEN 32
+
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 6
+#define COBLET_ABI_VERSION 7
 
 // Result of a call.
 typedef enum CobletStatus {
@@ -57,7 +63,23 @@ typedef enum CobletErrorKind {
   COBLET_ERROR_KIND_INVALID_STATE = 6,
   // A panic was caught.
   COBLET_ERROR_KIND_PANIC = 7,
+  // A login failed or the account has to sign in again.
+  COBLET_ERROR_KIND_AUTH = 8,
+  // The account does not own the game; it can launch in demo mode.
+  COBLET_ERROR_KIND_NO_LICENSE = 9,
+  // The account has no player profile yet.
+  COBLET_ERROR_KIND_NO_PROFILE = 10,
+  // The operation was cancelled.
+  COBLET_ERROR_KIND_CANCELLED = 11,
 } CobletErrorKind;
+
+// Arm width of a skin.
+typedef enum CobletSkinModel {
+  // Arms 4 pixels wide, called Steve or wide.
+  COBLET_SKIN_MODEL_CLASSIC = 0,
+  // Arms 3 pixels wide, called Alex or slim.
+  COBLET_SKIN_MODEL_SLIM = 1,
+} CobletSkinModel;
 
 // Argument list a `coblet_edit_*_arg` call works on.
 typedef enum CobletArgKind {
@@ -74,6 +96,19 @@ typedef enum CobletLaunchMode {
   // Demo mode.
   COBLET_LAUNCH_MODE_DEMO = 1,
 } CobletLaunchMode;
+
+// How the user signs in to Microsoft.
+typedef enum CobletLoginInteraction {
+  // Show a code that the user enters at a Microsoft page, on any device.
+  COBLET_LOGIN_INTERACTION_DEVICE_CODE = 0,
+  // Open a sign-in page; a built-in listener on `127.0.0.1` with a free
+  // port receives the redirect.
+  COBLET_LOGIN_INTERACTION_BROWSER = 1,
+  // Open a sign-in page that redirects to `redirect_uri`, such as a
+  // custom URL scheme of the launcher; pass the URI the launcher
+  // receives to `coblet_login_submit_redirect`.
+  COBLET_LOGIN_INTERACTION_BROWSER_REDIRECT = 2,
+} CobletLoginInteraction;
 
 // Rule setting a `coblet_rules_set` call changes; the names match the
 // `[rules]` table of TOML profiles.
@@ -121,6 +156,9 @@ typedef struct CobletBuilder CobletBuilder;
 // Running game handle.
 typedef struct CobletGame CobletGame;
 
+// Microsoft login in progress, from `coblet_login_begin`.
+typedef struct CobletLogin CobletLogin;
+
 // Reason the `matches` callback cannot decide, given with `coblet_match_fail`.
 typedef struct CobletMatchFailure CobletMatchFailure;
 
@@ -140,6 +178,9 @@ typedef struct CobletProfileEdit CobletProfileEdit;
 
 // Rule settings being changed by the `rules` callback.
 typedef struct CobletRules CobletRules;
+
+// Result of one secret store callback.
+typedef struct CobletSecretCall CobletSecretCall;
 
 // Reason a step failed, given with `coblet_step_fail`.
 typedef struct CobletStepFailure CobletStepFailure;
@@ -223,6 +264,30 @@ typedef struct CobletCustomizer {
   void (*free)(void *user_data);
 } CobletCustomizer;
 
+// Callback table of a secret store written in C, such as one backed by a
+// system keychain.
+//
+// Keys look like `coblet:microsoft/<account id>/refresh_token`. Callbacks
+// run on the library's runtime threads, possibly several at once, and
+// should return quickly. Each gets a `CobletSecretCall` handle, valid only
+// during the call: `get` hands its value over with
+// `coblet_secret_call_set_value`, and a callback that returns false can
+// give the reason with `coblet_secret_call_fail`. The library owns
+// `user_data` from the call that receives the table, even when it fails,
+// and calls `free` once when the `Coblet` is freed.
+typedef struct CobletSecretStore {
+  // Passed to every callback.
+  void *user_data;
+  // Looks up `key`; sets the value when there is one. Returns false on failure.
+  bool (*get)(void *user_data, const char *key, struct CobletSecretCall *call);
+  // Stores `value` for `key`. Returns false on failure.
+  bool (*put)(void *user_data, const char *key, const char *value, struct CobletSecretCall *call);
+  // Removes `key`; a missing key is not a failure. Returns false on failure.
+  bool (*delete_)(void *user_data, const char *key, struct CobletSecretCall *call);
+  // Releases `user_data`; may be NULL.
+  void (*free)(void *user_data);
+} CobletSecretStore;
+
 // Callback table of an extra launch step written in C.
 //
 // The library owns `user_data` from the call that receives the table,
@@ -258,6 +323,158 @@ typedef struct CobletGameExit {
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+// Lists the saved accounts as JSON: `{"schema":1,"default","accounts":[
+// {"id","method","state","player","session_expires_at"}]}`.
+//
+// `default` is the default account's ID or null. `state` is `ready`,
+// `needs-refresh`, `needs-reauth`, `no-license` or `no-profile`. `player`
+// is null or `{"name","uuid","skins":[{"id","url","model","active"}],
+// "capes":[{"id","alias","url","active"}]}` with `model` `classic` or
+// `slim`. `session_expires_at` is in Unix seconds or null. On success
+// `*out_json` receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `out_json` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_accounts_json(const struct Coblet *coblet,
+                                       struct CobletString *out_json,
+                                       struct CobletError **out_err);
+
+// Adds an offline account, or returns the one with that name, as JSON in
+// the account format of `coblet_accounts_json` with a `schema` field.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `name` must be NULL or NUL-terminated;
+// `out_json` must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_account_add_offline(const struct Coblet *coblet,
+                                             const char *name,
+                                             struct CobletString *out_json,
+                                             struct CobletError **out_err);
+
+// Removes an account and its stored tokens.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `account_id` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_account_remove(const struct Coblet *coblet,
+                                        const char *account_id,
+                                        struct CobletError **out_err);
+
+// Makes an account the default; NULL clears the default.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `account_id` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_account_set_default(const struct Coblet *coblet,
+                                             const char *account_id,
+                                             struct CobletError **out_err);
+
+// Chooses the account an instance launches with; NULL `account_id` falls
+// back to the default account.
+//
+// # Safety
+//
+// `coblet` must be a live handle; strings must be NULL or NUL-terminated;
+// `out_err` must be NULL or writable.
+enum CobletStatus coblet_account_assign(const struct Coblet *coblet,
+                                        const char *instance,
+                                        const char *account_id,
+                                        struct CobletError **out_err);
+
+// Renews an account's tokens now and returns it as JSON in the account
+// format of `coblet_accounts_json` with a `schema` field.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `account_id` must be NULL or
+// NUL-terminated; `out_json` must be writable; `out_err` must be NULL or
+// writable.
+enum CobletStatus coblet_account_refresh(const struct Coblet *coblet,
+                                         const char *account_id,
+                                         struct CobletString *out_json,
+                                         struct CobletError **out_err);
+
+// Reads the account's skins and capes from Minecraft services as JSON:
+// the `player` object of `coblet_accounts_json` with a `schema` field.
+// Fails with `COBLET_ERROR_KIND_UNSUPPORTED` for offline accounts.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `account_id` must be NULL or
+// NUL-terminated; `out_json` must be writable; `out_err` must be NULL or
+// writable.
+enum CobletStatus coblet_account_appearance_json(const struct Coblet *coblet,
+                                                 const char *account_id,
+                                                 struct CobletString *out_json,
+                                                 struct CobletError **out_err);
+
+// Uploads a PNG skin of 64x64 or 64x32 pixels, wears it and returns the
+// player as in `coblet_account_appearance_json`.
+//
+// # Safety
+//
+// As `coblet_account_appearance_json`; `png` must point to `len` readable bytes.
+enum CobletStatus coblet_account_upload_skin(const struct Coblet *coblet,
+                                             const char *account_id,
+                                             const uint8_t *png,
+                                             size_t len,
+                                             enum CobletSkinModel model,
+                                             struct CobletString *out_json,
+                                             struct CobletError **out_err);
+
+// Wears the skin at a public URL, which Minecraft services download, and
+// returns the player as in `coblet_account_appearance_json`.
+//
+// # Safety
+//
+// As `coblet_account_appearance_json`; `url` must be NULL or NUL-terminated.
+enum CobletStatus coblet_account_upload_skin_url(const struct Coblet *coblet,
+                                                 const char *account_id,
+                                                 const char *url,
+                                                 enum CobletSkinModel model,
+                                                 struct CobletString *out_json,
+                                                 struct CobletError **out_err);
+
+// Switches the arm width of the worn skin and returns the player as in
+// `coblet_account_appearance_json`.
+//
+// # Safety
+//
+// As `coblet_account_appearance_json`.
+enum CobletStatus coblet_account_set_skin_model(const struct Coblet *coblet,
+                                                const char *account_id,
+                                                enum CobletSkinModel model,
+                                                struct CobletString *out_json,
+                                                struct CobletError **out_err);
+
+// Goes back to the default skin and returns the player as in
+// `coblet_account_appearance_json`.
+//
+// # Safety
+//
+// As `coblet_account_appearance_json`.
+enum CobletStatus coblet_account_reset_skin(const struct Coblet *coblet,
+                                            const char *account_id,
+                                            struct CobletString *out_json,
+                                            struct CobletError **out_err);
+
+// Shows an owned cape by ID, or hides the cape when `cape_id` is NULL,
+// and returns the player as in `coblet_account_appearance_json`.
+//
+// # Safety
+//
+// As `coblet_account_appearance_json`; `cape_id` must be NULL or
+// NUL-terminated.
+enum CobletStatus coblet_account_set_cape(const struct Coblet *coblet,
+                                          const char *account_id,
+                                          const char *cape_id,
+                                          struct CobletString *out_json,
+                                          struct CobletError **out_err);
 
 // Starts building a `Coblet` handle with the default transport.
 //
@@ -358,6 +575,53 @@ enum CobletStatus coblet_builder_add_customizer(struct CobletBuilder *builder,
 enum CobletStatus coblet_builder_allow_auth_changes(struct CobletBuilder *builder,
                                                     const char *id,
                                                     struct CobletError **out_err);
+
+// Enables Microsoft login with the launcher's Azure application Client
+// ID, which Minecraft services must have approved. Without one,
+// `coblet_login_begin` fails with `COBLET_ERROR_KIND_UNSUPPORTED`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `client_id` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_set_msa_client_id(struct CobletBuilder *builder,
+                                                   const char *client_id,
+                                                   struct CobletError **out_err);
+
+// Keeps refresh tokens and other secrets in a store written in C, such
+// as the system keychain. Replaces an earlier
+// `coblet_builder_set_encrypted_secret_file`. Without either, secrets
+// live in memory and every Microsoft account needs a new login after a
+// restart.
+//
+// The library owns the table's user data from this call on, even when it
+// fails.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `store` must point to a
+// callback table whose callbacks and user data may be used from any
+// thread until `free`; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_set_secret_store(struct CobletBuilder *builder,
+                                                  const struct CobletSecretStore *store,
+                                                  struct CobletError **out_err);
+
+// Keeps secrets in one file encrypted with a key of
+// `COBLET_SECRET_KEY_LEN` bytes, such as one from
+// `coblet_generate_secret_key`. Keep the key somewhere safer than next to
+// the file, such as a system keychain. Replaces an earlier
+// `coblet_builder_set_secret_store`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `path` must be NULL or
+// NUL-terminated; `key` must point to `key_len` readable bytes; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_builder_set_encrypted_secret_file(struct CobletBuilder *builder,
+                                                           const char *path,
+                                                           const uint8_t *key,
+                                                           size_t key_len,
+                                                           struct CobletError **out_err);
 
 // Builds the `Coblet` handle and frees the builder, whether or not it succeeds.
 //
@@ -630,6 +894,25 @@ enum CobletStatus coblet_launch_customized(const struct Coblet *coblet,
                                            struct CobletGame **out_game,
                                            struct CobletError **out_err);
 
+// Starts a version with a saved account, renewing its tokens first when
+// needed, and runs the customizers listed in `customizers`, in order.
+//
+// `game_dir` may be NULL for `<data_root>/games/<version>`. Fails with
+// `COBLET_ERROR_KIND_NO_LICENSE` for an account that does not own the
+// game and `COBLET_ERROR_KIND_AUTH` when the user has to sign in again.
+//
+// # Safety
+//
+// As `coblet_launch_customized`; `account_id` must be NULL or NUL-terminated.
+enum CobletStatus coblet_launch_account(const struct Coblet *coblet,
+                                        const char *version_id,
+                                        const char *account_id,
+                                        const char *game_dir,
+                                        const char *const *customizers,
+                                        size_t count,
+                                        struct CobletGame **out_game,
+                                        struct CobletError **out_err);
+
 // Returns the launch report: where every library, argument and the Java
 // requirement came from, including the changes of customizers.
 //
@@ -679,6 +962,88 @@ enum CobletStatus coblet_game_wait(struct CobletGame *game,
 //
 // `game` must be NULL or a handle from `coblet_launch` that is not used afterwards.
 void coblet_game_free(struct CobletGame *game);
+
+// Starts a Microsoft login.
+//
+// `redirect_uri` is required for `COBLET_LOGIN_INTERACTION_BROWSER_REDIRECT`
+// and ignored otherwise; `login_hint` may be NULL or an e-mail address to
+// pre-fill. On success `*out_login` receives a handle to free with
+// `coblet_login_free`; read its prompt with `coblet_login_prompt_json`.
+// Fails with `COBLET_ERROR_KIND_UNSUPPORTED` when no Client ID was set
+// with `coblet_builder_set_msa_client_id`.
+//
+// # Safety
+//
+// `coblet` must be a live handle that outlives the login; strings must be
+// NULL or NUL-terminated; `out_login` must be writable; `out_err` must be
+// NULL or writable.
+enum CobletStatus coblet_login_begin(const struct Coblet *coblet,
+                                     enum CobletLoginInteraction interaction,
+                                     const char *redirect_uri,
+                                     const char *login_hint,
+                                     struct CobletLogin **out_login,
+                                     struct CobletError **out_err);
+
+// Returns what the user has to do as JSON: `{"schema":1,"type":"device_code",
+// "user_code","verification_uri","expires_at","message"}`,
+// `{"schema":1,"type":"open_url","url","redirect_uri"}` or
+// `{"schema":1,"type":"nothing"}`. `expires_at` is in Unix seconds and
+// `message` may be null.
+//
+// On success `*out_json` receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `login` must be a live handle; `out_json` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_login_prompt_json(const struct CobletLogin *login,
+                                           struct CobletString *out_json,
+                                           struct CobletError **out_err);
+
+// Hands the full URI the browser was redirected to, with its `code` and
+// `state` parameters, to a login started with
+// `COBLET_LOGIN_INTERACTION_BROWSER_REDIRECT`. May be called while
+// another thread waits in `coblet_login_finish`.
+//
+// # Safety
+//
+// `login` must be a live handle; `uri` must be NULL or NUL-terminated;
+// `out_err` must be NULL or writable.
+enum CobletStatus coblet_login_submit_redirect(const struct CobletLogin *login,
+                                               const char *uri,
+                                               struct CobletError **out_err);
+
+// Stops the login: a waiting or later `coblet_login_finish` fails with
+// `COBLET_ERROR_KIND_CANCELLED`. May be called from any thread; NULL is
+// ignored.
+//
+// # Safety
+//
+// `login` must be NULL or a live handle.
+void coblet_login_cancel(const struct CobletLogin *login);
+
+// Waits until the user has signed in, saves the account and returns it
+// as JSON, in the account format of `coblet_accounts_json` with a
+// `schema` field. A login finishes once.
+//
+// Accounts without the game or a player profile are saved with the state
+// `no-license` or `no-profile` rather than failing.
+//
+// # Safety
+//
+// `login` must be a live handle; `out_json` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_login_finish(const struct CobletLogin *login,
+                                      struct CobletString *out_json,
+                                      struct CobletError **out_err);
+
+// Frees a login handle; NULL is ignored. An unfinished login stops.
+//
+// # Safety
+//
+// `login` must be NULL or a handle from `coblet_login_begin` that no other
+// thread uses any more.
+void coblet_login_free(struct CobletLogin *login);
 
 // Sets a rule setting; NULL `value` clears what earlier profiles set.
 //
@@ -913,6 +1278,32 @@ enum CobletStatus coblet_draft_refuse(struct CobletProfileDraft *draft,
 // `draft` must be the handle of the running `rewrite` callback; `message`
 // must be NULL or NUL-terminated.
 enum CobletStatus coblet_draft_fail(struct CobletProfileDraft *draft, const char *message);
+
+// Hands the value found by a `get` callback to the library, which copies it.
+//
+// # Safety
+//
+// `call` must be the handle passed to the running `get` callback; `value`
+// must be NULL or NUL-terminated.
+enum CobletStatus coblet_secret_call_set_value(struct CobletSecretCall *call, const char *value);
+
+// Gives the reason the running secret store callback is about to return false.
+//
+// # Safety
+//
+// `call` must be the handle passed to the running callback; `message` must
+// be NULL or NUL-terminated.
+enum CobletStatus coblet_secret_call_fail(struct CobletSecretCall *call, const char *message);
+
+// Writes a new random key of `COBLET_SECRET_KEY_LEN` bytes to `out_key`.
+//
+// # Safety
+//
+// `out_key` must point to `len` writable bytes; `out_err` must be NULL or
+// writable.
+enum CobletStatus coblet_generate_secret_key(uint8_t *out_key,
+                                             size_t len,
+                                             struct CobletError **out_err);
 
 #ifdef __cplusplus
 }  // extern "C"
