@@ -43,7 +43,7 @@ pub enum LaunchMode {
     Demo,
 }
 
-/// Per-launch choices for [`CobletSdk::launch_with`].
+/// Per-launch choices for [`Coblet::launch_with`].
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct LaunchOptions {
     /// Player name.
@@ -58,15 +58,15 @@ pub struct LaunchOptions {
     pub customizers: Vec<String>,
 }
 
-/// coblet SDK: version catalog and launching.
+/// coblet library handle: version catalog and launching.
 #[derive(Debug, uniffi::Object)]
-pub struct CobletSdk {
-    sdk: coblet::Coblet,
+pub struct Coblet {
+    inner: coblet::Coblet,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
-impl CobletSdk {
-    /// Creates an SDK with the default transport.
+impl Coblet {
+    /// Creates a `Coblet` with the default transport.
     ///
     /// # Errors
     ///
@@ -76,7 +76,7 @@ impl CobletSdk {
         Self::with_customizers(data_root, user_agent, Vec::new())
     }
 
-    /// Creates an SDK with the default transport and these launch customizers.
+    /// Creates a `Coblet` with the default transport and these launch customizers.
     ///
     /// A customizer runs only for launches that name its ID in
     /// [`LaunchOptions::customizers`].
@@ -100,7 +100,7 @@ impl CobletSdk {
             builder = builder.customizer(Arc::new(ForeignCustomizer::new(customizer)?));
         }
         Ok(Arc::new(Self {
-            sdk: builder.build()?,
+            inner: builder.build()?,
         }))
     }
 
@@ -110,7 +110,7 @@ impl CobletSdk {
     ///
     /// Fails when the manifest is unavailable and not cached.
     pub async fn versions(&self) -> Result<Vec<VersionInfo>, CobletError> {
-        let versions = self.sdk.versions(&Filter::new()).await?;
+        let versions = self.inner.versions(&Filter::new()).await?;
         Ok(versions.iter().map(VersionInfo::from).collect())
     }
 
@@ -120,7 +120,7 @@ impl CobletSdk {
     ///
     /// Fails when the manifest is unavailable or names no latest release.
     pub async fn latest_release(&self) -> Result<VersionInfo, CobletError> {
-        Ok(VersionInfo::from(&self.sdk.latest_release().await?))
+        Ok(VersionInfo::from(&self.inner.latest_release().await?))
     }
 
     /// Downloads what a version needs and starts it.
@@ -171,10 +171,10 @@ impl CobletSdk {
                 request.with_customizer(ExtensionId::new(id).map_err(|error| invalid(&error))?);
         }
         let game_dir = options.game_dir.map_or_else(
-            || self.sdk.data_root().join("games").join(&version_id),
+            || self.inner.data_root().join("games").join(&version_id),
             Into::into,
         );
-        let session = self.sdk.launch(&version_id, game_dir, request).await?;
+        let session = self.inner.launch(&version_id, game_dir, request).await?;
         Ok(Arc::new(GameHandle::new(session)))
     }
 }
