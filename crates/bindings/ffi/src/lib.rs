@@ -1,6 +1,6 @@
 //! C ABI for coblet.
 //!
-//! Handles (`CobletSdk`, `CobletGame`) are opaque pointers created and freed
+//! Handles (`Coblet`, `CobletGame`) are opaque pointers created and freed
 //! in pairs; functions return a [`CobletStatus`] and report details through
 //! an optional `CobletError**`; structured data travels as JSON documents
 //! with a `schema` field. Launch customizers and extra steps are callback
@@ -9,12 +9,16 @@
 //! `cargo xtask gen-header`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod context;
 mod customize;
 mod game;
 mod guard;
-mod sdk;
 mod types;
 
+pub use context::{
+    Coblet, coblet_abi_version, coblet_error_free, coblet_free, coblet_new,
+    coblet_new_with_customizers, coblet_string_free, coblet_versions_json,
+};
 pub use customize::{
     CobletArgKind, CobletCustomizer, CobletProfileEdit, CobletStep, CobletStepFailure,
     coblet_edit_add_arg, coblet_edit_add_library, coblet_edit_add_native_path,
@@ -26,9 +30,5 @@ pub use game::{
     CobletGame, CobletGameExit, CobletLaunchMode, coblet_game_free, coblet_game_kill,
     coblet_game_next_log, coblet_game_report, coblet_game_wait, coblet_launch,
     coblet_launch_customized,
-};
-pub use sdk::{
-    CobletSdk, coblet_abi_version, coblet_error_free, coblet_sdk_free, coblet_sdk_new,
-    coblet_sdk_new_with_customizers, coblet_string_free, coblet_versions_json,
 };
 pub use types::{COBLET_ABI_VERSION, CobletError, CobletErrorKind, CobletStatus, CobletString};

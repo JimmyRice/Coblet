@@ -11,10 +11,10 @@ use crate::types::{
     COBLET_ABI_VERSION, CobletError, CobletErrorKind, CobletStatus, CobletString, Failure, text,
 };
 
-/// SDK handle: the Rust `Sdk` and the runtime its work runs on.
-pub struct CobletSdk {
+/// Library handle: the Rust `Coblet` and the runtime its work runs on.
+pub struct Coblet {
     pub(crate) runtime: Runtime,
-    pub(crate) sdk: coblet::Coblet,
+    pub(crate) inner: coblet::Coblet,
 }
 
 /// Returns the ABI version the library implements.
@@ -24,59 +24,59 @@ pub extern "C" fn coblet_abi_version() -> u32 {
     COBLET_ABI_VERSION
 }
 
-/// Creates an SDK with the default transport.
+/// Creates a `Coblet` handle with the default transport.
 ///
 /// `data_root` is the directory for shared game files; `user_agent`
 /// identifies the launcher to web services, such as
-/// `MyLauncher/1.0 (contact@example.com)`. On success `*out_sdk` receives a
-/// handle to free with `coblet_sdk_free`.
+/// `MyLauncher/1.0 (contact@example.com)`. On success `*out_coblet` receives a
+/// handle to free with `coblet_free`.
 ///
 /// # Safety
 ///
-/// String arguments must be NULL or NUL-terminated; `out_sdk` must be
+/// String arguments must be NULL or NUL-terminated; `out_coblet` must be
 /// writable; `out_err` must be NULL or writable.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn coblet_sdk_new(
+pub unsafe extern "C" fn coblet_new(
     data_root: *const c_char,
     user_agent: *const c_char,
-    out_sdk: *mut *mut CobletSdk,
+    out_coblet: *mut *mut Coblet,
     out_err: *mut *mut CobletError,
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees; no customizers.
     unsafe {
-        coblet_sdk_new_with_customizers(
+        coblet_new_with_customizers(
             data_root,
             user_agent,
             std::ptr::null(),
             0,
-            out_sdk,
+            out_coblet,
             out_err,
         )
     }
 }
 
-/// Creates an SDK with the default transport and `count` launch customizers.
+/// Creates a `Coblet` handle with the default transport and `count` launch customizers.
 ///
-/// As `coblet_sdk_new`; a customizer runs only for launches that name its
+/// As `coblet_new`; a customizer runs only for launches that name its
 /// ID in `coblet_launch_customized`. The library owns the user data of
 /// every table from this call on, even when it fails, and calls each
 /// `free` once: on failure before returning, otherwise from
-/// `coblet_sdk_free`.
+/// `coblet_free`.
 ///
 /// # Safety
 ///
-/// As `coblet_sdk_new`; `customizers` must point to `count` tables, or be
+/// As `coblet_new`; `customizers` must point to `count` tables, or be
 /// NULL when `count` is 0, and their callbacks must stay valid until their
 /// `free` runs.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn coblet_sdk_new_with_customizers(
+pub unsafe extern "C" fn coblet_new_with_customizers(
     data_root: *const c_char,
     user_agent: *const c_char,
     customizers: *const CobletCustomizer,
     count: usize,
-    out_sdk: *mut *mut CobletSdk,
+    out_coblet: *mut *mut Coblet,
     out_err: *mut *mut CobletError,
 ) -> CobletStatus {
     let tables: &[CobletCustomizer] = if customizers.is_null() || count == 0 {
@@ -110,9 +110,9 @@ pub unsafe extern "C" fn coblet_sdk_new_with_customizers(
             for adapter in adapters {
                 builder = builder.customizer(Arc::new(adapter));
             }
-            let sdk = runtime.block_on(async { builder.build() })?;
-            let handle = Box::into_raw(Box::new(CobletSdk { runtime, sdk }));
-            if let Err(failure) = put(out_sdk, handle, "out_sdk") {
+            let inner = runtime.block_on(async { builder.build() })?;
+            let handle = Box::into_raw(Box::new(Coblet { runtime, inner }));
+            if let Err(failure) = put(out_coblet, handle, "out_coblet") {
                 drop(Box::from_raw(handle));
                 return Err(failure);
             }
@@ -121,17 +121,17 @@ pub unsafe extern "C" fn coblet_sdk_new_with_customizers(
     }
 }
 
-/// Frees an SDK handle; NULL is ignored.
+/// Frees a `Coblet` handle; NULL is ignored.
 ///
 /// # Safety
 ///
-/// `sdk` must be NULL or a handle from `coblet_sdk_new` that is not used afterwards.
+/// `coblet` must be NULL or a handle from `coblet_new` that is not used afterwards.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn coblet_sdk_free(sdk: *mut CobletSdk) {
-    if !sdk.is_null() {
-        // SAFETY: the handle came from `Box::into_raw` in `coblet_sdk_new`.
-        drop(unsafe { Box::from_raw(sdk) });
+pub unsafe extern "C" fn coblet_free(coblet: *mut Coblet) {
+    if !coblet.is_null() {
+        // SAFETY: the handle came from `Box::into_raw` in `coblet_new`.
+        drop(unsafe { Box::from_raw(coblet) });
     }
 }
 
@@ -143,27 +143,27 @@ pub unsafe extern "C" fn coblet_sdk_free(sdk: *mut CobletSdk) {
 ///
 /// # Safety
 ///
-/// `sdk` must be a live handle; `out_json` must be writable; `out_err` must
+/// `coblet` must be a live handle; `out_json` must be writable; `out_err` must
 /// be NULL or writable.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn coblet_versions_json(
-    sdk: *const CobletSdk,
+    coblet: *const Coblet,
     out_json: *mut CobletString,
     out_err: *mut *mut CobletError,
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
         guard(out_err, || {
-            let handle = sdk
+            let handle = coblet
                 .as_ref()
-                .ok_or_else(|| Failure::argument("sdk", "is NULL"))?;
+                .ok_or_else(|| Failure::argument("coblet", "is NULL"))?;
             if out_json.is_null() {
                 return Err(Failure::argument("out_json", "is NULL"));
             }
             let versions = handle
                 .runtime
-                .block_on(handle.sdk.versions(&Filter::new()))?;
+                .block_on(handle.inner.versions(&Filter::new()))?;
             let list: Vec<serde_json::Value> = versions
                 .iter()
                 .map(|version| {
@@ -215,34 +215,40 @@ pub unsafe extern "C" fn coblet_error_free(error: *mut CobletError) {
 mod tests {
     use std::ffi::CString;
 
-    use super::{coblet_abi_version, coblet_error_free, coblet_sdk_free, coblet_sdk_new};
+    use super::{coblet_abi_version, coblet_error_free, coblet_free, coblet_new};
     use crate::types::{CobletErrorKind, CobletStatus, CobletString};
 
     #[test]
     #[allow(unsafe_code, reason = "calls the C ABI")]
     fn creates_and_frees_an_sdk_and_reports_bad_arguments() {
-        assert_eq!(coblet_abi_version(), 1);
+        assert_eq!(coblet_abi_version(), 2);
         let dir = tempfile::tempdir().unwrap();
         let root = CString::new(dir.path().to_str().unwrap()).unwrap();
         let agent = CString::new("coblet-ffi-test/1.0").unwrap();
 
-        let mut sdk = std::ptr::null_mut();
+        let mut coblet = std::ptr::null_mut();
         let mut err = std::ptr::null_mut();
         // SAFETY: valid strings and out-pointers.
         let status =
-            unsafe { coblet_sdk_new(root.as_ptr(), agent.as_ptr(), &raw mut sdk, &raw mut err) };
+            unsafe { coblet_new(root.as_ptr(), agent.as_ptr(), &raw mut coblet, &raw mut err) };
         assert_eq!(status, CobletStatus::Ok);
-        assert!(!sdk.is_null());
+        assert!(!coblet.is_null());
         assert!(err.is_null());
         // SAFETY: the handle is live and not used afterwards.
-        unsafe { coblet_sdk_free(sdk) };
+        unsafe { coblet_free(coblet) };
 
-        let mut sdk = std::ptr::null_mut();
+        let mut coblet = std::ptr::null_mut();
         // SAFETY: a NULL data root is reported, not dereferenced.
-        let status =
-            unsafe { coblet_sdk_new(std::ptr::null(), agent.as_ptr(), &raw mut sdk, &raw mut err) };
+        let status = unsafe {
+            coblet_new(
+                std::ptr::null(),
+                agent.as_ptr(),
+                &raw mut coblet,
+                &raw mut err,
+            )
+        };
         assert_eq!(status, CobletStatus::InvalidArgument);
-        assert!(sdk.is_null());
+        assert!(coblet.is_null());
         // SAFETY: the error was just returned by the library.
         let error = unsafe { &*err };
         assert_eq!(error.kind, CobletErrorKind::InvalidArgument);

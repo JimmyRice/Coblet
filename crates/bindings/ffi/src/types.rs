@@ -1,7 +1,7 @@
 use std::ffi::{CStr, c_char};
 
 /// Version of the C ABI; it grows with every incompatible change.
-pub const COBLET_ABI_VERSION: u32 = 1;
+pub const COBLET_ABI_VERSION: u32 = 2;
 
 /// Result of a call.
 #[repr(C)]

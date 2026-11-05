@@ -10,7 +10,7 @@ header = """
  *
  * Threading: every function may be called from any thread. Functions that
  * wait (coblet_versions_json, coblet_launch, coblet_game_next_log,
- * coblet_game_wait) block the calling thread while the SDK's own runtime
+ * coblet_game_wait) block the calling thread while the Coblet handle's own runtime
  * threads do the work. A CobletGame must not be used from two threads at
  * once; coblet_game_kill is the exception and may be called concurrently.
  *

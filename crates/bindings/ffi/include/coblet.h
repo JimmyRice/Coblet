@@ -3,7 +3,7 @@
  *
  * Threading: every function may be called from any thread. Functions that
  * wait (coblet_versions_json, coblet_launch, coblet_game_next_log,
- * coblet_game_wait) block the calling thread while the SDK's own runtime
+ * coblet_game_wait) block the calling thread while the Coblet handle's own runtime
  * threads do the work. A CobletGame must not be used from two threads at
  * once; coblet_game_kill is the exception and may be called concurrently.
  *
@@ -23,7 +23,7 @@
 #include <stdint.h>
 
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 1
+#define COBLET_ABI_VERSION 2
 
 // Result of a call.
 typedef enum CobletStatus {
@@ -75,15 +75,15 @@ typedef enum CobletLaunchMode {
   COBLET_LAUNCH_MODE_DEMO = 1,
 } CobletLaunchMode;
 
+// Library handle: the Rust `Coblet` and the runtime its work runs on.
+typedef struct Coblet Coblet;
+
 // Running game handle.
 typedef struct CobletGame CobletGame;
 
 // Launch profile being edited by a C customizer; valid only during its
 // `customize` callback.
 typedef struct CobletProfileEdit CobletProfileEdit;
-
-// SDK handle: the Rust `Sdk` and the runtime its work runs on.
-typedef struct CobletSdk CobletSdk;
 
 // Reason a step failed, given with `coblet_step_fail`.
 typedef struct CobletStepFailure CobletStepFailure;
@@ -104,6 +104,30 @@ typedef struct CobletError {
   // Human-readable message.
   struct CobletString message;
 } CobletError;
+
+// Callback table of a launch customizer written in C.
+//
+// The library copies `id` and `display_name` and owns `user_data` from
+// the call that receives the table, even when that call fails; it calls
+// `free` once when it no longer needs it. Callbacks may run on any thread,
+// one at a time per launch.
+typedef struct CobletCustomizer {
+  // ID such as `acme:legacy-fix`.
+  const char *id;
+  // Name shown to users; may be NULL.
+  const char *display_name;
+  // Passed to every callback.
+  void *user_data;
+  // Reports whether the customizer handles a version; `traits_json` is
+  // a JSON array such as `["applet","jre-legacy"]`. NULL applies to every version.
+  bool (*applies_to)(void *user_data, const char *traits_json);
+  // Edits one launch through `edit`, which is valid only during the
+  // call. Returning false stops the launch; call `coblet_edit_fail`
+  // first to give the reason.
+  bool (*customize)(void *user_data, struct CobletProfileEdit *edit);
+  // Releases `user_data`; may be NULL.
+  void (*free)(void *user_data);
+} CobletCustomizer;
 
 // Callback table of an extra launch step written in C.
 //
@@ -137,33 +161,83 @@ typedef struct CobletGameExit {
   uint64_t duration_ms;
 } CobletGameExit;
 
-// Callback table of a launch customizer written in C.
-//
-// The library copies `id` and `display_name` and owns `user_data` from
-// the call that receives the table, even when that call fails; it calls
-// `free` once when it no longer needs it. Callbacks may run on any thread,
-// one at a time per launch.
-typedef struct CobletCustomizer {
-  // ID such as `acme:legacy-fix`.
-  const char *id;
-  // Name shown to users; may be NULL.
-  const char *display_name;
-  // Passed to every callback.
-  void *user_data;
-  // Reports whether the customizer handles a version; `traits_json` is
-  // a JSON array such as `["applet","jre-legacy"]`. NULL applies to every version.
-  bool (*applies_to)(void *user_data, const char *traits_json);
-  // Edits one launch through `edit`, which is valid only during the
-  // call. Returning false stops the launch; call `coblet_edit_fail`
-  // first to give the reason.
-  bool (*customize)(void *user_data, struct CobletProfileEdit *edit);
-  // Releases `user_data`; may be NULL.
-  void (*free)(void *user_data);
-} CobletCustomizer;
-
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+// Returns the ABI version the library implements.
+uint32_t coblet_abi_version(void);
+
+// Creates a `Coblet` handle with the default transport.
+//
+// `data_root` is the directory for shared game files; `user_agent`
+// identifies the launcher to web services, such as
+// `MyLauncher/1.0 (contact@example.com)`. On success `*out_coblet` receives a
+// handle to free with `coblet_free`.
+//
+// # Safety
+//
+// String arguments must be NULL or NUL-terminated; `out_coblet` must be
+// writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_new(const char *data_root,
+                             const char *user_agent,
+                             struct Coblet **out_coblet,
+                             struct CobletError **out_err);
+
+// Creates a `Coblet` handle with the default transport and `count` launch customizers.
+//
+// As `coblet_new`; a customizer runs only for launches that name its
+// ID in `coblet_launch_customized`. The library owns the user data of
+// every table from this call on, even when it fails, and calls each
+// `free` once: on failure before returning, otherwise from
+// `coblet_free`.
+//
+// # Safety
+//
+// As `coblet_new`; `customizers` must point to `count` tables, or be
+// NULL when `count` is 0, and their callbacks must stay valid until their
+// `free` runs.
+enum CobletStatus coblet_new_with_customizers(const char *data_root,
+                                              const char *user_agent,
+                                              const struct CobletCustomizer *customizers,
+                                              size_t count,
+                                              struct Coblet **out_coblet,
+                                              struct CobletError **out_err);
+
+// Frees a `Coblet` handle; NULL is ignored.
+//
+// # Safety
+//
+// `coblet` must be NULL or a handle from `coblet_new` that is not used afterwards.
+void coblet_free(struct Coblet *coblet);
+
+// Lists game versions as JSON, newest first.
+//
+// The document is `{"schema":1,"versions":[{"id","type","released",
+// "latest_release"}]}`. On success `*out_json` receives a string to free
+// with `coblet_string_free`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `out_json` must be writable; `out_err` must
+// be NULL or writable.
+enum CobletStatus coblet_versions_json(const struct Coblet *coblet,
+                                       struct CobletString *out_json,
+                                       struct CobletError **out_err);
+
+// Frees a string returned by the library; an empty value is ignored.
+//
+// # Safety
+//
+// `value` must come from this library and must not be freed twice.
+void coblet_string_free(struct CobletString value);
+
+// Frees an error; NULL is ignored.
+//
+// # Safety
+//
+// `error` must be NULL or come from this library, and must not be freed twice.
+void coblet_error_free(struct CobletError *error);
 
 // Returns what the customizer can see as JSON.
 //
@@ -319,9 +393,9 @@ enum CobletStatus coblet_step_fail(struct CobletStepFailure *failure, const char
 //
 // # Safety
 //
-// `sdk` must be a live handle; strings must be NULL or NUL-terminated;
+// `coblet` must be a live handle; strings must be NULL or NUL-terminated;
 // `out_game` must be writable; `out_err` must be NULL or writable.
-enum CobletStatus coblet_launch(const struct CobletSdk *sdk,
+enum CobletStatus coblet_launch(const struct Coblet *coblet,
                                 const char *version_id,
                                 const char *player_name,
                                 enum CobletLaunchMode mode,
@@ -336,7 +410,7 @@ enum CobletStatus coblet_launch(const struct CobletSdk *sdk,
 //
 // As `coblet_launch`; `customizers` must point to `count` NUL-terminated
 // strings, or be NULL when `count` is 0.
-enum CobletStatus coblet_launch_customized(const struct CobletSdk *sdk,
+enum CobletStatus coblet_launch_customized(const struct Coblet *coblet,
                                            const char *version_id,
                                            const char *player_name,
                                            enum CobletLaunchMode mode,
@@ -395,80 +469,6 @@ enum CobletStatus coblet_game_wait(struct CobletGame *game,
 //
 // `game` must be NULL or a handle from `coblet_launch` that is not used afterwards.
 void coblet_game_free(struct CobletGame *game);
-
-// Returns the ABI version the library implements.
-uint32_t coblet_abi_version(void);
-
-// Creates an SDK with the default transport.
-//
-// `data_root` is the directory for shared game files; `user_agent`
-// identifies the launcher to web services, such as
-// `MyLauncher/1.0 (contact@example.com)`. On success `*out_sdk` receives a
-// handle to free with `coblet_sdk_free`.
-//
-// # Safety
-//
-// String arguments must be NULL or NUL-terminated; `out_sdk` must be
-// writable; `out_err` must be NULL or writable.
-enum CobletStatus coblet_sdk_new(const char *data_root,
-                                 const char *user_agent,
-                                 struct CobletSdk **out_sdk,
-                                 struct CobletError **out_err);
-
-// Creates an SDK with the default transport and `count` launch customizers.
-//
-// As `coblet_sdk_new`; a customizer runs only for launches that name its
-// ID in `coblet_launch_customized`. The library owns the user data of
-// every table from this call on, even when it fails, and calls each
-// `free` once: on failure before returning, otherwise from
-// `coblet_sdk_free`.
-//
-// # Safety
-//
-// As `coblet_sdk_new`; `customizers` must point to `count` tables, or be
-// NULL when `count` is 0, and their callbacks must stay valid until their
-// `free` runs.
-enum CobletStatus coblet_sdk_new_with_customizers(const char *data_root,
-                                                  const char *user_agent,
-                                                  const struct CobletCustomizer *customizers,
-                                                  size_t count,
-                                                  struct CobletSdk **out_sdk,
-                                                  struct CobletError **out_err);
-
-// Frees an SDK handle; NULL is ignored.
-//
-// # Safety
-//
-// `sdk` must be NULL or a handle from `coblet_sdk_new` that is not used afterwards.
-void coblet_sdk_free(struct CobletSdk *sdk);
-
-// Lists game versions as JSON, newest first.
-//
-// The document is `{"schema":1,"versions":[{"id","type","released",
-// "latest_release"}]}`. On success `*out_json` receives a string to free
-// with `coblet_string_free`.
-//
-// # Safety
-//
-// `sdk` must be a live handle; `out_json` must be writable; `out_err` must
-// be NULL or writable.
-enum CobletStatus coblet_versions_json(const struct CobletSdk *sdk,
-                                       struct CobletString *out_json,
-                                       struct CobletError **out_err);
-
-// Frees a string returned by the library; an empty value is ignored.
-//
-// # Safety
-//
-// `value` must come from this library and must not be freed twice.
-void coblet_string_free(struct CobletString value);
-
-// Frees an error; NULL is ignored.
-//
-// # Safety
-//
-// `error` must be NULL or come from this library, and must not be freed twice.
-void coblet_error_free(struct CobletError *error);
 
 #ifdef __cplusplus
 }  // extern "C"
