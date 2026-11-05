@@ -27,7 +27,7 @@ mod profile;
 mod resolved;
 
 pub use data::DataProfile;
-pub use edit::{NativesSource, ProfileEdit};
+pub use edit::{DetachedDraft, NativesSource, ProfileEdit};
 pub use effective::{
     Change, ChangeSource, EffectiveLaunchProfile, EffectiveLibrary, EnvValue, FileSource,
     JavaRequirement, JavaSource, LibraryFile, NativeJar, Natives, PipelineStep, ProfileArg,

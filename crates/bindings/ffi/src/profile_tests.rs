@@ -11,10 +11,10 @@ use coblet::platform::{
 use coblet::types::{Arch, ArchName, OsFamily, Platform};
 
 use super::{
-    CobletJavaSource, CobletNatives, CobletPlatformProfile, CobletProfileDraft, CobletRule,
-    CobletRules, ForeignProfile, coblet_draft_add_native_path, coblet_draft_append_arg,
+    CobletJavaSource, CobletMatchFailure, CobletNatives, CobletPlatformProfile, CobletProfileDraft,
+    CobletRule, CobletRules, ForeignProfile, coblet_draft_add_native_path, coblet_draft_append_arg,
     coblet_draft_fail, coblet_draft_handle_natives, coblet_draft_info_json,
-    coblet_draft_set_java_source, coblet_rules_set,
+    coblet_draft_set_java_source, coblet_match_fail, coblet_rules_fail, coblet_rules_set,
 };
 use crate::builder::{
     coblet_builder_add_platform_profile, coblet_builder_free, coblet_builder_new,
@@ -23,9 +23,18 @@ use crate::customize::CobletArgKind;
 use crate::types::{CobletStatus, CobletString};
 
 /// State behind `user_data`, as a C program would keep it.
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum Fail {
+    #[default]
+    Nowhere,
+    Matches,
+    Rules,
+    Rewrite,
+}
+
 #[derive(Default)]
 struct State {
-    fail: bool,
+    fail: Fail,
     frees: AtomicUsize,
 }
 
@@ -40,7 +49,17 @@ fn json(ptr: *const c_char) -> serde_json::Value {
     serde_json::from_str(text).unwrap()
 }
 
-unsafe extern "C" fn matches(_user_data: *mut c_void, target_json: *const c_char) -> bool {
+unsafe extern "C" fn matches(
+    user_data: *mut c_void,
+    target_json: *const c_char,
+    failure: *mut CobletMatchFailure,
+) -> bool {
+    if state(user_data).fail == Fail::Matches {
+        let message = CString::new("cannot read /proc/cpuinfo").unwrap();
+        // SAFETY: the failure handle of this call and a valid string.
+        unsafe { coblet_match_fail(failure, message.as_ptr()) };
+        return true;
+    }
     let target = json(target_json);
     target["platform"]["arch"] == "loongarch64"
         && target["components"]
@@ -51,10 +70,16 @@ unsafe extern "C" fn matches(_user_data: *mut c_void, target_json: *const c_char
 }
 
 unsafe extern "C" fn rules(
-    _user_data: *mut c_void,
+    user_data: *mut c_void,
     _target: *const c_char,
     rules: *mut CobletRules,
 ) {
+    if state(user_data).fail == Fail::Rules {
+        let message = CString::new("unknown kernel").unwrap();
+        // SAFETY: the handle of this call and a valid string.
+        unsafe { coblet_rules_fail(rules, message.as_ptr()) };
+        return;
+    }
     let linux = CString::new("linux").unwrap();
     // SAFETY: the handle of this call and a valid string.
     let status = unsafe {
@@ -73,7 +98,7 @@ unsafe extern "C" fn rewrite(user_data: *mut c_void, draft: *mut CobletProfileDr
     let text = |value: &str| CString::new(value).unwrap();
     // SAFETY: `draft` is the handle of this call; strings live for each call.
     unsafe {
-        if state(user_data).fail {
+        if state(user_data).fail == Fail::Rewrite {
             let message = text("no GPU driver found");
             coblet_draft_fail(draft, message.as_ptr());
             return false;
@@ -81,6 +106,12 @@ unsafe extern "C" fn rewrite(user_data: *mut c_void, draft: *mut CobletProfileDr
         let relative = text("lib");
         assert_eq!(
             coblet_draft_add_native_path(draft, relative.as_ptr(), null),
+            CobletStatus::InvalidArgument
+        );
+        // A rejected change fails at the call; the profile can go on.
+        let token = text("--accessToken");
+        assert_eq!(
+            coblet_draft_append_arg(draft, CobletArgKind::Game, token.as_ptr(), null),
             CobletStatus::InvalidArgument
         );
         let mut out = CobletString::empty();
@@ -120,6 +151,21 @@ unsafe extern "C" fn rewrite(user_data: *mut c_void, draft: *mut CobletProfileDr
         assert_eq!(
             coblet_draft_set_java_source(draft, CobletJavaSource::SystemOnly, null),
             CobletStatus::Ok
+        );
+        // Reads show the changes made so far.
+        let mut out = CobletString::empty();
+        assert_eq!(
+            coblet_draft_info_json(draft, &raw mut out, null),
+            CobletStatus::Ok
+        );
+        let info = json(out.ptr);
+        crate::context::coblet_string_free(out);
+        assert!(
+            info["jvm_args"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|arg| arg == "-Dorg.lwjgl.librarypath=/usr/lib/lwjgl3")
         );
     }
     true
@@ -184,15 +230,38 @@ fn a_c_profile_adapts_a_new_architecture() {
 }
 
 #[test]
-fn a_false_rewrite_stops_the_launch() {
-    let state = State {
-        fail: true,
+fn failures_after_matching_stop_the_launch() {
+    let failing = |fail| State {
+        fail,
         ..State::default()
     };
-    let error = resolve(&state).unwrap_err();
+    let error = resolve(&failing(Fail::Rewrite)).unwrap_err();
     assert_eq!(
         error.to_string(),
         "platform profile acme:loongarch failed: no GPU driver found"
+    );
+    let error = resolve(&failing(Fail::Rules)).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "platform profile acme:loongarch failed: unknown kernel"
+    );
+}
+
+#[test]
+fn a_profile_that_cannot_match_is_skipped() {
+    let state = State {
+        fail: Fail::Matches,
+        ..State::default()
+    };
+    let error = resolve(&state).unwrap_err();
+    let ProfileError::Unsupported { explain, .. } = &error else {
+        panic!("{error}");
+    };
+    assert!(
+        explain.contains(
+            "[match] acme:loongarch: warning `skipped because matching failed: cannot read /proc/cpuinfo`"
+        ),
+        "{explain}"
     );
 }
 

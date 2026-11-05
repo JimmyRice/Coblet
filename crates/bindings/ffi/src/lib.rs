@@ -42,12 +42,13 @@ pub use game::{
     coblet_launch_customized,
 };
 pub use profile::{
-    CobletJavaSource, CobletNatives, CobletPlatformProfile, CobletProfileDraft, CobletRule,
-    CobletRules, coblet_draft_add_library, coblet_draft_add_native_path, coblet_draft_append_arg,
-    coblet_draft_fail, coblet_draft_handle_natives, coblet_draft_info_json,
-    coblet_draft_prepend_env_paths, coblet_draft_refuse, coblet_draft_remove_args,
-    coblet_draft_remove_libraries, coblet_draft_set_env, coblet_draft_set_java_arch,
-    coblet_draft_set_java_major, coblet_draft_set_java_runtime, coblet_draft_set_java_source,
-    coblet_draft_warn, coblet_rules_set, coblet_rules_set_native,
+    CobletJavaSource, CobletMatchFailure, CobletNatives, CobletPlatformProfile, CobletProfileDraft,
+    CobletRule, CobletRules, coblet_draft_add_library, coblet_draft_add_native_path,
+    coblet_draft_append_arg, coblet_draft_fail, coblet_draft_handle_natives,
+    coblet_draft_info_json, coblet_draft_prepend_env_paths, coblet_draft_refuse,
+    coblet_draft_remove_args, coblet_draft_remove_libraries, coblet_draft_set_env,
+    coblet_draft_set_java_arch, coblet_draft_set_java_major, coblet_draft_set_java_runtime,
+    coblet_draft_set_java_source, coblet_draft_warn, coblet_match_fail, coblet_rules_fail,
+    coblet_rules_set, coblet_rules_set_native,
 };
 pub use types::{COBLET_ABI_VERSION, CobletError, CobletErrorKind, CobletStatus, CobletString};

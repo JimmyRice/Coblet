@@ -18,8 +18,9 @@ static const char *SMOKE_PROFILE = "id = \"coblet-smoke:profile\"\n"
                                    "append = [\"-Dcoblet.smoke.profile=applied\"]\n";
 
 /* Decides in code; a real one would probe the machine for libraries. */
-static bool profile_matches(void *user_data, const char *target_json) {
+static bool profile_matches(void *user_data, const char *target_json, CobletMatchFailure *failure) {
     (void)user_data;
+    (void)failure;
     return strstr(target_json, "\"uid\":\"net.minecraft\"") != NULL;
 }
 
