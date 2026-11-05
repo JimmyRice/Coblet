@@ -268,3 +268,30 @@ fn a_profile_that_cannot_match_is_skipped_with_a_warning() {
         "[match] acme:broken: warning `skipped because matching failed: cannot read /proc/cpuinfo`"
     ), "{}", profile.explain());
 }
+
+#[test]
+fn jvm_auth_arguments_cannot_be_removed() {
+    let mut profile = ProfileEngine::builtin()
+        .resolve(
+            &resolved("1.20.1"),
+            &Platform::new(OsFamily::Linux, Arch::X86_64),
+        )
+        .unwrap();
+    profile
+        .jvm_args
+        .push(ProfileArg::always("-Dacme.name=${auth_player_name}"));
+    let before = profile.jvm_args.clone();
+    let mut refusals = Vec::new();
+    let mut draft = Draft {
+        profile: &mut profile,
+        source: ExtensionId::new("acme:meddler").unwrap(),
+        refusals: &mut refusals,
+    };
+    let error = draft.remove_jvm_args("-Dacme.*").unwrap_err();
+    assert!(
+        matches!(&error, ProfileError::AuthArgument { argument, .. } if argument == "-Dacme.name=${auth_player_name}"),
+        "{error}"
+    );
+    assert_eq!(draft.profile().jvm_args, before);
+    draft.remove_jvm_args("-Xss*").unwrap();
+}

@@ -408,7 +408,7 @@ impl PlatformProfile for DataProfile {
             apply_natives(self, draft);
         }
         for pattern in &file.jvm.remove {
-            draft.remove_jvm_args(pattern);
+            draft.remove_jvm_args(pattern)?;
         }
         for value in &file.jvm.append {
             draft.append_jvm_arg(ProfileArg::always(value.clone()))?;
