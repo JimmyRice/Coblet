@@ -100,3 +100,49 @@ fn the_platform_can_be_described() {
         .unwrap_err();
     assert_eq!(kind(&error), ErrorKind::InvalidArgument);
 }
+
+/// Customizer that changes nothing, to name in grants.
+struct Login;
+
+impl crate::LaunchCustomizer for Login {
+    fn id(&self) -> String {
+        "acme:fix".to_owned()
+    }
+
+    fn display_name(&self) -> String {
+        "Login".to_owned()
+    }
+
+    fn applies_to(&self, _traits: Vec<String>) -> bool {
+        true
+    }
+
+    fn customize(&self, _editor: std::sync::Arc<crate::ProfileEditor>) -> Result<(), CobletError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn auth_grants_name_added_customizers_and_reach_the_launcher() {
+    let id = coblet::types::ExtensionId::new("acme:fix").unwrap();
+    for grant in [false, true] {
+        let builder = builder();
+        let error = builder.allow_auth_changes("acme:fix").unwrap_err();
+        assert_eq!(kind(&error), ErrorKind::InvalidArgument);
+        assert_eq!(
+            error.to_string(),
+            "customizer `acme:fix` was not added; add the customizer first"
+        );
+        builder.add_customizer(std::sync::Arc::new(Login)).unwrap();
+        let error = builder.allow_auth_changes("No Namespace").unwrap_err();
+        assert_eq!(kind(&error), ErrorKind::InvalidArgument);
+        if grant {
+            builder.allow_auth_changes("acme:fix").unwrap();
+            builder.allow_auth_changes("acme:fix").unwrap();
+        }
+        let coblet = builder.build().unwrap();
+        assert_eq!(coblet.inner.launcher().allows_auth_changes(&id), grant);
+        let error = builder.allow_auth_changes("acme:fix").unwrap_err();
+        assert_eq!(kind(&error), ErrorKind::InvalidState);
+    }
+}
