@@ -44,6 +44,8 @@ pub(crate) struct Inner {
     pub(crate) versions: crate::versions::VersionCatalog,
     #[cfg(feature = "launch")]
     pub(crate) launcher: coblet_launch::Launcher,
+    #[cfg(feature = "launch")]
+    pub(crate) profiles: coblet_platform::ProfileEngine,
 }
 
 impl std::fmt::Debug for Coblet {

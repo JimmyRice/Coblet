@@ -21,7 +21,9 @@ impl Coblet {
         }
     }
 
-    /// Adapts a version to this platform.
+    /// Adapts a version to this platform with the Platform Profiles of this
+    /// `Coblet`: the built-in ones and those added with
+    /// [`CobletBuilder::platform_profile`](crate::CobletBuilder::platform_profile).
     ///
     /// # Errors
     ///
@@ -35,7 +37,16 @@ impl Coblet {
         let raw = document?.value;
         let traits = self.inner.versions.mojang.traits_of(&raw);
         let resolved = ResolvedProfile::from_version(raw, traits)?;
-        Ok(ProfileEngine::builtin().resolve(&resolved, &self.inner.platform)?)
+        Ok(self
+            .inner
+            .profiles
+            .resolve(&resolved, &self.inner.platform)?)
+    }
+
+    /// Returns the profile engine that adapts versions to this platform.
+    #[must_use]
+    pub fn profile_engine(&self) -> &ProfileEngine {
+        &self.inner.profiles
     }
 
     /// Returns the services a launch uses, with Java runtimes under `data_root/runtimes`.

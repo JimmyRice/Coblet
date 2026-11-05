@@ -38,6 +38,10 @@ pub struct CobletBuilder<State> {
     launcher: Option<coblet_launch::Launcher>,
     #[cfg(feature = "launch")]
     customizers: Vec<Arc<dyn coblet_launch::LaunchCustomizer>>,
+    #[cfg(feature = "launch")]
+    profile_engine: Option<coblet_platform::ProfileEngine>,
+    #[cfg(feature = "launch")]
+    platform_profiles: Vec<Arc<dyn coblet_platform::PlatformProfile>>,
     state: PhantomData<State>,
 }
 
@@ -65,6 +69,10 @@ impl Coblet {
             launcher: None,
             #[cfg(feature = "launch")]
             customizers: Vec::new(),
+            #[cfg(feature = "launch")]
+            profile_engine: None,
+            #[cfg(feature = "launch")]
+            platform_profiles: Vec::new(),
             state: PhantomData,
         }
     }
@@ -86,6 +94,10 @@ impl CobletBuilder<NoRoot> {
             launcher: self.launcher,
             #[cfg(feature = "launch")]
             customizers: self.customizers,
+            #[cfg(feature = "launch")]
+            profile_engine: self.profile_engine,
+            #[cfg(feature = "launch")]
+            platform_profiles: self.platform_profiles,
             state: PhantomData,
         }
     }
@@ -132,6 +144,61 @@ impl<State> CobletBuilder<State> {
     #[cfg(feature = "launch")]
     pub fn launcher(mut self, launcher: coblet_launch::Launcher) -> Self {
         self.launcher = Some(launcher);
+        self
+    }
+
+    /// Adapts versions with this profile engine instead of one holding the
+    /// built-in Platform Profiles; profiles from
+    /// [`platform_profile`](Self::platform_profile) are added to it.
+    #[cfg(feature = "launch")]
+    pub fn profile_engine(mut self, engine: coblet_platform::ProfileEngine) -> Self {
+        self.profile_engine = Some(engine);
+        self
+    }
+
+    /// Adds a Platform Profile, such as one for an operating system or
+    /// architecture the built-in profiles do not cover.
+    ///
+    /// Profiles from TOML come from
+    /// [`DataProfile::from_toml`](coblet_platform::DataProfile::from_toml);
+    /// code profiles implement [`PlatformProfile`](coblet_platform::PlatformProfile).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use std::sync::Arc;
+    /// use coblet::Coblet;
+    /// use coblet::platform::{DataProfile, ProfileLayer};
+    /// use coblet::runtime::UserAgent;
+    ///
+    /// let profile = DataProfile::from_toml(r#"
+    ///     id = "community:linux-loongarch64"
+    ///
+    ///     [match]
+    ///     os = ["linux"]
+    ///     arch = ["loongarch64"]
+    ///     requires_component = { uid = "org.lwjgl3" }
+    ///
+    ///     [rules]
+    ///     mojang_os = "linux"
+    ///
+    ///     [[natives]]
+    ///     match = "org.lwjgl:*:*:natives-linux"
+    ///     source = { system = "/usr/lib/lwjgl3" }
+    ///
+    ///     [java]
+    ///     source = "system-only"
+    /// "#, ProfileLayer::ThirdParty)?;
+    /// let coblet = Coblet::builder()
+    ///     .data_root("/path/to/launcher-data")
+    ///     .user_agent(UserAgent::new("MyLauncher/1.0 (contact@example.com)")?)
+    ///     .platform_profile(Arc::new(profile))
+    ///     .build()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "launch")]
+    pub fn platform_profile(mut self, profile: Arc<dyn coblet_platform::PlatformProfile>) -> Self {
+        self.platform_profiles.push(profile);
         self
     }
 
@@ -212,8 +279,20 @@ impl CobletBuilder<WithRoot> {
     /// Returns [`Error::Config`] without a transport or User-Agent,
     /// [`Error::Transport`] when the default transport cannot start,
     /// [`Error::Platform`] when the platform cannot be detected and
-    /// [`Error::Registry`] when two customizers share an ID.
+    /// [`Error::Registry`] when two customizers share an ID and
+    /// [`Error::Profile`] when two Platform Profiles do.
     pub fn build(mut self) -> Result<Coblet, Error> {
+        #[cfg(feature = "launch")]
+        let profiles = {
+            let mut engine = self
+                .profile_engine
+                .take()
+                .unwrap_or_else(coblet_platform::ProfileEngine::builtin);
+            for profile in std::mem::take(&mut self.platform_profiles) {
+                engine.register(profile)?;
+            }
+            engine
+        };
         #[cfg(feature = "launch")]
         let launcher = {
             let mut launcher = self.launcher.take().unwrap_or_default();
@@ -260,6 +339,8 @@ impl CobletBuilder<WithRoot> {
             versions: crate::versions::version_catalog(meta.clone(), events.clone()),
             #[cfg(feature = "launch")]
             launcher,
+            #[cfg(feature = "launch")]
+            profiles,
             data_root,
             transport,
             storage,

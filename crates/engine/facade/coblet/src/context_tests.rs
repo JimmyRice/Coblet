@@ -123,3 +123,97 @@ fn customizers_need_distinct_ids() {
     let coblet = builder().build().unwrap();
     assert!(coblet.inner.launcher.customizers().get(&id).is_some());
 }
+
+/// Profile a community could publish for an architecture coblet does not name.
+const LOONGARCH: &str = r#"
+id = "community:linux-loongarch64"
+
+[match]
+os = ["linux"]
+arch = ["loongarch64"]
+requires_component = { uid = "org.lwjgl3" }
+
+[rules]
+mojang_os = "linux"
+
+[[natives]]
+match = "org.lwjgl:*:*:natives-linux"
+source = { maven = "https://maven.example.org/", classifier = "natives-linux-loongarch64" }
+
+[java]
+source = "system-only"
+"#;
+
+fn loongarch(root: &std::path::Path) -> crate::CobletBuilder<crate::WithRoot> {
+    Coblet::builder()
+        .data_root(root)
+        .transport(Arc::new(Fixtures))
+        .platform(Platform::new(
+            OsFamily::Linux,
+            "loongarch64".parse().unwrap(),
+        ))
+}
+
+#[tokio::test]
+async fn registered_profiles_adapt_unknown_architectures() {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = loongarch(dir.path()).build().unwrap();
+    let version = plain.version("1.20.1").await.unwrap();
+    let error = plain.resolve(&version).await.unwrap_err();
+    assert!(matches!(error, Error::Profile(_)), "{error}");
+
+    let profile = coblet_platform::DataProfile::from_toml(
+        LOONGARCH,
+        coblet_platform::ProfileLayer::ThirdParty,
+    )
+    .unwrap();
+    let extended = loongarch(dir.path())
+        .platform_profile(Arc::new(profile))
+        .build()
+        .unwrap();
+    let resolved = extended.resolve(&version).await.unwrap();
+    let ids: Vec<&str> = resolved.profiles.iter().map(ExtensionId::as_str).collect();
+    assert_eq!(ids, ["community:linux-loongarch64"]);
+    assert_eq!(
+        resolved.java.source,
+        coblet_platform::JavaSource::SystemOnly
+    );
+    let natives: Vec<&str> = resolved
+        .classpath()
+        .map(|file| file.path.as_str())
+        .filter(|path| path.contains("natives-linux"))
+        .collect();
+    assert!(!natives.is_empty(), "{}", resolved.explain());
+    assert!(
+        natives
+            .iter()
+            .all(|path| path.ends_with("-natives-linux-loongarch64.jar")),
+        "{natives:?}"
+    );
+    assert!(
+        extended
+            .profile_engine()
+            .profiles()
+            .iter()
+            .any(|known| known.id().as_str() == "community:linux-loongarch64")
+    );
+}
+
+#[test]
+fn platform_profiles_need_distinct_ids() {
+    let profile = || {
+        Arc::new(
+            coblet_platform::DataProfile::from_toml(
+                LOONGARCH,
+                coblet_platform::ProfileLayer::ThirdParty,
+            )
+            .unwrap(),
+        )
+    };
+    let error = loongarch(std::path::Path::new("/tmp/x"))
+        .platform_profile(profile())
+        .platform_profile(profile())
+        .build()
+        .unwrap_err();
+    assert!(matches!(error, Error::Profile(_)), "{error}");
+}
