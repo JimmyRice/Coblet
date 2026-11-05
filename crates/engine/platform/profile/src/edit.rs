@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use coblet_types::{Arch, MavenCoordinate};
+use coblet_types::{Arch, ExtensionId, MavenCoordinate};
 
 use crate::{
-    Draft, EffectiveLibrary, EnvValue, FileSource, JavaSource, LibraryFile, Natives, ProfileArg,
-    ProfileError, glob_matches,
+    Draft, EffectiveLaunchProfile, EffectiveLibrary, EnvValue, FileSource, JavaSource, LibraryFile,
+    Natives, ProfileArg, ProfileError, glob_matches,
 };
 
 /// Where the native code of a library comes from, set by
@@ -77,7 +77,55 @@ pub enum ProfileEdit {
     Refuse(String),
 }
 
+/// Draft that owns a copy of the profile under construction.
+///
+/// Profiles that edit through handles another language keeps, such as the
+/// C and UniFFI bindings, take one with [`Draft::detach`], change it
+/// through [`DetachedDraft::draft`] with the usual checks and explanation
+/// lines, and hand it back with [`Draft::attach`]; a draft that is never
+/// attached changes nothing.
+#[derive(Clone, Debug)]
+pub struct DetachedDraft {
+    profile: EffectiveLaunchProfile,
+    source: ExtensionId,
+    refusals: Vec<(ExtensionId, String)>,
+}
+
+impl DetachedDraft {
+    /// Returns a draft over the copy.
+    pub fn draft(&mut self) -> Draft<'_> {
+        Draft {
+            profile: &mut self.profile,
+            source: self.source.clone(),
+            refusals: &mut self.refusals,
+        }
+    }
+
+    /// Returns the copy as changed so far.
+    #[must_use]
+    pub fn profile(&self) -> &EffectiveLaunchProfile {
+        &self.profile
+    }
+}
+
 impl Draft<'_> {
+    /// Copies the profile under construction into a [`DetachedDraft`].
+    #[must_use]
+    pub fn detach(&self) -> DetachedDraft {
+        DetachedDraft {
+            profile: self.profile.clone(),
+            source: self.source.clone(),
+            refusals: Vec::new(),
+        }
+    }
+
+    /// Replaces the profile under construction with a detached copy and
+    /// keeps its refusals.
+    pub fn attach(&mut self, detached: DetachedDraft) {
+        *self.profile = detached.profile;
+        self.refusals.extend(detached.refusals);
+    }
+
     /// Makes one change described as data.
     ///
     /// # Errors

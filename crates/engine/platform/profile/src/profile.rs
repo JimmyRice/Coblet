@@ -70,9 +70,41 @@ pub trait PlatformProfile: Extension {
     /// Reports whether the profile applies.
     fn matches(&self, target: &Target<'_>) -> bool;
 
+    /// Reports whether the profile applies, or why it cannot tell.
+    ///
+    /// The engine calls this instead of [`matches`](Self::matches), which
+    /// it calls by default. A profile whose matching fails is skipped with
+    /// a warning in the launch report, so a broken profile does not block
+    /// platforms it was not written for.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProfileError::Failed`] when the profile cannot decide.
+    fn try_matches(&self, target: &Target<'_>) -> Result<bool, ProfileError> {
+        Ok(self.matches(target))
+    }
+
     /// Adjusts how the Mojang rules are evaluated.
     fn rules(&self, target: &Target<'_>, settings: &mut RuleSettings) {
         let _ = (target, settings);
+    }
+
+    /// Adjusts how the Mojang rules are evaluated, or fails.
+    ///
+    /// The engine calls this instead of [`rules`](Self::rules), which it
+    /// calls by default. An error stops the resolve: the profile matched,
+    /// so the platform depends on it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProfileError::Failed`] when the profile cannot decide.
+    fn try_rules(
+        &self,
+        target: &Target<'_>,
+        settings: &mut RuleSettings,
+    ) -> Result<(), ProfileError> {
+        self.rules(target, settings);
+        Ok(())
     }
 
     /// Changes the profile after the rules were evaluated.

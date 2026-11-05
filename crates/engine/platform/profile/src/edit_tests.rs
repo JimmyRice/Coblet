@@ -153,3 +153,118 @@ fn libraries_can_be_replaced_in_place() {
     );
     assert!(explain.contains("[rewrite] acme:haiku: library acme:shim:1.0 added"));
 }
+
+/// Profile that edits a detached copy, as the bindings do.
+struct Detached {
+    id: ExtensionId,
+    attach: bool,
+}
+
+impl Extension for Detached {
+    fn id(&self) -> &ExtensionId {
+        &self.id
+    }
+    fn display_name(&self) -> &'static str {
+        "detached"
+    }
+}
+
+impl PlatformProfile for Detached {
+    fn matches(&self, _target: &Target<'_>) -> bool {
+        true
+    }
+    fn rewrite(&self, draft: &mut Draft<'_>) -> Result<(), ProfileError> {
+        let mut copy = draft.detach();
+        copy.draft()
+            .append_jvm_arg(ProfileArg::always("-Dacme.detached=1"))?;
+        // Changes are visible at once and checked at once.
+        assert!(
+            copy.profile()
+                .jvm_args
+                .iter()
+                .any(|arg| arg.value == "-Dacme.detached=1")
+        );
+        assert!(
+            copy.draft()
+                .append_game_arg(ProfileArg::always("--accessToken"))
+                .is_err()
+        );
+        copy.draft().refuse("detached refusal");
+        if self.attach {
+            draft.attach(copy);
+        }
+        Ok(())
+    }
+}
+
+fn detached(attach: bool) -> Result<crate::EffectiveLaunchProfile, ProfileError> {
+    let mut engine = ProfileEngine::builtin();
+    let id = ExtensionId::new("acme:detached").unwrap();
+    engine.register(Arc::new(Detached { id, attach })).unwrap();
+    let mac = Platform::new(OsFamily::MacOs, Arch::Aarch64).with_os_version("15.5");
+    engine.resolve(&resolved("1.20.1"), &mac)
+}
+
+#[test]
+fn detached_drafts_apply_only_when_attached() {
+    let profile = detached(false).unwrap();
+    assert!(
+        !profile
+            .jvm_args
+            .iter()
+            .any(|arg| arg.value == "-Dacme.detached=1")
+    );
+    let error = detached(true).unwrap_err();
+    assert!(error.missing().contains(&Missing::Refused {
+        profile: ExtensionId::new("acme:detached").unwrap(),
+        reason: "detached refusal".to_owned(),
+    }));
+    let ProfileError::Unsupported { explain, .. } = &error else {
+        panic!("{error}");
+    };
+    assert!(explain.contains("[rewrite] acme:detached: jvm `-Dacme.detached=1` appended"));
+}
+
+/// Profile whose matching fails.
+struct Broken(ExtensionId);
+
+impl Extension for Broken {
+    fn id(&self) -> &ExtensionId {
+        &self.0
+    }
+    fn display_name(&self) -> &'static str {
+        "broken"
+    }
+}
+
+impl PlatformProfile for Broken {
+    fn matches(&self, _target: &Target<'_>) -> bool {
+        unreachable!("the engine calls try_matches")
+    }
+    fn try_matches(&self, _target: &Target<'_>) -> Result<bool, ProfileError> {
+        Err(ProfileError::Failed {
+            profile: self.0.clone(),
+            message: "cannot read /proc/cpuinfo".to_owned(),
+        })
+    }
+}
+
+#[test]
+fn a_profile_that_cannot_match_is_skipped_with_a_warning() {
+    let mut engine = ProfileEngine::builtin();
+    engine
+        .register(Arc::new(Broken(ExtensionId::new("acme:broken").unwrap())))
+        .unwrap();
+    let mac = Platform::new(OsFamily::MacOs, Arch::Aarch64).with_os_version("15.5");
+    let profile = engine.resolve(&resolved("1.20.1"), &mac).unwrap();
+    assert!(
+        !profile
+            .profiles
+            .iter()
+            .any(|id| id.as_str() == "acme:broken")
+    );
+    assert_eq!(profile.warnings.len(), 1);
+    assert!(profile.explain().contains(
+        "[match] acme:broken: warning `skipped because matching failed: cannot read /proc/cpuinfo`"
+    ), "{}", profile.explain());
+}

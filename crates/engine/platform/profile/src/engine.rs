@@ -8,7 +8,8 @@ use crate::effective::explain;
 use crate::{
     Change, ChangeSource, Draft, EffectiveLaunchProfile, EffectiveLibrary, FileSource,
     JavaRequirement, JavaSource, LibraryFile, Missing, NativeJar, Natives, PipelineStep,
-    PlatformProfile, ProfileArg, ProfileError, ResolvedProfile, RuleSettings, Target,
+    PlatformProfile, ProfileArg, ProfileError, ProfileWarning, ResolvedProfile, RuleSettings,
+    Target,
 };
 
 /// Default Maven repository of Mojang libraries.
@@ -99,19 +100,34 @@ impl ProfileEngine {
     /// # Errors
     ///
     /// Returns [`ProfileError::Unsupported`] with what is missing when the
-    /// platform cannot run the version, and [`ProfileError::AuthArgument`]
-    /// when a profile touches an authentication argument.
+    /// platform cannot run the version, [`ProfileError::AuthArgument`]
+    /// when a profile touches an authentication argument, and
+    /// [`ProfileError::Failed`] when a matching profile fails in its rules
+    /// or rewrite. A profile whose matching fails is skipped with a warning.
     pub fn resolve(
         &self,
         profile: &ResolvedProfile,
         platform: &Platform,
     ) -> Result<EffectiveLaunchProfile, ProfileError> {
         let target = Target { platform, profile };
-        let mut matched: Vec<&Arc<dyn PlatformProfile>> = self
-            .profiles
-            .iter()
-            .filter(|candidate| candidate.matches(&target))
-            .collect();
+        let mut matched: Vec<&Arc<dyn PlatformProfile>> = Vec::new();
+        let mut skipped = Vec::new();
+        for candidate in &self.profiles {
+            match candidate.try_matches(&target) {
+                Ok(true) => matched.push(candidate),
+                Ok(false) => {}
+                Err(error) => {
+                    let reason = match error {
+                        ProfileError::Failed { message, .. } => message,
+                        other => other.to_string(),
+                    };
+                    skipped.push(ProfileWarning {
+                        profile: candidate.id().clone(),
+                        message: format!("skipped because matching failed: {reason}"),
+                    });
+                }
+            }
+        }
         matched.sort_by(|a, b| {
             (a.layer(), a.priority(), a.id()).cmp(&(b.layer(), b.priority(), b.id()))
         });
@@ -147,9 +163,18 @@ impl ProfileEngine {
                 ),
             );
         }
+        for warning in &skipped {
+            pipeline.record(
+                PipelineStep::Match,
+                ChangeSource::Profile(warning.profile.clone()),
+                "warning",
+                format!("`{}`", warning.message),
+            );
+        }
 
-        let settings = rule_settings(&mut pipeline);
+        let settings = rule_settings(&mut pipeline)?;
         let mut effective = evaluate_profile(&mut pipeline, &settings);
+        effective.warnings.extend(skipped);
 
         let mut refusals = Vec::new();
         for matched in pipeline.matched.clone() {
@@ -165,12 +190,12 @@ impl ProfileEngine {
     }
 }
 
-fn rule_settings(pipeline: &mut Pipeline<'_>) -> RuleSettings {
+fn rule_settings(pipeline: &mut Pipeline<'_>) -> Result<RuleSettings, ProfileError> {
     let mut settings = RuleSettings::default();
     let target = pipeline.target;
     for profile in pipeline.matched.clone() {
         let before = settings.clone();
-        profile.rules(&target, &mut settings);
+        profile.try_rules(&target, &mut settings)?;
         if settings != before {
             pipeline.record(
                 PipelineStep::Evaluate,
@@ -188,7 +213,7 @@ fn rule_settings(pipeline: &mut Pipeline<'_>) -> RuleSettings {
             );
         }
     }
-    settings
+    Ok(settings)
 }
 
 fn default_natives_arch(arch: &Arch) -> &'static str {
