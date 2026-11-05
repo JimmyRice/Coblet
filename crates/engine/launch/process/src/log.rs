@@ -99,7 +99,7 @@ impl LogParser {
 
     fn plain(&self, text: &str) -> GameLogLine {
         let raw = (self.redact)(text);
-        if let Some(line) = bracketed(&raw, self.source) {
+        if let Some(line) = bracketed(&raw, self.source).or_else(|| dated(&raw, self.source)) {
             return line;
         }
         GameLogLine::plain(self.source, guess_level(&raw, self.source), raw)
@@ -129,6 +129,32 @@ fn bracketed(raw: &str, source: LogSource) -> Option<GameLogLine> {
     Some(line)
 }
 
+/// Parses `2013-09-19 12:34:56 [CLIENT] [INFO] message`, the format of 1.6.
+fn dated(raw: &str, source: LogSource) -> Option<GameLogLine> {
+    let (date, rest) = raw.split_once(' ')?;
+    let (time, rest) = rest.split_once(' ')?;
+    let digits = |text: &str, sep: char| {
+        !text.is_empty() && text.chars().all(|c| c.is_ascii_digit() || c == sep)
+    };
+    if date.len() != 10 || time.len() != 8 || !digits(date, '-') || !digits(time, ':') {
+        return None;
+    }
+    let (side, rest) = rest.strip_prefix('[')?.split_once(']')?;
+    let (level, message) = rest.trim_start().strip_prefix('[')?.split_once(']')?;
+    let mut line = GameLogLine::plain(source, LogLevel::parse(level)?, message.trim_start());
+    line.thread = Some(side.to_owned());
+    raw.clone_into(&mut line.raw);
+    Some(line)
+}
+
+/// Reports whether `text` starts with a qualified exception class, such as
+/// `java.io.FileNotFoundException: x`.
+fn exception_head(text: &str) -> bool {
+    let word = text.split_whitespace().next().unwrap_or_default();
+    let class = word.strip_suffix(':').unwrap_or(word);
+    class.contains('.') && (class.ends_with("Exception") || class.ends_with("Error"))
+}
+
 fn guess_level(text: &str, source: LogSource) -> LogLevel {
     let trimmed = text.trim_start();
     // java.util.logging prints the level as a prefix, often on stderr.
@@ -147,6 +173,7 @@ fn guess_level(text: &str, source: LogSource) -> LogLevel {
         || trimmed.starts_with("Caused by:")
         || text.contains("Exception in thread")
         || trimmed.starts_with("java.lang.")
+        || exception_head(trimmed)
         || trimmed.starts_with("Exception");
     if exception || text.contains("ERROR") || text.contains("SEVERE") {
         LogLevel::Error
@@ -276,6 +303,20 @@ mod tests {
         assert_eq!(stderr.push("INFO: Loading sounds")[0].level, LogLevel::Info);
         assert_eq!(stderr.push("WARNING: no font")[0].level, LogLevel::Warn);
         assert_eq!(stderr.push("SEVERE: gone")[0].level, LogLevel::Error);
+        assert_eq!(
+            stderr.push("java.io.FileNotFoundException: http://example/")[0].level,
+            LogLevel::Error
+        );
+        let dated = stderr
+            .push("2013-09-19 12:34:56 [CLIENT] [INFO] Setting user: Steve")
+            .remove(0);
+        assert_eq!(dated.level, LogLevel::Info);
+        assert_eq!(dated.thread.as_deref(), Some("CLIENT"));
+        assert_eq!(dated.message, "Setting user: Steve");
+        assert_eq!(
+            stderr.push("2013-09-19 [x] [INFO] y")[0].level,
+            LogLevel::Warn
+        );
     }
 
     #[test]
