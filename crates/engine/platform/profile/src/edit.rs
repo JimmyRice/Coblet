@@ -135,7 +135,7 @@ impl Draft<'_> {
         match edit {
             ProfileEdit::AppendJvmArg(arg) => self.append_jvm_arg(arg)?,
             ProfileEdit::AppendGameArg(arg) => self.append_game_arg(arg)?,
-            ProfileEdit::RemoveJvmArgs(pattern) => self.remove_jvm_args(&pattern),
+            ProfileEdit::RemoveJvmArgs(pattern) => self.remove_jvm_args(&pattern)?,
             ProfileEdit::RemoveGameArgs(pattern) => self.remove_game_args(&pattern)?,
             ProfileEdit::SetEnv(name, value) => self.set_env(name, value),
             ProfileEdit::AddNativePath(path) => self.add_native_path(path),

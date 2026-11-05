@@ -54,6 +54,7 @@ impl LaunchStep for Probe {
 /// Behaves like a customizer written in Python.
 struct Script {
     fail: bool,
+    auth: bool,
     path: &'static str,
     probe: Arc<Probe>,
     kept: Mutex<Option<Arc<ProfileEditor>>>,
@@ -63,6 +64,7 @@ impl Script {
     fn new() -> Self {
         Self {
             fail: false,
+            auth: false,
             path: "acme/fix/1.0/fix-1.0.jar",
             probe: Arc::new(Probe::default()),
             kept: Mutex::new(None),
@@ -86,6 +88,9 @@ impl LaunchCustomizer for Script {
     fn customize(&self, editor: Arc<ProfileEditor>) -> Result<(), CobletError> {
         if self.fail {
             return Err(CobletError::new(ErrorKind::Other, "agent jar is missing"));
+        }
+        if self.auth {
+            return editor.add_game_arg("--accessToken".to_owned(), false);
         }
         assert_eq!(editor.os(), "linux");
         assert!(editor.traits()?.contains(&"applet".to_owned()));
@@ -242,14 +247,16 @@ impl coblet::launch::LaunchStep for Anchor {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn foreign_steps_run_in_the_launch() {
-    let script = Arc::new(Script::new());
-    let probe = Arc::clone(&script.probe);
+async fn launch(script: Arc<Script>, grant: bool) -> Result<LaunchContext, LaunchError> {
     let mut launcher = Launcher::empty().with_step(Arc::new(Anchor));
     launcher
         .register_customizer(Arc::new(ForeignCustomizer::new(script).unwrap()))
         .unwrap();
+    if grant {
+        launcher
+            .allow_auth_changes(ExtensionId::new("acme:fix").unwrap())
+            .unwrap();
+    }
 
     let dir = std::env::temp_dir().join(format!("coblet-uniffi-{}", std::process::id()));
     let storage = Arc::new(TokioStorage::new());
@@ -270,7 +277,15 @@ async fn foreign_steps_run_in_the_launch() {
         GameLayout::new("/data", "/game"),
         request,
     );
-    launcher.run(&mut cx).await.unwrap();
+    launcher.run(&mut cx).await?;
+    Ok(cx)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn foreign_steps_run_in_the_launch() {
+    let script = Arc::new(Script::new());
+    let probe = Arc::clone(&script.probe);
+    let cx = launch(script, false).await.unwrap();
     let seen = probe.seen.lock().unwrap();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].game_dir, "/game");
@@ -279,5 +294,30 @@ async fn foreign_steps_run_in_the_launch() {
         cx.profile
             .explain()
             .contains("[customize] acme:fix: env ACME set to \"1\"")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn foreign_customizers_need_a_grant_to_change_auth_arguments() {
+    let script = || {
+        Arc::new(Script {
+            auth: true,
+            ..Script::new()
+        })
+    };
+    let error = launch(script(), false).await.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            LaunchError::AuthArgument { customizer, argument }
+                if customizer.as_str() == "acme:fix" && argument == "--accessToken"
+        ),
+        "{error}"
+    );
+    let cx = launch(script(), true).await.unwrap();
+    assert!(
+        cx.profile
+            .explain()
+            .contains("[customize] acme:fix: game `--accessToken` added")
     );
 }

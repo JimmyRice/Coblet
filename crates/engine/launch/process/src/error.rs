@@ -90,6 +90,17 @@ pub enum LaunchError {
     /// The request names a launch customizer the launcher does not have.
     #[error("no launch customizer registered as `{0}`")]
     UnknownCustomizer(ExtensionId),
+    /// A launch customizer added or removed an authentication argument
+    /// without the launcher allowing it.
+    #[error(
+        "launch customizer `{customizer}` may not add or remove authentication argument `{argument}` unless the launcher allows it"
+    )]
+    AuthArgument {
+        /// The customizer.
+        customizer: ExtensionId,
+        /// The argument it added or removed.
+        argument: String,
+    },
     /// The launch was cancelled.
     #[error("launch was cancelled")]
     Cancelled,

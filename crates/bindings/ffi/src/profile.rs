@@ -385,6 +385,9 @@ pub unsafe extern "C" fn coblet_draft_append_arg(
 
 /// Removes JVM or game arguments matching a glob pattern, such as `-Xss*`.
 ///
+/// A pattern that matches an authentication argument fails with
+/// `COBLET_STATUS_INVALID_ARGUMENT` and removes nothing.
+///
 /// # Safety
 ///
 /// `draft` must be the handle of the running `rewrite` callback; `pattern`

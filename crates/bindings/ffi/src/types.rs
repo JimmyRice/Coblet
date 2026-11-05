@@ -3,7 +3,7 @@ use std::ffi::{CStr, c_char};
 use coblet::platform::ProfileError;
 
 /// Version of the C ABI; it grows with every incompatible change.
-pub const COBLET_ABI_VERSION: u32 = 5;
+pub const COBLET_ABI_VERSION: u32 = 6;
 
 /// Result of a call.
 #[repr(C)]

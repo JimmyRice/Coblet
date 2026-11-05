@@ -354,11 +354,14 @@ impl ProfileDraft {
     ///
     /// # Errors
     ///
-    /// Fails after `rewrite` returned.
+    /// Fails when the pattern matches an authentication argument (nothing
+    /// is removed then) and after `rewrite` returned.
     pub fn remove_jvm_args(&self, pattern: &str) -> Result<(), CobletError> {
         self.with(|draft| {
-            draft.draft().remove_jvm_args(pattern);
-            Ok(())
+            draft
+                .draft()
+                .remove_jvm_args(pattern)
+                .map_err(|error| rejected(&error))
         })
     }
 

@@ -131,7 +131,23 @@ const AUTH_MARKERS: [&str; 8] = [
     "--xuid",
 ];
 
-fn is_auth_argument(value: &str) -> bool {
+/// Tells whether an argument carries account data, such as
+/// `${auth_access_token}` or `--uuid`.
+///
+/// Platform Profiles may not add or remove such arguments, and launch
+/// customizers may do so only when the launcher allows it.
+///
+/// # Examples
+///
+/// ```
+/// use coblet_platform::is_auth_argument;
+///
+/// assert!(is_auth_argument("--accessToken"));
+/// assert!(is_auth_argument("-Dname=${auth_player_name}"));
+/// assert!(!is_auth_argument("--demo"));
+/// ```
+#[must_use]
+pub fn is_auth_argument(value: &str) -> bool {
     AUTH_MARKERS.iter().any(|marker| value.contains(marker))
 }
 
@@ -204,11 +220,13 @@ impl Draft<'_> {
     }
 
     /// Removes JVM arguments matching a glob pattern.
-    pub fn remove_jvm_args(&mut self, pattern: &str) {
-        let removed = remove_matching(&mut self.profile.jvm_args, pattern);
-        for value in removed {
-            self.note("jvm", format!("`{value}` removed"));
-        }
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProfileError::AuthArgument`] when the pattern would remove an
+    /// authentication argument; nothing is removed then.
+    pub fn remove_jvm_args(&mut self, pattern: &str) -> Result<(), ProfileError> {
+        self.remove(true, pattern)
     }
 
     /// Removes game arguments matching a glob pattern.
@@ -218,19 +236,30 @@ impl Draft<'_> {
     /// Returns [`ProfileError::AuthArgument`] when the pattern would remove an
     /// authentication argument; nothing is removed then.
     pub fn remove_game_args(&mut self, pattern: &str) -> Result<(), ProfileError> {
-        if let Some(arg) =
-            self.profile.game_args.iter().find(|arg| {
-                crate::glob_matches(pattern, &arg.value) && is_auth_argument(&arg.value)
-            })
+        self.remove(false, pattern)
+    }
+
+    fn remove(&mut self, jvm: bool, pattern: &str) -> Result<(), ProfileError> {
+        let args = if jvm {
+            &mut self.profile.jvm_args
+        } else {
+            &mut self.profile.game_args
+        };
+        if let Some(arg) = args
+            .iter()
+            .find(|arg| crate::glob_matches(pattern, &arg.value) && is_auth_argument(&arg.value))
         {
             return Err(ProfileError::AuthArgument {
                 profile: self.source.clone(),
                 argument: arg.value.clone(),
             });
         }
-        let removed = remove_matching(&mut self.profile.game_args, pattern);
+        let removed = remove_matching(args, pattern);
         for value in removed {
-            self.note("game", format!("`{value}` removed"));
+            self.note(
+                if jvm { "jvm" } else { "game" },
+                format!("`{value}` removed"),
+            );
         }
         Ok(())
     }

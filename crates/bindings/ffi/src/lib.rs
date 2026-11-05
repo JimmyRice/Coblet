@@ -22,8 +22,8 @@ mod types;
 
 pub use builder::{
     CobletBuilder, coblet_builder_add_customizer, coblet_builder_add_platform_profile,
-    coblet_builder_add_platform_profile_toml, coblet_builder_build, coblet_builder_free,
-    coblet_builder_new, coblet_builder_set_platform,
+    coblet_builder_add_platform_profile_toml, coblet_builder_allow_auth_changes,
+    coblet_builder_build, coblet_builder_free, coblet_builder_new, coblet_builder_set_platform,
 };
 pub use context::{
     Coblet, coblet_abi_version, coblet_error_free, coblet_free, coblet_new, coblet_platform_json,

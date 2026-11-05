@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use coblet::platform::{DataProfile, ProfileEngine, ProfileLayer};
 use coblet::runtime::{Extension, UserAgent};
-use coblet::types::Platform;
+use coblet::types::{ExtensionId, Platform};
 
 use crate::customize::ForeignCustomizer;
 use crate::profile::ForeignProfile;
@@ -12,6 +12,7 @@ struct Settings {
     data_root: String,
     user_agent: UserAgent,
     customizers: Vec<ForeignCustomizer>,
+    auth_grants: Vec<ExtensionId>,
     profiles: Vec<Arc<dyn coblet::platform::PlatformProfile>>,
     platform: Option<Platform>,
 }
@@ -87,6 +88,7 @@ impl CobletBuilder {
                 data_root,
                 user_agent,
                 customizers: Vec::new(),
+                auth_grants: Vec::new(),
                 profiles: Vec::new(),
                 platform: None,
             })),
@@ -162,6 +164,35 @@ impl CobletBuilder {
         })
     }
 
+    /// Lets the added customizer `id` add and remove authentication
+    /// arguments, such as `--accessToken` or `${auth_uuid}`, for example
+    /// one that points the game at a third-party login server.
+    ///
+    /// Customizers cannot do this by default: the launch fails with
+    /// `ErrorKind::Launch` when one tries. Grant it only to customizers the
+    /// launcher trusts with the account; their changes still appear in
+    /// `GameHandle.report`.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID, one no customizer added with
+    /// `add_customizer` has, and after `build`.
+    pub fn allow_auth_changes(&self, id: &str) -> Result<(), CobletError> {
+        let id =
+            ExtensionId::new(id).map_err(|error| invalid(format!("customizer id: {error}")))?;
+        self.with(|settings| {
+            if !settings.customizers.iter().any(|known| known.id() == &id) {
+                return Err(invalid(format!(
+                    "customizer `{id}` was not added; add the customizer first"
+                )));
+            }
+            if !settings.auth_grants.contains(&id) {
+                settings.auth_grants.push(id);
+            }
+            Ok(())
+        })
+    }
+
     /// Creates the `Coblet`.
     ///
     /// # Errors
@@ -187,6 +218,9 @@ impl CobletBuilder {
         }
         for customizer in settings.customizers {
             builder = builder.customizer(Arc::new(customizer));
+        }
+        for id in settings.auth_grants {
+            builder = builder.allow_auth_changes(id);
         }
         Ok(Arc::new(Coblet::from_inner(builder.build()?)))
     }

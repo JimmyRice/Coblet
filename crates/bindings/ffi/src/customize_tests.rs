@@ -24,13 +24,17 @@ use super::{
     coblet_edit_fail, coblet_edit_info_json, coblet_edit_remove_library, coblet_edit_set_env,
     coblet_edit_set_main_class, coblet_step_fail,
 };
-use crate::builder::{coblet_builder_add_customizer, coblet_builder_free, coblet_builder_new};
+use crate::builder::{
+    coblet_builder_add_customizer, coblet_builder_allow_auth_changes, coblet_builder_build,
+    coblet_builder_free, coblet_builder_new,
+};
 use crate::types::{CobletStatus, CobletString};
 
 /// State behind `user_data`, as a C program would keep it.
 #[derive(Default)]
 struct State {
     fail: bool,
+    auth: bool,
     frees: AtomicUsize,
     step_runs: AtomicUsize,
     step_frees: AtomicUsize,
@@ -81,6 +85,14 @@ unsafe extern "C" fn customize(user_data: *mut c_void, edit: *mut CobletProfileE
             let message = text("agent jar is missing");
             coblet_edit_fail(edit, message.as_ptr());
             return false;
+        }
+        if state.auth {
+            let token = text("--accessToken");
+            assert_eq!(
+                coblet_edit_add_arg(edit, CobletArgKind::Game, token.as_ptr(), true, null),
+                CobletStatus::Ok
+            );
+            return true;
         }
         let mut json = CobletString::empty();
         assert_eq!(
@@ -298,11 +310,16 @@ impl coblet::launch::LaunchStep for Anchor {
     }
 }
 
-fn launch(state: &State) -> Result<LaunchContext, LaunchError> {
+fn launch(state: &State, grant: bool) -> Result<LaunchContext, LaunchError> {
     let mut launcher = Launcher::empty().with_step(Arc::new(Anchor));
     launcher
         .register_customizer(Arc::new(adapter(state)))
         .unwrap();
+    if grant {
+        launcher
+            .allow_auth_changes(ExtensionId::new("acme:fix").unwrap())
+            .unwrap();
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -333,7 +350,7 @@ fn launch(state: &State) -> Result<LaunchContext, LaunchError> {
 #[test]
 fn c_steps_run_in_the_launch() {
     let state = State::default();
-    let cx = launch(&state).unwrap();
+    let cx = launch(&state, false).unwrap();
     assert_eq!(state.step_runs.load(Ordering::SeqCst), 1);
     let info = state.last_info.lock().unwrap().clone();
     assert!(info.contains("\"game_dir\":\"/game\""), "{info}");
@@ -344,4 +361,89 @@ fn c_steps_run_in_the_launch() {
             .contains("[customize] acme:fix: env ACME set to \"1\"")
     );
     assert_eq!(state.step_frees.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn c_customizers_need_a_grant_to_change_auth_arguments() {
+    let state = State {
+        auth: true,
+        ..State::default()
+    };
+    let error = launch(&state, false).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            LaunchError::AuthArgument { customizer, argument }
+                if customizer.as_str() == "acme:fix" && argument == "--accessToken"
+        ),
+        "{error}"
+    );
+    let cx = launch(&state, true).unwrap();
+    assert!(
+        cx.profile
+            .explain()
+            .contains("[customize] acme:fix: game `--accessToken` added")
+    );
+}
+
+/// Calls `coblet_builder_allow_auth_changes` and returns the status with
+/// the error message, if any.
+fn allow(builder: *mut crate::builder::CobletBuilder, id: &str) -> (CobletStatus, Option<String>) {
+    let id = CString::new(id).unwrap();
+    let mut err = std::ptr::null_mut();
+    // SAFETY: a live builder, a valid string and out-pointer; the error is freed once.
+    unsafe {
+        let status = coblet_builder_allow_auth_changes(builder, id.as_ptr(), &raw mut err);
+        let message = (!err.is_null()).then(|| {
+            let text = CStr::from_ptr((*err).message.ptr)
+                .to_str()
+                .unwrap()
+                .to_owned();
+            crate::context::coblet_error_free(err);
+            text
+        });
+        (status, message)
+    }
+}
+
+#[test]
+fn auth_grants_name_added_customizers_and_reach_the_launcher() {
+    let state = State::default();
+    let id = CString::new("acme:fix").unwrap();
+    let root = CString::new("/tmp/coblet-ffi-grants").unwrap();
+    let agent = CString::new("coblet-ffi-test/1.0").unwrap();
+    for grant in [false, true] {
+        let mut builder = std::ptr::null_mut();
+        let mut coblet = std::ptr::null_mut();
+        let null = std::ptr::null_mut();
+        // SAFETY: valid strings, tables and out-pointers; the handles are freed once.
+        unsafe {
+            let status = coblet_builder_new(root.as_ptr(), agent.as_ptr(), &raw mut builder, null);
+            assert_eq!(status, CobletStatus::Ok);
+            let (status, message) = allow(builder, "acme:fix");
+            assert_eq!(status, CobletStatus::InvalidArgument);
+            assert_eq!(
+                message.as_deref(),
+                Some("customizer id `acme:fix` was not added; add the customizer first")
+            );
+            let status = coblet_builder_add_customizer(builder, table(&state, &id), null);
+            assert_eq!(status, CobletStatus::Ok);
+            let (status, message) = allow(builder, "No Namespace");
+            assert_eq!(status, CobletStatus::InvalidArgument);
+            assert!(message.unwrap().starts_with("customizer id"));
+            if grant {
+                assert_eq!(allow(builder, "acme:fix"), (CobletStatus::Ok, None));
+                assert_eq!(allow(builder, "acme:fix"), (CobletStatus::Ok, None));
+            }
+            let status = coblet_builder_build(builder, &raw mut coblet, null);
+            assert_eq!(status, CobletStatus::Ok);
+            let allowed = (*coblet)
+                .inner
+                .launcher()
+                .allows_auth_changes(&ExtensionId::new("acme:fix").unwrap());
+            assert_eq!(allowed, grant);
+            crate::context::coblet_free(coblet);
+        }
+    }
+    assert_eq!(state.frees.load(Ordering::SeqCst), 2);
 }
