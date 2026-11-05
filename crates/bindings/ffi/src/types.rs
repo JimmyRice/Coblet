@@ -136,7 +136,7 @@ impl Failure {
 impl From<SdkError> for Failure {
     fn from(error: SdkError) -> Self {
         let kind = match &error {
-            SdkError::Config(_) => CobletErrorKind::InvalidArgument,
+            SdkError::Config(_) | SdkError::Registry(_) => CobletErrorKind::InvalidArgument,
             SdkError::Transport(_) | SdkError::Catalog(_) => CobletErrorKind::Network,
             SdkError::UnknownVersion(_) => CobletErrorKind::NotFound,
             SdkError::Profile(_) => CobletErrorKind::Unsupported,
