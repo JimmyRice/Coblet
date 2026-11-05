@@ -22,9 +22,14 @@ applet_tweakers = [
 [[rule]]
 traits = ["legacy-online-services"]
 released_before = "2014-04-09T07:52:06Z"
-note = "skins are loaded from the retired skins.minecraft.net service (changed in 1.7.6)"
+# Seen in the M1 survey: a1.2.6, 1.2.5 and 1.5.2 request
+# s3.amazonaws.com/MinecraftResources (404) and 1.5.2 requests
+# assets.minecraft.net (502); both fail without stopping the game, which
+# reads the resources coblet copies into the game directory.
+note = "skins are loaded from the retired skins.minecraft.net service (changed in 1.7.6); versions before 1.6 also poll retired resource servers"
 
 [[rule]]
 traits = ["legacy-macos-rendering"]
 assets = ["pre-1.6"]
+# Not visible in logs; the M1 survey could not confirm it.
 note = "red and blue are swapped on Apple Silicon in versions before 13w16a"
