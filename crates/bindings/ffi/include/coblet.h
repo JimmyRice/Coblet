@@ -39,14 +39,6 @@ typedef enum CobletStatus {
   COBLET_STATUS_END = 4,
 } CobletStatus;
 
-// How the game identifies the player.
-typedef enum CobletLaunchMode {
-  // Offline: local name and offline UUID.
-  COBLET_LAUNCH_MODE_OFFLINE = 0,
-  // Demo mode.
-  COBLET_LAUNCH_MODE_DEMO = 1,
-} CobletLaunchMode;
-
 // Category of a [`CobletError`].
 typedef enum CobletErrorKind {
   // Anything else.
@@ -67,11 +59,34 @@ typedef enum CobletErrorKind {
   COBLET_ERROR_KIND_PANIC = 7,
 } CobletErrorKind;
 
+// Argument list a `coblet_edit_*_arg` call works on.
+typedef enum CobletArgKind {
+  // JVM arguments.
+  COBLET_ARG_KIND_JVM = 0,
+  // Game arguments.
+  COBLET_ARG_KIND_GAME = 1,
+} CobletArgKind;
+
+// How the game identifies the player.
+typedef enum CobletLaunchMode {
+  // Offline: local name and offline UUID.
+  COBLET_LAUNCH_MODE_OFFLINE = 0,
+  // Demo mode.
+  COBLET_LAUNCH_MODE_DEMO = 1,
+} CobletLaunchMode;
+
 // Running game handle.
 typedef struct CobletGame CobletGame;
 
+// Launch profile being edited by a C customizer; valid only during its
+// `customize` callback.
+typedef struct CobletProfileEdit CobletProfileEdit;
+
 // SDK handle: the Rust `Sdk` and the runtime its work runs on.
 typedef struct CobletSdk CobletSdk;
+
+// Reason a step failed, given with `coblet_step_fail`.
+typedef struct CobletStepFailure CobletStepFailure;
 
 // UTF-8 string owned by the library; `ptr` is NUL-terminated and `len`
 // excludes the NUL. Free it with `coblet_string_free`.
@@ -90,6 +105,24 @@ typedef struct CobletError {
   struct CobletString message;
 } CobletError;
 
+// Callback table of an extra launch step written in C.
+//
+// The library owns `user_data` from the call that receives the table,
+// even when that call fails, and calls `free` once after the launch.
+typedef struct CobletStep {
+  // Step name such as `acme-start-proxy`.
+  const char *name;
+  // Passed to every callback.
+  void *user_data;
+  // Runs the step on a worker thread. `info_json` is
+  // `{"schema":1,"data_root","game_dir","java","natives_dir"}`, with
+  // `null` for values not known yet. Returning false stops the launch;
+  // call `coblet_step_fail` first to give the reason.
+  bool (*run)(void *user_data, const char *info_json, struct CobletStepFailure *failure);
+  // Releases `user_data`; may be NULL.
+  void (*free)(void *user_data);
+} CobletStep;
+
 // How a game ended.
 typedef struct CobletGameExit {
   // Whether `code` is set.
@@ -104,9 +137,180 @@ typedef struct CobletGameExit {
   uint64_t duration_ms;
 } CobletGameExit;
 
+// Callback table of a launch customizer written in C.
+//
+// The library copies `id` and `display_name` and owns `user_data` from
+// the call that receives the table, even when that call fails; it calls
+// `free` once when it no longer needs it. Callbacks may run on any thread,
+// one at a time per launch.
+typedef struct CobletCustomizer {
+  // ID such as `acme:legacy-fix`.
+  const char *id;
+  // Name shown to users; may be NULL.
+  const char *display_name;
+  // Passed to every callback.
+  void *user_data;
+  // Reports whether the customizer handles a version; `traits_json` is
+  // a JSON array such as `["applet","jre-legacy"]`. NULL applies to every version.
+  bool (*applies_to)(void *user_data, const char *traits_json);
+  // Edits one launch through `edit`, which is valid only during the
+  // call. Returning false stops the launch; call `coblet_edit_fail`
+  // first to give the reason.
+  bool (*customize)(void *user_data, struct CobletProfileEdit *edit);
+  // Releases `user_data`; may be NULL.
+  void (*free)(void *user_data);
+} CobletCustomizer;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+// Returns what the customizer can see as JSON.
+//
+// The document is `{"schema":1,"game_version","os","arch","data_root",
+// "game_dir","traits":[],"main_class","jvm_args":[],"game_args":[],
+// "libraries":[],"java_major"}`; `libraries` lists active libraries in
+// classpath order, natives with their classifier. On success `*out_json`
+// receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `edit` must be the handle of the running `customize` callback;
+// `out_json` must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_edit_info_json(struct CobletProfileEdit *edit,
+                                        struct CobletString *out_json,
+                                        struct CobletError **out_err);
+
+// Replaces the main class.
+//
+// # Safety
+//
+// `edit` must be the handle of the running `customize` callback;
+// `main_class` must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_edit_set_main_class(struct CobletProfileEdit *edit,
+                                             const char *main_class,
+                                             struct CobletError **out_err);
+
+// Adds an argument, such as `-javaagent:/path/fix.jar`, last or first.
+//
+// # Safety
+//
+// `edit` must be the handle of the running `customize` callback; `value`
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_edit_add_arg(struct CobletProfileEdit *edit,
+                                      enum CobletArgKind kind,
+                                      const char *value,
+                                      bool first,
+                                      struct CobletError **out_err);
+
+// Removes every argument equal to `value`; `*out_removed` tells whether
+// one was found.
+//
+// # Safety
+//
+// `edit` must be the handle of the running `customize` callback; `value`
+// must be NULL or NUL-terminated; `out_removed` must be NULL or writable;
+// `out_err` must be NULL or writable.
+enum CobletStatus coblet_edit_remove_arg(struct CobletProfileEdit *edit,
+                                         enum CobletArgKind kind,
+                                         const char *value,
+                                         bool *out_removed,
+                                         struct CobletError **out_err);
+
+// Adds a classpath library, last or first.
+//
+// `name` is a Maven coordinate such as `com.example:fix:1.0`; `path` is
+// inside the libraries directory, with `/` separators. Without `url` the
+// file must already be there. `sha1` (hex) may be NULL; `size` 0 means
+// unknown.
+//
+// # Safety
+//
+// `edit` must be the handle of the running `customize` callback; strings
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_edit_add_library(struct CobletProfileEdit *edit,
+                                          const char *name,
+                                          const char *path,
+                                          const char *url,
+                                          const char *sha1,
+                                          uint64_t size,
+                                          bool first,
+                                          struct CobletError **out_err);
+
+// Removes the libraries listed as `name` in `coblet_edit_info_json`;
+// `*out_removed` tells whether one was found.
+//
+// # Safety
+//
+// `edit` must be the handle of the running `customize` callback; `name`
+// must be NULL or NUL-terminated; `out_removed` must be NULL or writable;
+// `out_err` must be NULL or writable.
+enum CobletStatus coblet_edit_remove_library(struct CobletProfileEdit *edit,
+                                             const char *name,
+                                             bool *out_removed,
+                                             struct CobletError **out_err);
+
+// Sets an environment variable for the game; a NULL `value` removes one
+// the profile sets.
+//
+// # Safety
+//
+// `edit` must be the handle of the running `customize` callback; strings
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_edit_set_env(struct CobletProfileEdit *edit,
+                                      const char *name,
+                                      const char *value,
+                                      struct CobletError **out_err);
+
+// Adds a directory to the native library search path.
+//
+// # Safety
+//
+// `edit` must be the handle of the running `customize` callback; `path`
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_edit_add_native_path(struct CobletProfileEdit *edit,
+                                              const char *path,
+                                              struct CobletError **out_err);
+
+// Sets the Java major version the game needs.
+//
+// # Safety
+//
+// `edit` must be the handle of the running `customize` callback;
+// `out_err` must be NULL or writable.
+enum CobletStatus coblet_edit_set_java_major(struct CobletProfileEdit *edit,
+                                             uint32_t major,
+                                             struct CobletError **out_err);
+
+// Runs `step` right before or after the launch step named `anchor`, such
+// as `pre-launch`; an unknown anchor fails the launch.
+//
+// # Safety
+//
+// `edit` must be the handle of the running `customize` callback; strings
+// must be NULL or NUL-terminated; the step's callbacks must stay valid
+// until its `free` runs; `out_err` must be NULL or writable.
+enum CobletStatus coblet_edit_add_step(struct CobletProfileEdit *edit,
+                                       const char *anchor,
+                                       bool after,
+                                       struct CobletStep step,
+                                       struct CobletError **out_err);
+
+// Gives the reason the running `customize` callback is about to return false.
+//
+// # Safety
+//
+// `edit` must be the handle of the running `customize` callback;
+// `message` must be NULL or NUL-terminated.
+enum CobletStatus coblet_edit_fail(struct CobletProfileEdit *edit, const char *message);
+
+// Gives the reason the running step `run` callback is about to return false.
+//
+// # Safety
+//
+// `failure` must be the handle passed to the running `run` callback;
+// `message` must be NULL or NUL-terminated.
+enum CobletStatus coblet_step_fail(struct CobletStepFailure *failure, const char *message);
 
 // Starts a version offline or in Demo mode.
 //
@@ -124,6 +328,36 @@ enum CobletStatus coblet_launch(const struct CobletSdk *sdk,
                                 const char *game_dir,
                                 struct CobletGame **out_game,
                                 struct CobletError **out_err);
+
+// Starts a version like `coblet_launch` and runs the customizers whose
+// IDs are listed in `customizers`, in order.
+//
+// # Safety
+//
+// As `coblet_launch`; `customizers` must point to `count` NUL-terminated
+// strings, or be NULL when `count` is 0.
+enum CobletStatus coblet_launch_customized(const struct CobletSdk *sdk,
+                                           const char *version_id,
+                                           const char *player_name,
+                                           enum CobletLaunchMode mode,
+                                           const char *game_dir,
+                                           const char *const *customizers,
+                                           size_t count,
+                                           struct CobletGame **out_game,
+                                           struct CobletError **out_err);
+
+// Returns the launch report: where every library, argument and the Java
+// requirement came from, including the changes of customizers.
+//
+// On success `*out_report` receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `game` must be a live handle; `out_report` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_game_report(const struct CobletGame *game,
+                                     struct CobletString *out_report,
+                                     struct CobletError **out_err);
 
 // Waits for the next log line and returns it as JSON.
 //
@@ -180,6 +414,26 @@ enum CobletStatus coblet_sdk_new(const char *data_root,
                                  const char *user_agent,
                                  struct CobletSdk **out_sdk,
                                  struct CobletError **out_err);
+
+// Creates an SDK with the default transport and `count` launch customizers.
+//
+// As `coblet_sdk_new`; a customizer runs only for launches that name its
+// ID in `coblet_launch_customized`. The library owns the user data of
+// every table from this call on, even when it fails, and calls each
+// `free` once: on failure before returning, otherwise from
+// `coblet_sdk_free`.
+//
+// # Safety
+//
+// As `coblet_sdk_new`; `customizers` must point to `count` tables, or be
+// NULL when `count` is 0, and their callbacks must stay valid until their
+// `free` runs.
+enum CobletStatus coblet_sdk_new_with_customizers(const char *data_root,
+                                                  const char *user_agent,
+                                                  const struct CobletCustomizer *customizers,
+                                                  size_t count,
+                                                  struct CobletSdk **out_sdk,
+                                                  struct CobletError **out_err);
 
 // Frees an SDK handle; NULL is ignored.
 //

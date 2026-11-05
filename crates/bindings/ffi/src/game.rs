@@ -2,7 +2,7 @@ use std::ffi::c_char;
 
 use coblet::launch::{GameSession, LaunchRequest, LogItem, LogStream};
 use coblet::launch_command::LaunchAuth;
-use coblet::types::PlayerName;
+use coblet::types::{ExtensionId, PlayerName};
 
 use crate::guard::{guard, put};
 use crate::sdk::CobletSdk;
@@ -39,6 +39,7 @@ pub struct CobletGameExit {
 /// Running game handle.
 pub struct CobletGame {
     runtime: tokio::runtime::Handle,
+    report: String,
     session: Option<GameSession>,
     logs: LogStream,
 }
@@ -63,6 +64,42 @@ pub unsafe extern "C" fn coblet_launch(
     out_game: *mut *mut CobletGame,
     out_err: *mut *mut CobletError,
 ) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees; no customizers.
+    unsafe {
+        coblet_launch_customized(
+            sdk,
+            version_id,
+            player_name,
+            mode,
+            game_dir,
+            std::ptr::null(),
+            0,
+            out_game,
+            out_err,
+        )
+    }
+}
+
+/// Starts a version like `coblet_launch` and runs the customizers whose
+/// IDs are listed in `customizers`, in order.
+///
+/// # Safety
+///
+/// As `coblet_launch`; `customizers` must point to `count` NUL-terminated
+/// strings, or be NULL when `count` is 0.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_launch_customized(
+    sdk: *const CobletSdk,
+    version_id: *const c_char,
+    player_name: *const c_char,
+    mode: CobletLaunchMode,
+    game_dir: *const c_char,
+    customizers: *const *const c_char,
+    count: usize,
+    out_game: *mut *mut CobletGame,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
         guard(out_err, || {
@@ -83,18 +120,56 @@ pub unsafe extern "C" fn coblet_launch(
                 CobletLaunchMode::Offline => LaunchAuth::offline(name),
                 CobletLaunchMode::Demo => LaunchAuth::demo(name),
             };
-            let session = handle.runtime.block_on(handle.sdk.launch(
-                version,
-                game_dir,
-                LaunchRequest::new(auth),
-            ))?;
+            let mut request = LaunchRequest::new(auth);
+            if count > 0 {
+                if customizers.is_null() {
+                    return Err(Failure::argument("customizers", "is NULL"));
+                }
+                for &id in std::slice::from_raw_parts(customizers, count) {
+                    let id = ExtensionId::new(text(id, "customizer id")?)
+                        .map_err(|error| Failure::argument("customizer id", &error.to_string()))?;
+                    request = request.with_customizer(id);
+                }
+            }
+            let session = handle
+                .runtime
+                .block_on(handle.sdk.launch(version, game_dir, request))?;
             let logs = session.logs();
             let game = Box::new(CobletGame {
                 runtime: handle.runtime.handle().clone(),
+                report: session.profile().explain(),
                 session: Some(session),
                 logs,
             });
             put(out_game, Box::into_raw(game), "out_game")?;
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+/// Returns the launch report: where every library, argument and the Java
+/// requirement came from, including the changes of customizers.
+///
+/// On success `*out_report` receives a string to free with `coblet_string_free`.
+///
+/// # Safety
+///
+/// `game` must be a live handle; `out_report` must be writable; `out_err`
+/// must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_game_report(
+    game: *const CobletGame,
+    out_report: *mut CobletString,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let game = game
+                .as_ref()
+                .ok_or_else(|| Failure::argument("game", "is NULL"))?;
+            put(out_report, CobletString::new(&game.report), "out_report")?;
             Ok(CobletStatus::Ok)
         })
     }
