@@ -138,12 +138,12 @@ fn auth_grants_name_registered_customizers() {
         .customizer(Arc::new(Noop(id.clone())))
         .build()
         .unwrap();
-    assert!(coblet.inner.launcher.allows_auth_changes(&id));
+    assert!(coblet.launcher().allows_auth_changes(&id));
     let coblet = builder()
         .customizer(Arc::new(Noop(id.clone())))
         .build()
         .unwrap();
-    assert!(!coblet.inner.launcher.allows_auth_changes(&id));
+    assert!(!coblet.launcher().allows_auth_changes(&id));
     let error = builder().allow_auth_changes(id).build().unwrap_err();
     assert!(
         matches!(

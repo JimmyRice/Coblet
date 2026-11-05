@@ -112,6 +112,14 @@ impl Coblet {
         &self.inner.events
     }
 
+    /// Returns the launcher with its steps, customizers and the customizers
+    /// allowed to change authentication arguments.
+    #[cfg(feature = "launch")]
+    #[must_use]
+    pub fn launcher(&self) -> &coblet_launch::Launcher {
+        &self.inner.launcher
+    }
+
     /// Subscribes to progress, warnings and game log lines.
     #[must_use]
     pub fn subscribe(&self) -> EventSubscription {
