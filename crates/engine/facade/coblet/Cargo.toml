@@ -17,8 +17,15 @@ java = ["dep:coblet-java"]
 launch = ["mojang", "java", "dep:coblet-launch", "dep:coblet-launch-command", "dep:coblet-platform"]
 # Default transport: reqwest with rustls.
 tls-rustls = ["coblet-runtime/reqwest"]
+# Microsoft login, skins and capes. Launchers pass their own Client ID.
+auth-msa = ["coblet-auth/msa", "dep:coblet-player", "dep:coblet-launch-command"]
+# Built-in 127.0.0.1 listener for the browser redirect of a Microsoft login.
+auth-loopback = ["auth-msa", "coblet-auth/loopback"]
+# EncryptedFileStore for tokens.
+encrypted-secrets = ["coblet-auth/encrypted-secrets"]
 
 [dependencies]
+coblet-auth.workspace = true
 coblet-catalog.workspace = true
 coblet-download.workspace = true
 coblet-java = { workspace = true, optional = true }
@@ -26,6 +33,7 @@ coblet-launch = { workspace = true, optional = true }
 coblet-launch-command = { workspace = true, optional = true }
 coblet-mojang = { workspace = true, optional = true }
 coblet-platform = { workspace = true, optional = true }
+coblet-player = { workspace = true, optional = true }
 coblet-runtime = { workspace = true, features = ["fs", "process"] }
 coblet-types.workspace = true
 thiserror.workspace = true
@@ -37,6 +45,10 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time
 [[example]]
 name = "launch"
 required-features = ["launch", "tls-rustls"]
+
+[[example]]
+name = "accounts"
+required-features = ["launch", "tls-rustls", "auth-msa", "encrypted-secrets"]
 
 [lints]
 workspace = true

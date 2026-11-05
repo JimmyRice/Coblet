@@ -8,7 +8,7 @@ pub enum PlayerError {
     #[error("the access token was rejected")]
     Unauthorized,
     /// The account is offline and cannot change its skin on Minecraft services.
-    #[error("offline accounts cannot change skins or capes online")]
+    #[error("offline accounts have no online skins or capes")]
     Offline,
     /// The skin image is not a 64x64 or 64x32 PNG.
     #[error("invalid skin image: {0}")]
