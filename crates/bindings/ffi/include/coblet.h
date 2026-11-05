@@ -23,7 +23,7 @@
 #include <stdint.h>
 
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 2
+#define COBLET_ABI_VERSION 3
 
 // Result of a call.
 typedef enum CobletStatus {
@@ -77,6 +77,12 @@ typedef enum CobletLaunchMode {
 
 // Library handle: the Rust `Coblet` and the runtime its work runs on.
 typedef struct Coblet Coblet;
+
+// Settings of a `Coblet` handle before it is built.
+//
+// Created with `coblet_builder_new`; `coblet_builder_build` turns it into
+// a `Coblet` and frees it, and `coblet_builder_free` drops it unused.
+typedef struct CobletBuilder CobletBuilder;
 
 // Running game handle.
 typedef struct CobletGame CobletGame;
@@ -165,15 +171,84 @@ typedef struct CobletGameExit {
 extern "C" {
 #endif // __cplusplus
 
-// Returns the ABI version the library implements.
-uint32_t coblet_abi_version(void);
-
-// Creates a `Coblet` handle with the default transport.
+// Starts building a `Coblet` handle with the default transport.
 //
 // `data_root` is the directory for shared game files; `user_agent`
 // identifies the launcher to web services, such as
-// `MyLauncher/1.0 (contact@example.com)`. On success `*out_coblet` receives a
-// handle to free with `coblet_free`.
+// `MyLauncher/1.0 (contact@example.com)`. On success `*out_builder`
+// receives a handle for `coblet_builder_build` or `coblet_builder_free`.
+//
+// # Safety
+//
+// Strings must be NULL or NUL-terminated; `out_builder` must be writable;
+// `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_new(const char *data_root,
+                                     const char *user_agent,
+                                     struct CobletBuilder **out_builder,
+                                     struct CobletError **out_err);
+
+// Adds a Platform Profile written as TOML, such as one for an operating
+// system or architecture the built-in profiles do not cover.
+//
+// The text is checked now: a malformed profile, or one whose `id` is
+// already registered, fails with `COBLET_STATUS_INVALID_ARGUMENT`. The
+// format is the one of coblet's built-in profiles; it can also be
+// generated at run time, for example after probing system library paths.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `toml` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_platform_profile(struct CobletBuilder *builder,
+                                                      const char *toml,
+                                                      struct CobletError **out_err);
+
+// Adds a launch customizer; it runs only for launches that name its ID in
+// `coblet_launch_customized`.
+//
+// The library owns the table's user data from this call on, even when it
+// fails, and calls its `free` once: on failure before returning, otherwise
+// when the builder or the built `Coblet` is freed.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; strings in the table must be
+// NULL or NUL-terminated and its callbacks must stay valid until its
+// `free` runs; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_customizer(struct CobletBuilder *builder,
+                                                struct CobletCustomizer customizer,
+                                                struct CobletError **out_err);
+
+// Builds the `Coblet` handle and frees the builder, whether or not it succeeds.
+//
+// On success `*out_coblet` receives a handle to free with `coblet_free`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle that is not used afterwards;
+// `out_coblet` must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_build(struct CobletBuilder *builder,
+                                       struct Coblet **out_coblet,
+                                       struct CobletError **out_err);
+
+// Frees a builder without building it; NULL is ignored. Customizers added
+// to it get their `free` called.
+//
+// # Safety
+//
+// `builder` must be NULL or a live builder handle that is not used afterwards.
+void coblet_builder_free(struct CobletBuilder *builder);
+
+// Returns the ABI version the library implements.
+uint32_t coblet_abi_version(void);
+
+// Creates a `Coblet` handle with the default transport and nothing added.
+//
+// `data_root` is the directory for shared game files; `user_agent`
+// identifies the launcher to web services, such as
+// `MyLauncher/1.0 (contact@example.com)`. On success `*out_coblet`
+// receives a handle to free with `coblet_free`. Use `coblet_builder_new`
+// to add Platform Profiles or launch customizers.
 //
 // # Safety
 //
@@ -183,26 +258,6 @@ enum CobletStatus coblet_new(const char *data_root,
                              const char *user_agent,
                              struct Coblet **out_coblet,
                              struct CobletError **out_err);
-
-// Creates a `Coblet` handle with the default transport and `count` launch customizers.
-//
-// As `coblet_new`; a customizer runs only for launches that name its
-// ID in `coblet_launch_customized`. The library owns the user data of
-// every table from this call on, even when it fails, and calls each
-// `free` once: on failure before returning, otherwise from
-// `coblet_free`.
-//
-// # Safety
-//
-// As `coblet_new`; `customizers` must point to `count` tables, or be
-// NULL when `count` is 0, and their callbacks must stay valid until their
-// `free` runs.
-enum CobletStatus coblet_new_with_customizers(const char *data_root,
-                                              const char *user_agent,
-                                              const struct CobletCustomizer *customizers,
-                                              size_t count,
-                                              struct Coblet **out_coblet,
-                                              struct CobletError **out_err);
 
 // Frees a `Coblet` handle; NULL is ignored.
 //

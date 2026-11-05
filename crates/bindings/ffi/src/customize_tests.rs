@@ -24,7 +24,7 @@ use super::{
     coblet_edit_fail, coblet_edit_info_json, coblet_edit_remove_library, coblet_edit_set_env,
     coblet_edit_set_main_class, coblet_step_fail,
 };
-use crate::context::coblet_new_with_customizers;
+use crate::builder::{coblet_builder_add_customizer, coblet_builder_free, coblet_builder_new};
 use crate::types::{CobletStatus, CobletString};
 
 /// State behind `user_data`, as a C program would keep it.
@@ -252,29 +252,28 @@ fn rejected_tables_are_still_freed() {
     let state = State::default();
     let good = CString::new("acme:fix").unwrap();
     let bad = CString::new("No Namespace").unwrap();
-    let tables = [table(&state, &good), table(&state, &bad)];
     let root = CString::new("/tmp/coblet-ffi-customizers").unwrap();
     let agent = CString::new("coblet-ffi-test/1.0").unwrap();
-    let mut coblet = std::ptr::null_mut();
+    let mut builder = std::ptr::null_mut();
     let mut err = std::ptr::null_mut();
-    // SAFETY: valid strings, tables and out-pointers.
-    let status = unsafe {
-        coblet_new_with_customizers(
+    // SAFETY: valid strings, tables and out-pointers; the builder is freed once.
+    unsafe {
+        let status = coblet_builder_new(
             root.as_ptr(),
             agent.as_ptr(),
-            tables.as_ptr(),
-            tables.len(),
-            &raw mut coblet,
+            &raw mut builder,
             &raw mut err,
-        )
-    };
-    assert_eq!(status, CobletStatus::InvalidArgument);
-    assert!(coblet.is_null());
-    // SAFETY: the error was just returned and is freed once.
-    unsafe {
+        );
+        assert_eq!(status, CobletStatus::Ok);
+        let status = coblet_builder_add_customizer(builder, table(&state, &good), &raw mut err);
+        assert_eq!(status, CobletStatus::Ok);
+        let status = coblet_builder_add_customizer(builder, table(&state, &bad), &raw mut err);
+        assert_eq!(status, CobletStatus::InvalidArgument);
         let message = CStr::from_ptr((*err).message.ptr).to_str().unwrap();
         assert!(message.starts_with("customizer id"), "{message}");
         crate::context::coblet_error_free(err);
+        assert_eq!(state.frees.load(Ordering::SeqCst), 1);
+        coblet_builder_free(builder);
     }
     assert_eq!(state.frees.load(Ordering::SeqCst), 2);
 }

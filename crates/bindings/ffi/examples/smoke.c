@@ -1,8 +1,8 @@
 /*
  * Smoke test of the coblet C ABI: list versions, launch one with a
- * customizer that adds a JVM property and an extra step, print the
- * customizer lines of the launch report, stop the game once a log message
- * contains a marker.
+ * Platform Profile and a customizer that each add a JVM property, plus an
+ * extra step, print their lines of the launch report, stop the game once
+ * a log message contains a marker.
  *
  *   cc -I include examples/smoke.c -L <target dir> -lcoblet_ffi -o smoke
  *   ./smoke <data root> <version> <offline|demo> <marker>
@@ -11,6 +11,11 @@
 #include <string.h>
 
 #include "coblet.h"
+
+/* Matches every platform; a real profile would adapt a new OS or architecture. */
+static const char *SMOKE_PROFILE = "id = \"coblet-smoke:profile\"\n"
+                                   "[jvm]\n"
+                                   "append = [\"-Dcoblet.smoke.profile=applied\"]\n";
 
 static bool step_ran = false;
 
@@ -46,12 +51,21 @@ int main(int argc, char **argv) {
     }
     printf("abi version %u\n", coblet_abi_version());
 
-    Coblet *coblet = NULL;
     CobletError *err = NULL;
+    CobletBuilder *builder = NULL;
+    if (coblet_builder_new(argv[1], "coblet-ffi-smoke/0.1", &builder, &err) != COBLET_STATUS_OK) {
+        return fail("coblet_builder_new", err);
+    }
+    if (coblet_builder_add_platform_profile(builder, SMOKE_PROFILE, &err) != COBLET_STATUS_OK) {
+        return fail("coblet_builder_add_platform_profile", err);
+    }
     CobletCustomizer customizer = {"coblet-smoke:marker", "Smoke marker", NULL, NULL, customize, NULL};
-    if (coblet_new_with_customizers(argv[1], "coblet-ffi-smoke/0.1", &customizer, 1, &coblet,
-                                        &err) != COBLET_STATUS_OK) {
-        return fail("coblet_new_with_customizers", err);
+    if (coblet_builder_add_customizer(builder, customizer, &err) != COBLET_STATUS_OK) {
+        return fail("coblet_builder_add_customizer", err);
+    }
+    Coblet *coblet = NULL;
+    if (coblet_builder_build(builder, &coblet, &err) != COBLET_STATUS_OK) {
+        return fail("coblet_builder_build", err);
     }
 
     CobletString versions = {0};
@@ -74,7 +88,7 @@ int main(int argc, char **argv) {
         return fail("coblet_game_report", err);
     }
     for (char *line = strtok(report.ptr, "\n"); line != NULL; line = strtok(NULL, "\n")) {
-        if (strncmp(line, "[customize]", 11) == 0) {
+        if (strstr(line, "coblet-smoke:") != NULL) {
             printf("report: %s\n", line);
         }
     }
