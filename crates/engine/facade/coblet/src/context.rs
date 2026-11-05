@@ -9,25 +9,25 @@ use coblet_types::Platform;
 /// Entry point of coblet: shared services, the version catalog and launching.
 ///
 /// Cloning is cheap; clones share everything. Every subsystem can also be
-/// built without an `Sdk` from the trait objects it needs.
+/// built without a `Coblet` from the trait objects it needs.
 ///
 /// # Examples
 ///
 /// ```no_run
 /// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
-/// use coblet::{Sdk, runtime::UserAgent};
+/// use coblet::{Coblet, runtime::UserAgent};
 ///
-/// let sdk = Sdk::builder()
+/// let coblet = Coblet::builder()
 ///     .data_root("/path/to/launcher-data")
 ///     .user_agent(UserAgent::new("MyLauncher/1.0 (contact@example.com)")?)
 ///     .build()?;
-/// let latest = sdk.latest_release().await?;
+/// let latest = coblet.latest_release().await?;
 /// println!("latest release: {}", latest.id);
 /// # Ok(())
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct Sdk {
+pub struct Coblet {
     pub(crate) inner: Arc<Inner>,
 }
 
@@ -46,16 +46,16 @@ pub(crate) struct Inner {
     pub(crate) launcher: coblet_launch::Launcher,
 }
 
-impl std::fmt::Debug for Sdk {
+impl std::fmt::Debug for Coblet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Sdk")
+        f.debug_struct("Coblet")
             .field("data_root", &self.inner.data_root)
             .field("platform", &self.inner.platform)
             .finish_non_exhaustive()
     }
 }
 
-impl Sdk {
+impl Coblet {
     pub(crate) fn from_inner(inner: Inner) -> Self {
         Self {
             inner: Arc::new(inner),
@@ -118,5 +118,5 @@ impl Sdk {
 }
 
 #[cfg(test)]
-#[path = "sdk_tests.rs"]
+#[path = "context_tests.rs"]
 mod tests;

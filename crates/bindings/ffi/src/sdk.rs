@@ -1,7 +1,6 @@
 use std::ffi::c_char;
 use std::sync::Arc;
 
-use coblet::Sdk;
 use coblet::catalog::Filter;
 use coblet::runtime::UserAgent;
 use tokio::runtime::Runtime;
@@ -15,7 +14,7 @@ use crate::types::{
 /// SDK handle: the Rust `Sdk` and the runtime its work runs on.
 pub struct CobletSdk {
     pub(crate) runtime: Runtime,
-    pub(crate) sdk: Sdk,
+    pub(crate) sdk: coblet::Coblet,
 }
 
 /// Returns the ABI version the library implements.
@@ -105,7 +104,9 @@ pub unsafe extern "C" fn coblet_sdk_new_with_customizers(
                 .thread_name("coblet")
                 .build()
                 .map_err(|error| Failure::new(CobletErrorKind::Other, error.to_string()))?;
-            let mut builder = Sdk::builder().data_root(data_root).user_agent(user_agent);
+            let mut builder = coblet::Coblet::builder()
+                .data_root(data_root)
+                .user_agent(user_agent);
             for adapter in adapters {
                 builder = builder.customizer(Arc::new(adapter));
             }

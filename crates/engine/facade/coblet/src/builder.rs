@@ -11,22 +11,22 @@ use coblet_runtime::{
 };
 use coblet_types::Platform;
 
-use crate::sdk::Inner;
-use crate::{Sdk, SdkError};
+use crate::context::Inner;
+use crate::{Coblet, Error};
 
 /// Builder state: the data root is missing.
 #[derive(Debug)]
 pub struct NoRoot;
-/// Builder state: the data root is set and [`SdkBuilder::build`] is available.
+/// Builder state: the data root is set and [`CobletBuilder::build`] is available.
 #[derive(Debug)]
 pub struct WithRoot;
 
 /// Events kept for slow subscribers before they miss some.
 const EVENT_CAPACITY: usize = 1024;
 
-/// Builder of an [`Sdk`]; [`build`](SdkBuilder::build) needs a data root.
+/// Builder of a [`Coblet`]; [`build`](CobletBuilder::build) needs a data root.
 #[must_use]
-pub struct SdkBuilder<State> {
+pub struct CobletBuilder<State> {
     data_root: Option<PathBuf>,
     user_agent: Option<UserAgent>,
     transport: Option<Arc<dyn Transport>>,
@@ -41,19 +41,19 @@ pub struct SdkBuilder<State> {
     state: PhantomData<State>,
 }
 
-impl<State> std::fmt::Debug for SdkBuilder<State> {
+impl<State> std::fmt::Debug for CobletBuilder<State> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SdkBuilder")
+        f.debug_struct("CobletBuilder")
             .field("data_root", &self.data_root)
             .field("platform", &self.platform)
             .finish_non_exhaustive()
     }
 }
 
-impl Sdk {
+impl Coblet {
     /// Starts a builder.
-    pub fn builder() -> SdkBuilder<NoRoot> {
-        SdkBuilder {
+    pub fn builder() -> CobletBuilder<NoRoot> {
+        CobletBuilder {
             data_root: None,
             user_agent: None,
             transport: None,
@@ -70,11 +70,11 @@ impl Sdk {
     }
 }
 
-impl SdkBuilder<NoRoot> {
+impl CobletBuilder<NoRoot> {
     /// Sets the directory for shared game files, caches and runtimes; a
     /// relative path is resolved against the current directory.
-    pub fn data_root(self, path: impl Into<PathBuf>) -> SdkBuilder<WithRoot> {
-        SdkBuilder {
+    pub fn data_root(self, path: impl Into<PathBuf>) -> CobletBuilder<WithRoot> {
+        CobletBuilder {
             data_root: Some(path.into()),
             user_agent: self.user_agent,
             transport: self.transport,
@@ -91,7 +91,7 @@ impl SdkBuilder<NoRoot> {
     }
 }
 
-impl<State> SdkBuilder<State> {
+impl<State> CobletBuilder<State> {
     /// Sets the User-Agent of the default transport, such as `MyLauncher/1.0 (contact@example.com)`.
     pub fn user_agent(mut self, user_agent: UserAgent) -> Self {
         self.user_agent = Some(user_agent);
@@ -165,17 +165,17 @@ impl<State> SdkBuilder<State> {
     /// #     }
     /// # }
     /// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
-    /// use coblet::Sdk;
+    /// use coblet::Coblet;
     ///
     /// let id = ExtensionId::new("acme:agent")?;
-    /// let sdk = Sdk::builder()
+    /// let coblet = Coblet::builder()
     ///     .data_root("/path/to/launcher-data")
     ///     .user_agent(UserAgent::new("MyLauncher/1.0 (contact@example.com)")?)
     ///     .customizer(Arc::new(Agent(id.clone())))
     ///     .build()?;
     /// let request = LaunchRequest::new(LaunchAuth::offline(PlayerName::new("Steve")?))
     ///     .with_customizer(id);
-    /// let session = sdk.launch("b1.7.3", "/path/to/game", request).await?;
+    /// let session = coblet.launch("b1.7.3", "/path/to/game", request).await?;
     /// print!("{}", session.profile().explain());
     /// # Ok(())
     /// # }
@@ -187,33 +187,33 @@ impl<State> SdkBuilder<State> {
     }
 }
 
-impl SdkBuilder<WithRoot> {
-    fn transport_or_default(&mut self) -> Result<Arc<dyn Transport>, SdkError> {
+impl CobletBuilder<WithRoot> {
+    fn transport_or_default(&mut self) -> Result<Arc<dyn Transport>, Error> {
         if let Some(transport) = self.transport.take() {
             return Ok(transport);
         }
         #[cfg(feature = "tls-rustls")]
         {
-            let user_agent = self.user_agent.as_ref().ok_or(SdkError::Config(
+            let user_agent = self.user_agent.as_ref().ok_or(Error::Config(
                 "the default transport needs a user agent; call user_agent()",
             ))?;
             Ok(Arc::new(coblet_runtime::ReqwestTransport::new(user_agent)?))
         }
         #[cfg(not(feature = "tls-rustls"))]
-        Err(SdkError::Config(
+        Err(Error::Config(
             "this build has no default transport; call transport()",
         ))
     }
 
-    /// Creates the SDK.
+    /// Creates the `Coblet`.
     ///
     /// # Errors
     ///
-    /// Returns [`SdkError::Config`] without a transport or User-Agent,
-    /// [`SdkError::Transport`] when the default transport cannot start,
-    /// [`SdkError::Platform`] when the platform cannot be detected and
-    /// [`SdkError::Registry`] when two customizers share an ID.
-    pub fn build(mut self) -> Result<Sdk, SdkError> {
+    /// Returns [`Error::Config`] without a transport or User-Agent,
+    /// [`Error::Transport`] when the default transport cannot start,
+    /// [`Error::Platform`] when the platform cannot be detected and
+    /// [`Error::Registry`] when two customizers share an ID.
+    pub fn build(mut self) -> Result<Coblet, Error> {
         #[cfg(feature = "launch")]
         let launcher = {
             let mut launcher = self.launcher.take().unwrap_or_default();
@@ -255,7 +255,7 @@ impl SdkBuilder<WithRoot> {
             )
             .with_cache_root(data_root.join("cache"));
         let downloader = Downloader::new(Arc::clone(&transport), Arc::clone(&storage), config);
-        Ok(Sdk::from_inner(Inner {
+        Ok(Coblet::from_inner(Inner {
             #[cfg(feature = "mojang")]
             versions: crate::versions::version_catalog(meta.clone(), events.clone()),
             #[cfg(feature = "launch")]

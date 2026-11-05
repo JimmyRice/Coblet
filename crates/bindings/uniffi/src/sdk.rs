@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use coblet::Sdk;
 use coblet::catalog::Filter;
 use coblet::launch::LaunchRequest;
 use coblet::launch_command::LaunchAuth;
@@ -62,7 +61,7 @@ pub struct LaunchOptions {
 /// coblet SDK: version catalog and launching.
 #[derive(Debug, uniffi::Object)]
 pub struct CobletSdk {
-    sdk: Sdk,
+    sdk: coblet::Coblet,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
@@ -94,7 +93,9 @@ impl CobletSdk {
     ) -> Result<Arc<Self>, CobletError> {
         let user_agent = UserAgent::new(user_agent)
             .map_err(|error| CobletError::new(ErrorKind::InvalidArgument, error.to_string()))?;
-        let mut builder = Sdk::builder().data_root(data_root).user_agent(user_agent);
+        let mut builder = coblet::Coblet::builder()
+            .data_root(data_root)
+            .user_agent(user_agent);
         for customizer in customizers {
             builder = builder.customizer(Arc::new(ForeignCustomizer::new(customizer)?));
         }

@@ -1,10 +1,10 @@
 use coblet_catalog::CatalogError;
 use coblet_runtime::{ProbeError, RegistryError, TransportError};
 
-/// Failure of an [`Sdk`](crate::Sdk) call.
+/// Failure of a [`Coblet`](crate::Coblet) call.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
-pub enum SdkError {
+pub enum Error {
     /// No transport was given and the build has no default one, or no
     /// User-Agent was given for the default one.
     #[error("{0}")]

@@ -1,5 +1,3 @@
-use coblet::SdkError;
-
 /// Category of a [`CobletError`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum ErrorKind {
@@ -50,14 +48,14 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for CobletError {
     }
 }
 
-impl From<SdkError> for CobletError {
-    fn from(error: SdkError) -> Self {
+impl From<coblet::Error> for CobletError {
+    fn from(error: coblet::Error) -> Self {
         let kind = match &error {
-            SdkError::Config(_) | SdkError::Registry(_) => ErrorKind::InvalidArgument,
-            SdkError::Transport(_) | SdkError::Catalog(_) => ErrorKind::Network,
-            SdkError::UnknownVersion(_) => ErrorKind::NotFound,
-            SdkError::Profile(_) => ErrorKind::Unsupported,
-            SdkError::Launch(_) => ErrorKind::Launch,
+            coblet::Error::Config(_) | coblet::Error::Registry(_) => ErrorKind::InvalidArgument,
+            coblet::Error::Transport(_) | coblet::Error::Catalog(_) => ErrorKind::Network,
+            coblet::Error::UnknownVersion(_) => ErrorKind::NotFound,
+            coblet::Error::Profile(_) => ErrorKind::Unsupported,
+            coblet::Error::Launch(_) => ErrorKind::Launch,
             _ => ErrorKind::Other,
         };
         Self::new(kind, error.to_string())

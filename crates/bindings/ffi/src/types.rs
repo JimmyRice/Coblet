@@ -1,7 +1,5 @@
 use std::ffi::{CStr, c_char};
 
-use coblet::SdkError;
-
 /// Version of the C ABI; it grows with every incompatible change.
 pub const COBLET_ABI_VERSION: u32 = 1;
 
@@ -133,14 +131,16 @@ impl Failure {
     }
 }
 
-impl From<SdkError> for Failure {
-    fn from(error: SdkError) -> Self {
+impl From<coblet::Error> for Failure {
+    fn from(error: coblet::Error) -> Self {
         let kind = match &error {
-            SdkError::Config(_) | SdkError::Registry(_) => CobletErrorKind::InvalidArgument,
-            SdkError::Transport(_) | SdkError::Catalog(_) => CobletErrorKind::Network,
-            SdkError::UnknownVersion(_) => CobletErrorKind::NotFound,
-            SdkError::Profile(_) => CobletErrorKind::Unsupported,
-            SdkError::Launch(_) => CobletErrorKind::Launch,
+            coblet::Error::Config(_) | coblet::Error::Registry(_) => {
+                CobletErrorKind::InvalidArgument
+            }
+            coblet::Error::Transport(_) | coblet::Error::Catalog(_) => CobletErrorKind::Network,
+            coblet::Error::UnknownVersion(_) => CobletErrorKind::NotFound,
+            coblet::Error::Profile(_) => CobletErrorKind::Unsupported,
+            coblet::Error::Launch(_) => CobletErrorKind::Launch,
             _ => CobletErrorKind::Other,
         };
         Self::new(kind, error.to_string())
