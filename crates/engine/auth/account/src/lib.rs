@@ -41,6 +41,7 @@ mod flow;
 mod method;
 mod offline;
 mod secrets;
+mod services;
 mod session;
 
 pub use account::{
@@ -55,4 +56,5 @@ pub use method::{
 };
 pub use offline::{OFFLINE_METHOD, OfflineMethod};
 pub use secrets::AccountSecrets;
+pub use services::ProfileJsonError;
 pub use session::LaunchSession;
