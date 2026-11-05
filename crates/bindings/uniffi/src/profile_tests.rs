@@ -16,6 +16,7 @@ use crate::{
 enum Fail {
     Nowhere,
     Matches,
+    Rules,
     Rewrite,
     AuthArgument,
 }
@@ -61,6 +62,9 @@ impl PlatformProfile for LoongArch {
     }
 
     fn rules(&self, _target: ProfileTarget) -> Result<RuleOverrides, CobletError> {
+        if self.fail == Fail::Rules {
+            return Err(error("unknown kernel"));
+        }
         Ok(RuleOverrides {
             mojang_os: Some("linux".to_owned()),
             ..RuleOverrides::default()
@@ -75,6 +79,9 @@ impl PlatformProfile for LoongArch {
         if self.fail == Fail::AuthArgument {
             draft.append_game_arg("--accessToken".to_owned())?;
         }
+        // Bad input fails at the call and changes nothing.
+        assert!(draft.add_native_path("relative/lib".to_owned()).is_err());
+        assert!(draft.set_java_arch("Not An Arch").is_err());
         for library in draft.libraries()? {
             if !library.has_natives {
                 continue;
@@ -86,9 +93,18 @@ impl PlatformProfile for LoongArch {
             } else {
                 NativesChoice::NotNeeded
             };
-            draft.handle_natives(library.native_key, choice)?;
+            draft.handle_natives(&library.native_key, choice)?;
         }
         draft.append_jvm_arg("-Dorg.lwjgl.librarypath=/usr/lib/lwjgl3".to_owned())?;
+        // Changes are visible at once.
+        assert!(
+            draft
+                .jvm_args()?
+                .contains(&"-Dorg.lwjgl.librarypath=/usr/lib/lwjgl3".to_owned())
+        );
+        assert!(draft.libraries()?.iter().all(|library| {
+            !library.has_natives || library.natives_handled_by.as_deref() == Some("acme:loongarch")
+        }));
         draft.set_java_source(JavaSourceChoice::SystemOnly)?;
         Ok(())
     }
@@ -147,11 +163,25 @@ fn a_foreign_profile_adapts_a_new_architecture() {
 }
 
 #[test]
-fn foreign_errors_stop_the_launch() {
+fn a_profile_that_cannot_match_is_skipped() {
     let error = resolve(LoongArch::new(Fail::Matches)).unwrap_err();
+    let ProfileError::Unsupported { explain, .. } = &error else {
+        panic!("{error}");
+    };
+    assert!(
+        explain.contains(
+            "[match] acme:loongarch: warning `skipped because matching failed: cannot read /proc/cpuinfo`"
+        ),
+        "{explain}"
+    );
+}
+
+#[test]
+fn foreign_errors_after_matching_stop_the_launch() {
+    let error = resolve(LoongArch::new(Fail::Rules)).unwrap_err();
     assert_eq!(
         error.to_string(),
-        "platform profile acme:loongarch failed: cannot read /proc/cpuinfo"
+        "platform profile acme:loongarch failed: unknown kernel"
     );
     let error = resolve(LoongArch::new(Fail::Rewrite)).unwrap_err();
     assert_eq!(
@@ -160,7 +190,9 @@ fn foreign_errors_stop_the_launch() {
     );
     let error = resolve(LoongArch::new(Fail::AuthArgument)).unwrap_err();
     assert!(
-        matches!(error, ProfileError::AuthArgument { .. }),
+        error
+            .to_string()
+            .contains("may not change authentication argument `--accessToken`"),
         "{error}"
     );
 }
@@ -191,23 +223,4 @@ fn foreign_profiles_are_registered_through_the_builder() {
                     == "acme:loongarch"
             )
     );
-}
-
-#[test]
-fn drafts_check_paths() {
-    let draft = ProfileDraft::new(resolve(LoongArch::new(Fail::Nowhere)).unwrap());
-    assert!(draft.add_native_path("relative/lib".to_owned()).is_err());
-    assert!(
-        draft
-            .handle_natives(
-                "*".to_owned(),
-                NativesChoice::System {
-                    path: "lib".to_owned()
-                }
-            )
-            .is_err()
-    );
-    assert!(draft.set_java_arch("Not An Arch").is_err());
-    draft.add_native_path("/opt/lib".to_owned()).unwrap();
-    assert_eq!(draft.close().len(), 1);
 }

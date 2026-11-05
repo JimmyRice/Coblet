@@ -1,10 +1,8 @@
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::thread::ThreadId;
 
 use coblet::platform::{
-    Draft, EffectiveLaunchProfile, EnvValue, Natives, NativesSource, ProfileArg, ProfileEdit,
-    ProfileError, RuleSettings, Target,
+    DetachedDraft, Draft, EnvValue, JavaSource, Natives, NativesSource, ProfileArg, ProfileError,
+    RuleSettings, Target,
 };
 use coblet::runtime::Extension;
 use coblet::types::{Arch, ArchName, ExtensionId};
@@ -20,8 +18,10 @@ use crate::{CobletError, ErrorKind, LibrarySpec, PlatformInfo};
 /// `CobletBuilder.add_platform_profile`; it applies to every launch it
 /// matches.
 ///
-/// An error from `matches`, `rules` or `rewrite` stops the launch with that
-/// message instead of skipping the profile.
+/// An error from `matches` skips the profile with a warning in the launch
+/// report, so a broken profile does not block platforms it was not written
+/// for. An error from `rules` or `rewrite` stops the launch with that
+/// message: the profile matched, so the platform depends on it.
 #[uniffi::export(foreign)]
 pub trait PlatformProfile: Send + Sync {
     /// Returns the ID, such as `acme:haiku`; read once at registration.
@@ -38,7 +38,7 @@ pub trait PlatformProfile: Send + Sync {
     ///
     /// # Errors
     ///
-    /// An error stops the launch.
+    /// An error skips the profile with a warning in the launch report.
     fn matches(&self, target: ProfileTarget) -> Result<bool, CobletError>;
 
     /// Says how Mojang's rules are evaluated; called only when the profile matches.
@@ -196,16 +196,15 @@ pub struct LibraryInfo {
 
 /// Profile under construction, handed to [`PlatformProfile::rewrite`].
 ///
-/// Reads show the profile as it was when `rewrite` started. Changes are
-/// applied in order after `rewrite` returns, with the same checks and
-/// launch report lines as TOML profiles; a change that is not allowed, such
-/// as touching an authentication argument, stops the launch. The draft is
-/// valid only during `rewrite`; afterwards every method fails with
-/// `InvalidState`.
+/// Each change applies at once, with the same checks and launch report
+/// lines as TOML profiles, and later reads show it. A change that is not
+/// allowed, such as touching an authentication argument, fails with
+/// `InvalidArgument` and changes nothing. The changes reach the launch only
+/// when `rewrite` returns without an error. The draft is valid only during
+/// `rewrite`; afterwards every method fails with `InvalidState`.
 #[derive(uniffi::Object)]
 pub struct ProfileDraft {
-    snapshot: EffectiveLaunchProfile,
-    edits: Mutex<Option<Vec<ProfileEdit>>>,
+    draft: Mutex<Option<DetachedDraft>>,
 }
 
 impl std::fmt::Debug for ProfileDraft {
@@ -216,6 +215,10 @@ impl std::fmt::Debug for ProfileDraft {
 
 fn invalid(message: impl Into<String>) -> CobletError {
     CobletError::new(ErrorKind::InvalidArgument, message)
+}
+
+fn rejected(error: &ProfileError) -> CobletError {
+    invalid(error.to_string())
 }
 
 fn absolute(path: String) -> Result<std::path::PathBuf, CobletError> {
@@ -231,38 +234,25 @@ fn absolute(path: String) -> Result<std::path::PathBuf, CobletError> {
 }
 
 impl ProfileDraft {
-    fn new(snapshot: EffectiveLaunchProfile) -> Self {
+    fn new(draft: DetachedDraft) -> Self {
         Self {
-            snapshot,
-            edits: Mutex::new(Some(Vec::new())),
+            draft: Mutex::new(Some(draft)),
         }
     }
 
-    fn open(&self) -> Result<&EffectiveLaunchProfile, CobletError> {
-        self.edits
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .map(|_| &self.snapshot)
-            .ok_or_else(closed)
+    fn with<T>(
+        &self,
+        body: impl FnOnce(&mut DetachedDraft) -> Result<T, CobletError>,
+    ) -> Result<T, CobletError> {
+        let mut guard = self.draft.lock().unwrap_or_else(PoisonError::into_inner);
+        body(guard.as_mut().ok_or_else(closed)?)
     }
 
-    fn push(&self, edit: ProfileEdit) -> Result<(), CobletError> {
-        self.edits
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_mut()
-            .ok_or_else(closed)?
-            .push(edit);
-        Ok(())
-    }
-
-    fn close(&self) -> Vec<ProfileEdit> {
-        self.edits
+    fn close(&self) -> Option<DetachedDraft> {
+        self.draft
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take()
-            .unwrap_or_default()
     }
 }
 
@@ -274,6 +264,10 @@ fn values(args: &[ProfileArg]) -> Vec<String> {
     args.iter().map(|arg| arg.value.clone()).collect()
 }
 
+fn count(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
 #[uniffi::export]
 impl ProfileDraft {
     /// Returns the libraries.
@@ -282,21 +276,23 @@ impl ProfileDraft {
     ///
     /// Fails after `rewrite` returned.
     pub fn libraries(&self) -> Result<Vec<LibraryInfo>, CobletError> {
-        Ok(self
-            .open()?
-            .libraries
-            .iter()
-            .map(|library| LibraryInfo {
-                name: library.name.to_string(),
-                native_key: library.native_key(),
-                has_natives: library.natives != Natives::None,
-                natives_handled_by: match &library.natives {
-                    Natives::Handled { by } => Some(by.to_string()),
-                    _ => None,
-                },
-                active: library.is_active(),
-            })
-            .collect())
+        self.with(|draft| {
+            Ok(draft
+                .profile()
+                .libraries
+                .iter()
+                .map(|library| LibraryInfo {
+                    name: library.name.to_string(),
+                    native_key: library.native_key(),
+                    has_natives: library.natives != Natives::None,
+                    natives_handled_by: match &library.natives {
+                        Natives::Handled { by } => Some(by.to_string()),
+                        _ => None,
+                    },
+                    active: library.is_active(),
+                })
+                .collect())
+        })
     }
 
     /// Returns the JVM arguments.
@@ -305,7 +301,7 @@ impl ProfileDraft {
     ///
     /// Fails after `rewrite` returned.
     pub fn jvm_args(&self) -> Result<Vec<String>, CobletError> {
-        Ok(values(&self.open()?.jvm_args))
+        self.with(|draft| Ok(values(&draft.profile().jvm_args)))
     }
 
     /// Returns the game arguments.
@@ -314,7 +310,7 @@ impl ProfileDraft {
     ///
     /// Fails after `rewrite` returned.
     pub fn game_args(&self) -> Result<Vec<String>, CobletError> {
-        Ok(values(&self.open()?.game_args))
+        self.with(|draft| Ok(values(&draft.profile().game_args)))
     }
 
     /// Returns the Java major version the game needs.
@@ -323,25 +319,35 @@ impl ProfileDraft {
     ///
     /// Fails after `rewrite` returned.
     pub fn java_major(&self) -> Result<u32, CobletError> {
-        Ok(self.open()?.java.major)
+        self.with(|draft| Ok(draft.profile().java.major))
     }
 
     /// Appends a JVM argument unless it is already present.
     ///
     /// # Errors
     ///
-    /// Fails after `rewrite` returned.
+    /// Fails for authentication arguments and after `rewrite` returned.
     pub fn append_jvm_arg(&self, value: String) -> Result<(), CobletError> {
-        self.push(ProfileEdit::AppendJvmArg(ProfileArg::always(value)))
+        self.with(|draft| {
+            draft
+                .draft()
+                .append_jvm_arg(ProfileArg::always(value))
+                .map_err(|error| rejected(&error))
+        })
     }
 
     /// Appends a game argument unless it is already present.
     ///
     /// # Errors
     ///
-    /// Fails after `rewrite` returned.
+    /// Fails for authentication arguments and after `rewrite` returned.
     pub fn append_game_arg(&self, value: String) -> Result<(), CobletError> {
-        self.push(ProfileEdit::AppendGameArg(ProfileArg::always(value)))
+        self.with(|draft| {
+            draft
+                .draft()
+                .append_game_arg(ProfileArg::always(value))
+                .map_err(|error| rejected(&error))
+        })
     }
 
     /// Removes JVM arguments matching a glob pattern, such as `-Xss*`.
@@ -349,17 +355,26 @@ impl ProfileDraft {
     /// # Errors
     ///
     /// Fails after `rewrite` returned.
-    pub fn remove_jvm_args(&self, pattern: String) -> Result<(), CobletError> {
-        self.push(ProfileEdit::RemoveJvmArgs(pattern))
+    pub fn remove_jvm_args(&self, pattern: &str) -> Result<(), CobletError> {
+        self.with(|draft| {
+            draft.draft().remove_jvm_args(pattern);
+            Ok(())
+        })
     }
 
     /// Removes game arguments matching a glob pattern.
     ///
     /// # Errors
     ///
-    /// Fails after `rewrite` returned.
-    pub fn remove_game_args(&self, pattern: String) -> Result<(), CobletError> {
-        self.push(ProfileEdit::RemoveGameArgs(pattern))
+    /// Fails when the pattern matches an authentication argument (nothing
+    /// is removed then) and after `rewrite` returned.
+    pub fn remove_game_args(&self, pattern: &str) -> Result<(), CobletError> {
+        self.with(|draft| {
+            draft
+                .draft()
+                .remove_game_args(pattern)
+                .map_err(|error| rejected(&error))
+        })
     }
 
     /// Sets an environment variable.
@@ -368,7 +383,10 @@ impl ProfileDraft {
     ///
     /// Fails after `rewrite` returned.
     pub fn set_env(&self, name: String, value: String) -> Result<(), CobletError> {
-        self.push(ProfileEdit::SetEnv(name, EnvValue::Set(value)))
+        self.with(|draft| {
+            draft.draft().set_env(name, EnvValue::Set(value));
+            Ok(())
+        })
     }
 
     /// Puts directories in front of a path-list variable, such as `LD_LIBRARY_PATH`.
@@ -377,7 +395,10 @@ impl ProfileDraft {
     ///
     /// Fails after `rewrite` returned.
     pub fn prepend_env_paths(&self, name: String, paths: Vec<String>) -> Result<(), CobletError> {
-        self.push(ProfileEdit::SetEnv(name, EnvValue::PrependPaths(paths)))
+        self.with(|draft| {
+            draft.draft().set_env(name, EnvValue::PrependPaths(paths));
+            Ok(())
+        })
     }
 
     /// Adds a directory with system native libraries.
@@ -386,22 +407,22 @@ impl ProfileDraft {
     ///
     /// Fails for a relative path and after `rewrite` returned.
     pub fn add_native_path(&self, path: String) -> Result<(), CobletError> {
-        self.push(ProfileEdit::AddNativePath(absolute(path)?))
+        let path = absolute(path)?;
+        self.with(|draft| {
+            draft.draft().add_native_path(path);
+            Ok(())
+        })
     }
 
     /// Says where the native code of libraries whose
     /// [`LibraryInfo::native_key`] matches a glob pattern comes from, and
     /// marks it handled so the launch accepts it. The first call that
-    /// matches a library wins.
+    /// matches a library wins. Returns how many libraries changed.
     ///
     /// # Errors
     ///
     /// Fails for a relative system path and after `rewrite` returned.
-    pub fn handle_natives(
-        &self,
-        pattern: String,
-        choice: NativesChoice,
-    ) -> Result<(), CobletError> {
+    pub fn handle_natives(&self, pattern: &str, choice: NativesChoice) -> Result<u32, CobletError> {
         let source = match choice {
             NativesChoice::Artifact => NativesSource::Artifact,
             NativesChoice::NotNeeded => NativesSource::NotNeeded,
@@ -414,7 +435,7 @@ impl ProfileDraft {
                 classifier,
             },
         };
-        self.push(ProfileEdit::HandleNatives { pattern, source })
+        self.with(|draft| Ok(count(draft.draft().handle_natives(pattern, &source))))
     }
 
     /// Adds a library: first when `spec.first` is set, otherwise before the
@@ -433,17 +454,20 @@ impl ProfileDraft {
         } else {
             before
         };
-        let library = Box::new(library(spec)?);
-        self.push(ProfileEdit::AddLibrary { library, before })
+        let library = library(spec)?;
+        self.with(|draft| {
+            draft.draft().add_library(library, before.as_deref());
+            Ok(())
+        })
     }
 
-    /// Removes libraries whose name matches a glob pattern.
+    /// Removes libraries whose name matches a glob pattern; returns how many.
     ///
     /// # Errors
     ///
     /// Fails after `rewrite` returned.
-    pub fn remove_libraries(&self, pattern: String) -> Result<(), CobletError> {
-        self.push(ProfileEdit::RemoveLibraries(pattern))
+    pub fn remove_libraries(&self, pattern: &str) -> Result<u32, CobletError> {
+        self.with(|draft| Ok(count(draft.draft().remove_libraries(pattern))))
     }
 
     /// Sets the Java major version.
@@ -452,7 +476,10 @@ impl ProfileDraft {
     ///
     /// Fails after `rewrite` returned.
     pub fn set_java_major(&self, major: u32) -> Result<(), CobletError> {
-        self.push(ProfileEdit::JavaMajor(major))
+        self.with(|draft| {
+            draft.draft().set_java_major(major);
+            Ok(())
+        })
     }
 
     /// Sets how the Java runtime may be obtained.
@@ -461,10 +488,14 @@ impl ProfileDraft {
     ///
     /// Fails after `rewrite` returned.
     pub fn set_java_source(&self, source: JavaSourceChoice) -> Result<(), CobletError> {
-        self.push(ProfileEdit::JavaSource(match source {
-            JavaSourceChoice::Any => coblet::platform::JavaSource::Any,
-            JavaSourceChoice::SystemOnly => coblet::platform::JavaSource::SystemOnly,
-        }))
+        let source = match source {
+            JavaSourceChoice::Any => JavaSource::Any,
+            JavaSourceChoice::SystemOnly => JavaSource::SystemOnly,
+        };
+        self.with(|draft| {
+            draft.draft().set_java_source(source);
+            Ok(())
+        })
     }
 
     /// Sets the platform key of the Mojang Java runtime, such as `linux`.
@@ -473,7 +504,10 @@ impl ProfileDraft {
     ///
     /// Fails after `rewrite` returned.
     pub fn set_java_runtime(&self, runtime: String) -> Result<(), CobletError> {
-        self.push(ProfileEdit::JavaRuntime(runtime))
+        self.with(|draft| {
+            draft.draft().set_java_runtime(runtime);
+            Ok(())
+        })
     }
 
     /// Sets the architecture the Java runtime must be built for, such as `x86_64`.
@@ -483,7 +517,10 @@ impl ProfileDraft {
     /// Fails for a malformed name and after `rewrite` returned.
     pub fn set_java_arch(&self, arch: &str) -> Result<(), CobletError> {
         let name = ArchName::new(arch).map_err(|error| invalid(error.to_string()))?;
-        self.push(ProfileEdit::JavaArch(Arch::from(name)))
+        self.with(|draft| {
+            draft.draft().set_java_arch(Arch::from(name));
+            Ok(())
+        })
     }
 
     /// Raises a warning shown in the launch report.
@@ -492,7 +529,10 @@ impl ProfileDraft {
     ///
     /// Fails after `rewrite` returned.
     pub fn warn(&self, message: String) -> Result<(), CobletError> {
-        self.push(ProfileEdit::Warn(message))
+        self.with(|draft| {
+            draft.draft().warn(message);
+            Ok(())
+        })
     }
 
     /// Refuses to launch this combination; the launch fails as unsupported
@@ -502,20 +542,19 @@ impl ProfileDraft {
     ///
     /// Fails after `rewrite` returned.
     pub fn refuse(&self, reason: String) -> Result<(), CobletError> {
-        self.push(ProfileEdit::Refuse(reason))
+        self.with(|draft| {
+            draft.draft().refuse(reason);
+            Ok(())
+        })
     }
 }
 
 /// Registers a foreign profile with the Rust profile engine.
-///
-/// `matches` and `rules` cannot fail in Rust, so their errors are kept per
-/// thread (one resolve runs on one thread) and returned from `rewrite`.
 pub(crate) struct ForeignProfile {
     id: ExtensionId,
     display_name: String,
     priority: i32,
     inner: Arc<dyn PlatformProfile>,
-    failures: Mutex<HashMap<ThreadId, String>>,
 }
 
 impl std::fmt::Debug for ForeignProfile {
@@ -535,18 +574,13 @@ impl ForeignProfile {
             display_name: inner.display_name(),
             priority: inner.priority(),
             inner,
-            failures: Mutex::new(HashMap::new()),
         })
     }
 
-    fn failures(&self) -> std::sync::MutexGuard<'_, HashMap<ThreadId, String>> {
-        self.failures.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn failed(&self, message: String) -> ProfileError {
+    fn failed(&self, error: &CobletError) -> ProfileError {
         ProfileError::Failed {
             profile: self.id.clone(),
-            message,
+            message: error.to_string(),
         }
     }
 }
@@ -567,43 +601,40 @@ impl coblet::platform::PlatformProfile for ForeignProfile {
     }
 
     fn matches(&self, target: &Target<'_>) -> bool {
-        let thread = std::thread::current().id();
-        match self.inner.matches(ProfileTarget::from_target(target)) {
-            Ok(matches) => {
-                self.failures().remove(&thread);
-                matches
-            }
-            Err(error) => {
-                // Matching lets `rewrite` report the error.
-                self.failures().insert(thread, error.to_string());
-                true
-            }
-        }
+        self.try_matches(target).unwrap_or(false)
+    }
+
+    fn try_matches(&self, target: &Target<'_>) -> Result<bool, ProfileError> {
+        self.inner
+            .matches(ProfileTarget::from_target(target))
+            .map_err(|error| self.failed(&error))
     }
 
     fn rules(&self, target: &Target<'_>, settings: &mut RuleSettings) {
-        let thread = std::thread::current().id();
-        if self.failures().contains_key(&thread) {
-            return;
-        }
-        match self.inner.rules(ProfileTarget::from_target(target)) {
-            Ok(overrides) => overrides.apply(settings),
-            Err(error) => {
-                self.failures().insert(thread, error.to_string());
-            }
-        }
+        // Only reached by callers that ignore errors; the engine uses try_rules.
+        let _ = self.try_rules(target, settings);
+    }
+
+    fn try_rules(
+        &self,
+        target: &Target<'_>,
+        settings: &mut RuleSettings,
+    ) -> Result<(), ProfileError> {
+        let overrides = self
+            .inner
+            .rules(ProfileTarget::from_target(target))
+            .map_err(|error| self.failed(&error))?;
+        overrides.apply(settings);
+        Ok(())
     }
 
     fn rewrite(&self, draft: &mut Draft<'_>) -> Result<(), ProfileError> {
-        if let Some(message) = self.failures().remove(&std::thread::current().id()) {
-            return Err(self.failed(message));
-        }
-        let foreign = Arc::new(ProfileDraft::new(draft.profile().clone()));
+        let foreign = Arc::new(ProfileDraft::new(draft.detach()));
         let result = self.inner.rewrite(Arc::clone(&foreign));
-        let edits = foreign.close();
-        result.map_err(|error| self.failed(error.to_string()))?;
-        for edit in edits {
-            draft.apply(edit)?;
+        let changed = foreign.close();
+        result.map_err(|error| self.failed(&error))?;
+        if let Some(changed) = changed {
+            draft.attach(changed);
         }
         Ok(())
     }
