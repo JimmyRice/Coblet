@@ -35,8 +35,6 @@ pub enum Arch {
     Riscv64,
     /// Little-endian 64-bit PowerPC.
     Ppc64le,
-    /// 64-bit LoongArch.
-    Loongarch64,
     /// An architecture the engine does not know, kept by name.
     Other(ArchName),
 }
@@ -52,7 +50,6 @@ impl Arch {
             Self::Arm => "arm",
             Self::Riscv64 => "riscv64",
             Self::Ppc64le => "ppc64le",
-            Self::Loongarch64 => "loongarch64",
             Self::Other(name) => name.as_str(),
         }
     }
@@ -68,7 +65,6 @@ impl From<ArchName> for Arch {
             "arm" => Self::Arm,
             "riscv64" => Self::Riscv64,
             "ppc64le" | "powerpc64le" => Self::Ppc64le,
-            "loongarch64" => Self::Loongarch64,
             _ => Self::Other(name),
         }
     }
@@ -114,7 +110,6 @@ mod tests {
             ("i686", Arch::X86),
             ("arm64", Arch::Aarch64),
             ("powerpc64le", Arch::Ppc64le),
-            ("loongarch64", Arch::Loongarch64),
             ("riscv64", Arch::Riscv64),
             ("arm", Arch::Arm),
         ] {
@@ -124,8 +119,10 @@ mod tests {
 
     #[test]
     fn keeps_unknown_architectures() {
-        let sparc: Arch = "sparc64".parse().unwrap();
-        assert_eq!(sparc.as_str(), "sparc64");
-        assert!(matches!(sparc, Arch::Other(_)));
+        for name in ["sparc64", "loongarch64"] {
+            let arch: Arch = name.parse().unwrap();
+            assert_eq!(arch.as_str(), name);
+            assert!(matches!(arch, Arch::Other(_)), "{name}");
+        }
     }
 }
