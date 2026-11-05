@@ -23,7 +23,7 @@
 #include <stdint.h>
 
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 5
+#define COBLET_ABI_VERSION 6
 
 // Result of a call.
 typedef enum CobletStatus {
@@ -339,6 +339,25 @@ enum CobletStatus coblet_builder_set_platform(struct CobletBuilder *builder,
 enum CobletStatus coblet_builder_add_customizer(struct CobletBuilder *builder,
                                                 struct CobletCustomizer customizer,
                                                 struct CobletError **out_err);
+
+// Lets the added customizer `id` add and remove authentication
+// arguments, such as `--accessToken` or `${auth_uuid}`, for example one
+// that points the game at a third-party login server.
+//
+// Customizers cannot do this by default: the launch fails with
+// `COBLET_ERROR_KIND_LAUNCH` when one tries. Grant it only to customizers
+// the launcher trusts with the account; their changes still appear in
+// `coblet_game_report`. A malformed `id`, or one no customizer added with
+// `coblet_builder_add_customizer` has, fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `id` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_allow_auth_changes(struct CobletBuilder *builder,
+                                                    const char *id,
+                                                    struct CobletError **out_err);
 
 // Builds the `Coblet` handle and frees the builder, whether or not it succeeds.
 //

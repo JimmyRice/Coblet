@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use coblet::platform::{DataProfile, PlatformProfile, ProfileEngine, ProfileLayer};
 use coblet::runtime::{Extension, UserAgent};
-use coblet::types::{Platform, PlatformNameError, PlatformTrait};
+use coblet::types::{ExtensionId, Platform, PlatformNameError, PlatformTrait};
 
 use crate::context::Coblet;
 use crate::customize::{CobletCustomizer, ForeignCustomizer};
@@ -19,6 +19,7 @@ pub struct CobletBuilder {
     data_root: String,
     user_agent: UserAgent,
     customizers: Vec<ForeignCustomizer>,
+    auth_grants: Vec<ExtensionId>,
     profiles: Vec<Arc<dyn PlatformProfile>>,
     platform: Option<Platform>,
 }
@@ -92,6 +93,7 @@ pub unsafe extern "C" fn coblet_builder_new(
                 data_root,
                 user_agent,
                 customizers: Vec::new(),
+                auth_grants: Vec::new(),
                 profiles: Vec::new(),
                 platform: None,
             });
@@ -272,6 +274,48 @@ pub unsafe extern "C" fn coblet_builder_add_customizer(
     }
 }
 
+/// Lets the added customizer `id` add and remove authentication
+/// arguments, such as `--accessToken` or `${auth_uuid}`, for example one
+/// that points the game at a third-party login server.
+///
+/// Customizers cannot do this by default: the launch fails with
+/// `COBLET_ERROR_KIND_LAUNCH` when one tries. Grant it only to customizers
+/// the launcher trusts with the account; their changes still appear in
+/// `coblet_game_report`. A malformed `id`, or one no customizer added with
+/// `coblet_builder_add_customizer` has, fails with
+/// `COBLET_STATUS_INVALID_ARGUMENT`.
+///
+/// # Safety
+///
+/// `builder` must be a live builder handle; `id` must be NULL or
+/// NUL-terminated; `out_err` must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_builder_allow_auth_changes(
+    builder: *mut CobletBuilder,
+    id: *const c_char,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let builder = builder_mut(builder)?;
+            let id = ExtensionId::new(text(id, "customizer id")?)
+                .map_err(|error| Failure::argument("customizer id", &error.to_string()))?;
+            if !builder.customizers.iter().any(|known| known.id() == &id) {
+                return Err(Failure::argument(
+                    "customizer id",
+                    &format!("`{id}` was not added; add the customizer first"),
+                ));
+            }
+            if !builder.auth_grants.contains(&id) {
+                builder.auth_grants.push(id);
+            }
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
 /// Builds the `Coblet` handle and frees the builder, whether or not it succeeds.
 ///
 /// On success `*out_coblet` receives a handle to free with `coblet_free`.
@@ -300,6 +344,7 @@ pub unsafe extern "C" fn coblet_builder_build(
                 data_root,
                 user_agent,
                 customizers,
+                auth_grants,
                 profiles,
                 platform,
             } = *builder;
@@ -319,6 +364,9 @@ pub unsafe extern "C" fn coblet_builder_build(
             }
             for customizer in customizers {
                 options = options.customizer(Arc::new(customizer));
+            }
+            for id in auth_grants {
+                options = options.allow_auth_changes(id);
             }
             let inner = runtime.block_on(async { options.build() })?;
             let handle = Box::into_raw(Box::new(Coblet { runtime, inner }));
