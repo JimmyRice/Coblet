@@ -1,7 +1,7 @@
 """Smoke test of the coblet UniFFI bindings: list versions, launch one with a
-Platform Profile and a customizer that each add a JVM property, plus an
-extra step, print their lines of the launch report, stop the game once a log
-message contains a marker.
+TOML Platform Profile, a Python Platform Profile and a customizer that each
+add a JVM property, plus an extra step, print their lines of the launch
+report, stop the game once a log message contains a marker.
 
     cargo build -p coblet-uniffi
     cargo run -p coblet-uniffi --features cli --bin uniffi-bindgen -- \
@@ -23,6 +23,34 @@ id = "coblet-smoke:profile"
 [jvm]
 append = ["-Dcoblet.smoke.profile=applied"]
 """
+
+
+class CodeProfile(coblet.PlatformProfile):
+    """Decides in code; a real one would probe the machine for libraries."""
+
+    def __init__(self) -> None:
+        self.version = ""
+
+    def id(self) -> str:
+        return "coblet-smoke:code-profile"
+
+    def display_name(self) -> str:
+        return "Smoke code profile"
+
+    def priority(self) -> int:
+        return 100
+
+    def matches(self, target: coblet.ProfileTarget) -> bool:
+        self.version = target.game_version
+        return any(c.uid == "net.minecraft" for c in target.components)
+
+    def rules(self, target: coblet.ProfileTarget) -> coblet.RuleOverrides:
+        return coblet.RuleOverrides()
+
+    def rewrite(self, draft: coblet.ProfileDraft) -> None:
+        natives = sum(1 for library in draft.libraries() if library.has_natives)
+        draft.append_jvm_arg(f"-Dcoblet.smoke.code-profile={self.version}")
+        draft.warn(f"smoke profile saw {natives} libraries with natives")
 
 
 class Step(coblet.LaunchStep):
@@ -59,6 +87,7 @@ async def main(data_root: str, version: str, mode: str, marker: str) -> int:
     marker_customizer = Marker()
     builder = coblet.CobletBuilder(data_root, "coblet-uniffi-smoke/0.1")
     builder.add_platform_profile_toml(SMOKE_PROFILE)
+    builder.add_platform_profile(CodeProfile())
     builder.add_customizer(marker_customizer)
     launcher = builder.build()
     print(f"platform: {launcher.platform()}")
