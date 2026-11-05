@@ -238,6 +238,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "coblet-auth"
+version = "0.1.0"
+dependencies = [
+ "coblet-launch-command",
+ "coblet-runtime",
+ "coblet-types",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "coblet-catalog"
 version = "0.1.0"
 dependencies = [
