@@ -109,6 +109,12 @@ pub trait PlatformProfile: Extension {
 
     /// Changes the profile after the rules were evaluated.
     ///
+    /// A profile may not add or remove authentication arguments (see
+    /// [`is_auth_argument`]); moving them is allowed. The engine compares
+    /// the arguments before and after this call, so the rule holds for
+    /// changes made through [`Draft::profile_mut`] too, and the resolve
+    /// fails with [`ProfileError::AuthArgument`] naming this profile.
+    ///
     /// # Errors
     ///
     /// Returns [`ProfileError`] when the change is not allowed, such as
@@ -207,6 +213,11 @@ impl Draft<'_> {
 
     /// Returns the profile for changes the other methods do not cover;
     /// record them with [`Draft::note`].
+    ///
+    /// These changes skip the checks of the other methods. The engine
+    /// still checks the result of [`PlatformProfile::rewrite`]: adding or
+    /// removing an authentication argument here fails the resolve with
+    /// [`ProfileError::AuthArgument`].
     pub fn profile_mut(&mut self) -> &mut EffectiveLaunchProfile {
         self.profile
     }
