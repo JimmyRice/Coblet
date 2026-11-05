@@ -131,6 +131,18 @@ fn bracketed(raw: &str, source: LogSource) -> Option<GameLogLine> {
 
 fn guess_level(text: &str, source: LogSource) -> LogLevel {
     let trimmed = text.trim_start();
+    // java.util.logging prints the level as a prefix, often on stderr.
+    for (prefix, level) in [
+        ("SEVERE:", LogLevel::Error),
+        ("WARNING:", LogLevel::Warn),
+        ("INFO:", LogLevel::Info),
+        ("CONFIG:", LogLevel::Debug),
+        ("FINE:", LogLevel::Debug),
+    ] {
+        if trimmed.starts_with(prefix) {
+            return level;
+        }
+    }
     let exception = trimmed.starts_with("at ")
         || trimmed.starts_with("Caused by:")
         || text.contains("Exception in thread")
@@ -261,6 +273,9 @@ mod tests {
             LogLevel::Error
         );
         assert_eq!(stderr.push("LWJGL Version: 2.9.4")[0].level, LogLevel::Warn);
+        assert_eq!(stderr.push("INFO: Loading sounds")[0].level, LogLevel::Info);
+        assert_eq!(stderr.push("WARNING: no font")[0].level, LogLevel::Warn);
+        assert_eq!(stderr.push("SEVERE: gone")[0].level, LogLevel::Error);
     }
 
     #[test]
