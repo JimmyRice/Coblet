@@ -160,4 +160,10 @@ impl CustomizeCtx {
             .map(|extra| extra.step.name().to_owned())
             .collect()
     }
+
+    pub(crate) fn into_steps(self) -> Vec<ExtraStep> {
+        self.steps
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
 }

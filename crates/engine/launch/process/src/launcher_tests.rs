@@ -260,3 +260,59 @@ async fn steps_can_be_inserted_replaced_and_removed() {
     assert_eq!(command.args().last().unwrap(), "--marked");
     assert!(cx.session.is_none());
 }
+
+struct Agent(coblet_types::ExtensionId);
+
+impl coblet_runtime::Extension for Agent {
+    fn id(&self) -> &coblet_types::ExtensionId {
+        &self.0
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Agent"
+    }
+}
+
+impl crate::LaunchCustomizer for Agent {
+    fn applies_to(&self, _traits: &coblet_mojang::VersionTraits) -> bool {
+        true
+    }
+
+    fn customize(
+        &self,
+        profile: &mut coblet_platform::EffectiveLaunchProfile,
+        ctx: &crate::CustomizeCtx,
+    ) -> Result<(), LaunchError> {
+        profile.main_class = "acme.Wrapper".to_owned();
+        profile.jvm_args.push(coblet_platform::ProfileArg::always(
+            "-javaagent:/opt/fix.jar",
+        ));
+        ctx.add_step_after("pre-launch", Arc::new(Mark));
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn customizer_changes_reach_the_game_command() {
+    let id = coblet_types::ExtensionId::new("coblet-test:agent").unwrap();
+    let mut launcher = Launcher::new();
+    launcher
+        .register_customizer(Arc::new(Agent(id.clone())))
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut cx = context(
+        dir.path(),
+        LaunchAuth::offline(PlayerName::new("Steve").unwrap()),
+    );
+    cx.request = cx.request.with_customizer(id);
+    let session = launcher.launch(cx).await.unwrap();
+    session.wait().await.unwrap();
+    let args = std::fs::read_to_string(dir.path().join("game/args.txt")).unwrap();
+    let args: Vec<&str> = args.lines().collect();
+    let agent = args
+        .iter()
+        .position(|arg| *arg == "-javaagent:/opt/fix.jar");
+    let main = args.iter().position(|arg| *arg == "acme.Wrapper");
+    assert!(agent.is_some() && agent < main, "{args:?}");
+    assert_eq!(args.last(), Some(&"--marked"));
+}

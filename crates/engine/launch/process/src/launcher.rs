@@ -1,20 +1,39 @@
 use std::sync::Arc;
 
-use crate::{GameSession, LaunchContext, LaunchError, LaunchStep, builtin_steps};
+use coblet_runtime::{Registry, RegistryError};
+
+use crate::customize::Placement;
+use crate::{
+    CustomizeCtx, GameSession, LaunchContext, LaunchCustomizer, LaunchError, LaunchStep,
+    builtin_steps, diff,
+};
 
 /// Ordered chain of [`LaunchStep`]s that prepares and starts the game.
 ///
 /// [`Launcher::new`] holds the built-in steps; steps can be inserted,
-/// replaced or removed by name.
+/// replaced or removed by name. Registered [`LaunchCustomizer`]s run before
+/// the first step when the [`LaunchRequest`](crate::LaunchRequest) names
+/// them.
 #[derive(Clone)]
 pub struct Launcher {
     steps: Vec<Arc<dyn LaunchStep>>,
+    customizers: Registry<dyn LaunchCustomizer>,
 }
 
 impl std::fmt::Debug for Launcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list().entries(self.names()).finish()
+        f.debug_struct("Launcher")
+            .field("steps", &self.names())
+            .field("customizers", &self.customizers)
+            .finish()
     }
+}
+
+fn position(steps: &[Arc<dyn LaunchStep>], name: &str) -> Result<usize, LaunchError> {
+    steps
+        .iter()
+        .position(|step| step.name() == name)
+        .ok_or_else(|| LaunchError::UnknownStep(name.to_owned()))
 }
 
 impl Default for Launcher {
@@ -29,13 +48,17 @@ impl Launcher {
     pub fn new() -> Self {
         Self {
             steps: builtin_steps(),
+            customizers: Registry::new(),
         }
     }
 
     /// Creates a launcher with no steps.
     #[must_use]
     pub fn empty() -> Self {
-        Self { steps: Vec::new() }
+        Self {
+            steps: Vec::new(),
+            customizers: Registry::new(),
+        }
     }
 
     /// Returns the step names in order.
@@ -45,10 +68,7 @@ impl Launcher {
     }
 
     fn position(&self, name: &str) -> Result<usize, LaunchError> {
-        self.steps
-            .iter()
-            .position(|step| step.name() == name)
-            .ok_or_else(|| LaunchError::UnknownStep(name.to_owned()))
+        position(&self.steps, name)
     }
 
     /// Appends a step.
@@ -110,14 +130,83 @@ impl Launcher {
         Ok(())
     }
 
-    /// Runs every step on `cx`, stopping at the first failure or cancellation.
+    /// Registers a customizer that launch requests can choose by ID.
     ///
     /// # Errors
     ///
-    /// Returns the failure of the first step that fails, or
-    /// [`LaunchError::Cancelled`].
+    /// Returns [`RegistryError::Duplicate`] when another customizer has the
+    /// same ID; the existing one stays in place.
+    pub fn register_customizer(
+        &mut self,
+        customizer: Arc<dyn LaunchCustomizer>,
+    ) -> Result<(), RegistryError> {
+        self.customizers.register(customizer)
+    }
+
+    /// Returns the registered customizers.
+    #[must_use]
+    pub fn customizers(&self) -> &Registry<dyn LaunchCustomizer> {
+        &self.customizers
+    }
+
+    /// Runs the customizers the request names on the profile, records their
+    /// changes and returns the steps of this launch.
+    fn customize(&self, cx: &mut LaunchContext) -> Result<Vec<Arc<dyn LaunchStep>>, LaunchError> {
+        let chosen = cx
+            .request
+            .customizers
+            .iter()
+            .map(|id| {
+                self.customizers
+                    .get(id)
+                    .cloned()
+                    .ok_or_else(|| LaunchError::UnknownCustomizer(id.clone()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut steps = self.steps.clone();
+        if chosen.is_empty() {
+            return Ok(steps);
+        }
+        let ctx = CustomizeCtx::new(
+            cx.profile.platform.clone(),
+            cx.layout.clone(),
+            cx.profile.traits.clone(),
+        );
+        for customizer in chosen {
+            if !customizer.applies_to(&cx.profile.traits) {
+                tracing::debug!(customizer = %customizer.id(), "customizer does not apply");
+                continue;
+            }
+            tracing::debug!(customizer = %customizer.id(), "running launch customizer");
+            let before = cx.profile.clone();
+            customizer.customize(&mut cx.profile, &ctx)?;
+            diff::record(&before, &mut cx.profile, customizer.id());
+        }
+        for extra in ctx.into_steps() {
+            let index = position(&steps, &extra.anchor)?;
+            let index = match extra.placement {
+                Placement::Before => index,
+                Placement::After => index + 1,
+            };
+            steps.insert(index, extra.step);
+        }
+        Ok(steps)
+    }
+
+    /// Runs the chosen customizers, then every step on `cx`, stopping at the
+    /// first failure or cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::UnknownCustomizer`] when the request names a
+    /// customizer that is not registered, the failure of the first
+    /// customizer or step that fails, or [`LaunchError::Cancelled`].
     pub async fn run(&self, cx: &mut LaunchContext) -> Result<(), LaunchError> {
-        for step in &self.steps {
+        if cx.cancel.is_cancelled() {
+            return Err(LaunchError::Cancelled);
+        }
+        let steps = self.customize(cx)?;
+        for step in &steps {
             if cx.cancel.is_cancelled() {
                 return Err(LaunchError::Cancelled);
             }
@@ -146,3 +235,7 @@ impl Launcher {
 #[cfg(unix)]
 #[path = "launcher_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "customize_tests.rs"]
+mod customize_tests;

@@ -11,6 +11,7 @@
 mod buffer;
 mod convert;
 mod customize;
+mod diff;
 mod error;
 mod files;
 mod launcher;
