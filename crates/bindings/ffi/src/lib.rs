@@ -1,7 +1,8 @@
 //! C ABI for coblet.
 //!
 //! Handles (`Coblet`, `CobletGame`) are opaque pointers created and freed
-//! in pairs; functions return a [`CobletStatus`] and report details through
+//! in pairs; a `CobletBuilder` adds Platform Profiles and launch
+//! customizers before the `Coblet` is built; functions return a [`CobletStatus`] and report details through
 //! an optional `CobletError**`; structured data travels as JSON documents
 //! with a `schema` field. Launch customizers and extra steps are callback
 //! tables (`CobletCustomizer`, `CobletStep`) that edit a launch through a
@@ -9,15 +10,20 @@
 //! `cargo xtask gen-header`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod builder;
 mod context;
 mod customize;
 mod game;
 mod guard;
 mod types;
 
+pub use builder::{
+    CobletBuilder, coblet_builder_add_customizer, coblet_builder_add_platform_profile,
+    coblet_builder_build, coblet_builder_free, coblet_builder_new, coblet_builder_set_platform,
+};
 pub use context::{
-    Coblet, coblet_abi_version, coblet_error_free, coblet_free, coblet_new,
-    coblet_new_with_customizers, coblet_string_free, coblet_versions_json,
+    Coblet, coblet_abi_version, coblet_error_free, coblet_free, coblet_new, coblet_platform_json,
+    coblet_string_free, coblet_versions_json,
 };
 pub use customize::{
     CobletArgKind, CobletCustomizer, CobletProfileEdit, CobletStep, CobletStepFailure,

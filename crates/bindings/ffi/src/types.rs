@@ -1,7 +1,9 @@
 use std::ffi::{CStr, c_char};
 
+use coblet::platform::ProfileError;
+
 /// Version of the C ABI; it grows with every incompatible change.
-pub const COBLET_ABI_VERSION: u32 = 2;
+pub const COBLET_ABI_VERSION: u32 = 3;
 
 /// Result of a call.
 #[repr(C)]
@@ -134,7 +136,9 @@ impl Failure {
 impl From<coblet::Error> for Failure {
     fn from(error: coblet::Error) -> Self {
         let kind = match &error {
-            coblet::Error::Config(_) | coblet::Error::Registry(_) => {
+            coblet::Error::Config(_)
+            | coblet::Error::Registry(_)
+            | coblet::Error::Profile(ProfileError::InvalidProfile { .. }) => {
                 CobletErrorKind::InvalidArgument
             }
             coblet::Error::Transport(_) | coblet::Error::Catalog(_) => CobletErrorKind::Network,

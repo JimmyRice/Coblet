@@ -1,3 +1,5 @@
+use coblet::platform::ProfileError;
+
 /// Category of a [`CobletError`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum ErrorKind {
@@ -51,7 +53,11 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for CobletError {
 impl From<coblet::Error> for CobletError {
     fn from(error: coblet::Error) -> Self {
         let kind = match &error {
-            coblet::Error::Config(_) | coblet::Error::Registry(_) => ErrorKind::InvalidArgument,
+            coblet::Error::Config(_)
+            | coblet::Error::Registry(_)
+            | coblet::Error::Profile(ProfileError::InvalidProfile { .. }) => {
+                ErrorKind::InvalidArgument
+            }
             coblet::Error::Transport(_) | coblet::Error::Catalog(_) => ErrorKind::Network,
             coblet::Error::UnknownVersion(_) => ErrorKind::NotFound,
             coblet::Error::Profile(_) => ErrorKind::Unsupported,

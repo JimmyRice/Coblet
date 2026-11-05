@@ -1,15 +1,12 @@
 use std::ffi::c_char;
-use std::sync::Arc;
 
 use coblet::catalog::Filter;
-use coblet::runtime::UserAgent;
+use coblet::types::{Libc, PlatformTrait};
 use tokio::runtime::Runtime;
 
-use crate::customize::{CobletCustomizer, ForeignCustomizer};
+use crate::builder::{coblet_builder_build, coblet_builder_new};
 use crate::guard::{guard, put};
-use crate::types::{
-    COBLET_ABI_VERSION, CobletError, CobletErrorKind, CobletStatus, CobletString, Failure, text,
-};
+use crate::types::{COBLET_ABI_VERSION, CobletError, CobletStatus, CobletString, Failure};
 
 /// Library handle: the Rust `Coblet` and the runtime its work runs on.
 pub struct Coblet {
@@ -24,12 +21,13 @@ pub extern "C" fn coblet_abi_version() -> u32 {
     COBLET_ABI_VERSION
 }
 
-/// Creates a `Coblet` handle with the default transport.
+/// Creates a `Coblet` handle with the default transport and nothing added.
 ///
 /// `data_root` is the directory for shared game files; `user_agent`
 /// identifies the launcher to web services, such as
-/// `MyLauncher/1.0 (contact@example.com)`. On success `*out_coblet` receives a
-/// handle to free with `coblet_free`.
+/// `MyLauncher/1.0 (contact@example.com)`. On success `*out_coblet`
+/// receives a handle to free with `coblet_free`. Use `coblet_builder_new`
+/// to add Platform Profiles or launch customizers.
 ///
 /// # Safety
 ///
@@ -43,79 +41,55 @@ pub unsafe extern "C" fn coblet_new(
     out_coblet: *mut *mut Coblet,
     out_err: *mut *mut CobletError,
 ) -> CobletStatus {
-    // SAFETY: forwarded from the caller's guarantees; no customizers.
-    unsafe {
-        coblet_new_with_customizers(
-            data_root,
-            user_agent,
-            std::ptr::null(),
-            0,
-            out_coblet,
-            out_err,
-        )
+    let mut builder = std::ptr::null_mut();
+    // SAFETY: forwarded from the caller's guarantees.
+    let status = unsafe { coblet_builder_new(data_root, user_agent, &raw mut builder, out_err) };
+    if status != CobletStatus::Ok {
+        return status;
     }
+    // SAFETY: the builder was just created and is not used afterwards.
+    unsafe { coblet_builder_build(builder, out_coblet, out_err) }
 }
 
-/// Creates a `Coblet` handle with the default transport and `count` launch customizers.
+/// Returns the platform launches are adapted to as JSON, as Platform
+/// Profiles match it: detected from the build target, or set with
+/// `coblet_builder_set_platform`.
 ///
-/// As `coblet_new`; a customizer runs only for launches that name its
-/// ID in `coblet_launch_customized`. The library owns the user data of
-/// every table from this call on, even when it fails, and calls each
-/// `free` once: on failure before returning, otherwise from
-/// `coblet_free`.
+/// The document is `{"schema":1,"os","arch","os_version","libc","traits":[]}`.
+/// On success `*out_json` receives a string to free with `coblet_string_free`.
 ///
 /// # Safety
 ///
-/// As `coblet_new`; `customizers` must point to `count` tables, or be
-/// NULL when `count` is 0, and their callbacks must stay valid until their
-/// `free` runs.
+/// `coblet` must be a live handle; `out_json` must be writable; `out_err`
+/// must be NULL or writable.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn coblet_new_with_customizers(
-    data_root: *const c_char,
-    user_agent: *const c_char,
-    customizers: *const CobletCustomizer,
-    count: usize,
-    out_coblet: *mut *mut Coblet,
+pub unsafe extern "C" fn coblet_platform_json(
+    coblet: *const Coblet,
+    out_json: *mut CobletString,
     out_err: *mut *mut CobletError,
 ) -> CobletStatus {
-    let tables: &[CobletCustomizer] = if customizers.is_null() || count == 0 {
-        &[]
-    } else {
-        // SAFETY: the caller passes `count` tables at `customizers`.
-        unsafe { std::slice::from_raw_parts(customizers, count) }
-    };
-    // Take ownership of every table first, so each `free` runs once even
-    // when a later table or argument is rejected.
-    let adapters: Vec<Result<ForeignCustomizer, Failure>> = tables
-        .iter()
-        // SAFETY: forwarded from the caller's guarantees.
-        .map(|table| unsafe { ForeignCustomizer::new(table) })
-        .collect();
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
-        guard(out_err, move || {
-            let adapters = adapters.into_iter().collect::<Result<Vec<_>, _>>()?;
-            let data_root = text(data_root, "data_root")?;
-            let user_agent = UserAgent::new(text(user_agent, "user_agent")?)
-                .map_err(|error| Failure::argument("user_agent", &error.to_string()))?;
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .thread_name("coblet")
-                .build()
-                .map_err(|error| Failure::new(CobletErrorKind::Other, error.to_string()))?;
-            let mut builder = coblet::Coblet::builder()
-                .data_root(data_root)
-                .user_agent(user_agent);
-            for adapter in adapters {
-                builder = builder.customizer(Arc::new(adapter));
-            }
-            let inner = runtime.block_on(async { builder.build() })?;
-            let handle = Box::into_raw(Box::new(Coblet { runtime, inner }));
-            if let Err(failure) = put(out_coblet, handle, "out_coblet") {
-                drop(Box::from_raw(handle));
-                return Err(failure);
-            }
+        guard(out_err, || {
+            let handle = coblet
+                .as_ref()
+                .ok_or_else(|| Failure::argument("coblet", "is NULL"))?;
+            let platform = handle.inner.platform();
+            let traits: Vec<&str> = platform
+                .traits()
+                .iter()
+                .map(PlatformTrait::as_str)
+                .collect();
+            let json = serde_json::json!({
+                "schema": 1,
+                "os": platform.os().as_str(),
+                "arch": platform.arch().as_str(),
+                "os_version": platform.os_version(),
+                "libc": platform.libc().map(Libc::as_str),
+                "traits": traits,
+            });
+            put(out_json, CobletString::new(&json.to_string()), "out_json")?;
             Ok(CobletStatus::Ok)
         })
     }
@@ -221,7 +195,7 @@ mod tests {
     #[test]
     #[allow(unsafe_code, reason = "calls the C ABI")]
     fn creates_and_frees_an_sdk_and_reports_bad_arguments() {
-        assert_eq!(coblet_abi_version(), 2);
+        assert_eq!(coblet_abi_version(), 3);
         let dir = tempfile::tempdir().unwrap();
         let root = CString::new(dir.path().to_str().unwrap()).unwrap();
         let agent = CString::new("coblet-ffi-test/1.0").unwrap();
