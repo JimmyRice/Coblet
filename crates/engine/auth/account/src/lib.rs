@@ -39,6 +39,8 @@ mod account;
 mod error;
 mod flow;
 mod method;
+#[cfg(feature = "msa")]
+mod msa;
 mod offline;
 mod secrets;
 mod services;
@@ -53,6 +55,10 @@ pub use flow::{AuthFlow, CallbackReceiver, CallbackSender, callback_channel};
 pub use method::{
     AccountUpdate, AuthCtx, AuthMethod, Credentials, Interaction, LoginOptions, Redirect,
     RefreshMode, Refreshed,
+};
+#[cfg(feature = "msa")]
+pub use msa::{
+    DEFAULT_SCOPES, MICROSOFT_METHOD, MicrosoftMethod, MsaClientId, MsaClientIdError, MsaConfig,
 };
 pub use offline::{OFFLINE_METHOD, OfflineMethod};
 pub use secrets::AccountSecrets;

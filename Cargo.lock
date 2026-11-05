@@ -241,11 +241,14 @@ dependencies = [
 name = "coblet-auth"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "coblet-launch-command",
  "coblet-runtime",
  "coblet-types",
+ "getrandom 0.4.3",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "uuid",
