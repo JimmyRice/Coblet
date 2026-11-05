@@ -7,7 +7,9 @@ use coblet_runtime::{
     SystemClock, Transport,
 };
 
-use crate::{Account, AccountState, AuthError, AuthFlow, LaunchSession, PlayerProfile};
+use crate::{
+    Account, AccountSecrets, AccountState, AuthError, AuthFlow, LaunchSession, PlayerProfile,
+};
 
 /// Way of signing in, registered under an [`ExtensionId`](coblet_types::ExtensionId).
 ///
@@ -16,9 +18,10 @@ use crate::{Account, AccountState, AuthError, AuthFlow, LaunchSession, PlayerPro
 /// authlib-injector compatible server, implements this trait and can add the
 /// JVM arguments it needs through [`LaunchSession::jvm_args`].
 ///
-/// Methods never store anything themselves: [`begin`](Self::begin) and
+/// Methods never write account files: [`begin`](Self::begin) and
 /// [`refresh`](Self::refresh) return an [`AccountUpdate`], and the account
-/// store writes the account file and the secrets.
+/// store saves it. A refresh writes rotated secrets through its
+/// [`AccountSecrets`] at once, so they survive a failure later in the refresh.
 pub trait AuthMethod: Extension {
     /// Starts an interactive login.
     ///
@@ -33,13 +36,12 @@ pub trait AuthMethod: Extension {
     /// Returns a session to launch with, renewing tokens when `mode` asks
     /// for it or when they are about to expire.
     ///
-    /// `secrets` holds the secrets saved for the account. The returned
-    /// update replaces them; refresh tokens that rotate must be included.
+    /// `secrets` reads and writes the secrets saved for the account.
     fn refresh<'a>(
         &'a self,
         ctx: &'a AuthCtx,
         account: &'a Account,
-        secrets: &'a Credentials,
+        secrets: &'a AccountSecrets,
         mode: RefreshMode,
     ) -> BoxFuture<'a, Result<Refreshed, AuthError>>;
 }
@@ -280,7 +282,8 @@ pub struct AccountUpdate {
     pub session_expires_at: Option<SystemTime>,
     /// Non-sensitive values to keep, replacing the previous ones.
     pub data: BTreeMap<String, String>,
-    /// Secrets to keep, replacing the previous ones.
+    /// Secrets to save. Names already stored are replaced; other stored
+    /// secrets stay.
     pub secrets: Credentials,
 }
 
@@ -304,15 +307,16 @@ impl AccountUpdate {
         self
     }
 
-    /// Takes the profile, data and expiry of an existing account.
+    /// Takes the profile, state, data and expiry of an existing account,
+    /// without secrets to save.
     #[must_use]
-    pub fn from_account(account: &Account, secrets: Credentials) -> Self {
+    pub fn from_account(account: &Account) -> Self {
         Self {
             profile: account.profile.clone(),
             state: account.state,
             session_expires_at: account.session_expires_at,
             data: account.data.clone(),
-            secrets,
+            secrets: Credentials::new(),
         }
     }
 }

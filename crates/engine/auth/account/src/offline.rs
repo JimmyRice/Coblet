@@ -3,7 +3,7 @@ use coblet_runtime::{AuthPrompt, BoxFuture, Extension};
 use coblet_types::{ExtensionId, PlayerName};
 
 use crate::{
-    Account, AccountState, AccountUpdate, AuthCtx, AuthError, AuthFlow, AuthMethod, Credentials,
+    Account, AccountSecrets, AccountState, AccountUpdate, AuthCtx, AuthError, AuthFlow, AuthMethod,
     LaunchSession, LoginOptions, PlayerProfile, RefreshMode, Refreshed,
 };
 
@@ -75,12 +75,12 @@ impl AuthMethod for OfflineMethod {
         &'a self,
         _ctx: &'a AuthCtx,
         account: &'a Account,
-        secrets: &'a Credentials,
+        _secrets: &'a AccountSecrets,
         _mode: RefreshMode,
     ) -> BoxFuture<'a, Result<Refreshed, AuthError>> {
         Box::pin(async move {
             let name = account.player_name().ok_or(AuthError::NoProfile)?.clone();
-            let update = AccountUpdate::from_account(account, secrets.clone());
+            let update = AccountUpdate::from_account(account);
             Ok(Refreshed::new(
                 update,
                 Some(LaunchSession::new(LaunchAuth::offline(name))),
@@ -94,11 +94,14 @@ mod tests {
     use std::sync::Arc;
 
     use coblet_launch_command::LaunchAuth;
-    use coblet_runtime::{AuthPrompt, BoxFuture, Request, Response, Transport, TransportError};
+    use coblet_runtime::{
+        AuthPrompt, BoxFuture, MemorySecretStore, Request, Response, Transport, TransportError,
+    };
 
     use super::OfflineMethod;
     use crate::{
-        Account, AccountId, AuthCtx, AuthError, AuthMethod, Credentials, LoginOptions, RefreshMode,
+        Account, AccountId, AccountSecrets, AuthCtx, AuthError, AuthMethod, LoginOptions,
+        RefreshMode,
     };
 
     struct NoNetwork;
@@ -123,9 +126,14 @@ mod tests {
         assert_eq!(profile.uuid, "5627dd98e6be3c21b8a8e92344183641");
 
         let mut account = Account::new(AccountId::generate(), method.id.clone());
+        let secrets = AccountSecrets::new(
+            Arc::new(MemorySecretStore::new()),
+            &account.method,
+            &account.id,
+        );
         account.profile = Some(profile);
         let refreshed = method
-            .refresh(&ctx, &account, &Credentials::new(), RefreshMode::Force)
+            .refresh(&ctx, &account, &secrets, RefreshMode::Force)
             .await
             .unwrap();
         let session = refreshed.session.unwrap();

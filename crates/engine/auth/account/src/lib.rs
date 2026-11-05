@@ -40,6 +40,7 @@ mod error;
 mod flow;
 mod method;
 mod offline;
+mod secrets;
 mod session;
 
 pub use account::{
@@ -53,4 +54,5 @@ pub use method::{
     RefreshMode, Refreshed,
 };
 pub use offline::{OFFLINE_METHOD, OfflineMethod};
+pub use secrets::AccountSecrets;
 pub use session::LaunchSession;
