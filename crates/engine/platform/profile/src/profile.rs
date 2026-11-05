@@ -109,6 +109,12 @@ pub trait PlatformProfile: Extension {
 
     /// Changes the profile after the rules were evaluated.
     ///
+    /// A profile may not add or remove authentication arguments (see
+    /// [`is_auth_argument`]); moving them is allowed. The engine compares
+    /// the arguments before and after this call, so the rule holds for
+    /// changes made through [`Draft::profile_mut`] too, and the resolve
+    /// fails with [`ProfileError::AuthArgument`] naming this profile.
+    ///
     /// # Errors
     ///
     /// Returns [`ProfileError`] when the change is not allowed, such as
@@ -151,6 +157,42 @@ pub fn is_auth_argument(value: &str) -> bool {
     AUTH_MARKERS.iter().any(|marker| value.contains(marker))
 }
 
+/// Returns the first authentication argument, per [`is_auth_argument`],
+/// that is in one list and not in the other.
+///
+/// Additions are reported before removals. Moving an argument is not a
+/// change, while changing its condition is.
+///
+/// # Examples
+///
+/// ```
+/// use coblet_platform::{ProfileArg, auth_argument_change};
+///
+/// let before = [ProfileArg::always("--demo"), ProfileArg::always("--accessToken")];
+/// let moved = [ProfileArg::always("--accessToken"), ProfileArg::always("--demo")];
+/// assert_eq!(auth_argument_change(&before, &moved), None);
+/// assert_eq!(
+///     auth_argument_change(&before, &moved[1..]).as_deref(),
+///     Some("--accessToken")
+/// );
+/// ```
+#[must_use]
+pub fn auth_argument_change(before: &[ProfileArg], after: &[ProfileArg]) -> Option<String> {
+    let mut left: Vec<&ProfileArg> = before
+        .iter()
+        .filter(|arg| is_auth_argument(&arg.value))
+        .collect();
+    let mut added = None;
+    for arg in after.iter().filter(|arg| is_auth_argument(&arg.value)) {
+        if let Some(index) = left.iter().position(|known| *known == arg) {
+            left.remove(index);
+        } else if added.is_none() {
+            added = Some(arg.value.clone());
+        }
+    }
+    added.or_else(|| left.first().map(|arg| arg.value.clone()))
+}
+
 /// Profile under construction, handed to [`PlatformProfile::rewrite`].
 ///
 /// Every change made through its methods is recorded for
@@ -171,6 +213,11 @@ impl Draft<'_> {
 
     /// Returns the profile for changes the other methods do not cover;
     /// record them with [`Draft::note`].
+    ///
+    /// These changes skip the checks of the other methods. The engine
+    /// still checks the result of [`PlatformProfile::rewrite`]: adding or
+    /// removing an authentication argument here fails the resolve with
+    /// [`ProfileError::AuthArgument`].
     pub fn profile_mut(&mut self) -> &mut EffectiveLaunchProfile {
         self.profile
     }

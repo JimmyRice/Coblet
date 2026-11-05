@@ -7,7 +7,7 @@ use coblet_types::{Arch, ExtensionId, OsFamily, OsName, Platform};
 use super::ProfileEngine;
 use crate::{
     Change, ChangeSource, Draft, EffectiveLaunchProfile, FileSource, JavaSource, Missing, Natives,
-    PipelineStep, PlatformProfile, ProfileError, ResolvedProfile, Target,
+    PipelineStep, PlatformProfile, ProfileArg, ProfileError, ResolvedProfile, Target,
 };
 
 fn resolved(name: &str) -> ResolvedProfile {
@@ -312,6 +312,105 @@ fn profiles_cannot_touch_authentication_arguments() {
         matches!(error, ProfileError::AuthArgument { .. }),
         "{error}"
     );
+}
+
+/// Code profile that edits the arguments through `Draft::profile_mut`.
+struct Direct(ExtensionId, fn(&mut EffectiveLaunchProfile));
+
+impl Extension for Direct {
+    fn id(&self) -> &ExtensionId {
+        &self.0
+    }
+    fn display_name(&self) -> &'static str {
+        "direct"
+    }
+}
+
+impl PlatformProfile for Direct {
+    fn matches(&self, _target: &Target<'_>) -> bool {
+        true
+    }
+    fn rewrite(&self, draft: &mut Draft<'_>) -> Result<(), ProfileError> {
+        (self.1)(draft.profile_mut());
+        Ok(())
+    }
+}
+
+fn resolve_direct(
+    edit: fn(&mut EffectiveLaunchProfile),
+) -> Result<EffectiveLaunchProfile, ProfileError> {
+    let mut engine = ProfileEngine::builtin();
+    engine
+        .register(Arc::new(Direct(
+            ExtensionId::new("acme:direct").unwrap(),
+            edit,
+        )))
+        .unwrap();
+    engine.resolve(&resolved("1.20.1"), &mac_arm())
+}
+
+fn game(profile: &EffectiveLaunchProfile) -> Vec<&str> {
+    profile
+        .game_args
+        .iter()
+        .map(|arg| arg.value.as_str())
+        .collect()
+}
+
+#[test]
+fn profile_mut_cannot_add_authentication_arguments() {
+    let error = resolve_direct(|profile| {
+        profile
+            .jvm_args
+            .push(ProfileArg::always("-Dleak=${auth_access_token}"));
+    })
+    .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            ProfileError::AuthArgument { profile, argument }
+                if profile.as_str() == "acme:direct"
+                    && argument == "-Dleak=${auth_access_token}"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn profile_mut_cannot_remove_authentication_arguments() {
+    let error = resolve_direct(|profile| {
+        profile
+            .game_args
+            .retain(|arg| arg.value != "${auth_access_token}");
+    })
+    .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            ProfileError::AuthArgument { profile, argument }
+                if profile.as_str() == "acme:direct" && argument == "${auth_access_token}"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn profile_mut_may_reorder_and_change_other_arguments() {
+    let before = resolve("1.20.1", &mac_arm()).unwrap();
+    assert!(jvm(&before).contains(&"-cp"));
+    let after = resolve_direct(|profile| {
+        profile.game_args.reverse();
+        profile
+            .jvm_args
+            .push(ProfileArg::always("-Dacme.tuned=true"));
+        profile.jvm_args.retain(|arg| arg.value != "-cp");
+    })
+    .unwrap();
+    let mut expected = game(&before);
+    expected.reverse();
+    assert_eq!(game(&after), expected);
+    assert!(jvm(&after).contains(&"-Dacme.tuned=true"));
+    assert!(!jvm(&after).contains(&"-cp"));
 }
 
 #[test]

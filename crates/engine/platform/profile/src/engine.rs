@@ -9,7 +9,7 @@ use crate::{
     Change, ChangeSource, Draft, EffectiveLaunchProfile, EffectiveLibrary, FileSource,
     JavaRequirement, JavaSource, LibraryFile, Missing, NativeJar, Natives, PipelineStep,
     PlatformProfile, ProfileArg, ProfileError, ProfileWarning, ResolvedProfile, RuleSettings,
-    Target,
+    Target, auth_argument_change, is_auth_argument,
 };
 
 /// Default Maven repository of Mojang libraries.
@@ -101,7 +101,8 @@ impl ProfileEngine {
     ///
     /// Returns [`ProfileError::Unsupported`] with what is missing when the
     /// platform cannot run the version, [`ProfileError::AuthArgument`]
-    /// when a profile touches an authentication argument, and
+    /// when a profile's rewrite adds or removes an authentication argument,
+    /// by any means, and
     /// [`ProfileError::Failed`] when a matching profile fails in its rules
     /// or rewrite. A profile whose matching fails is skipped with a warning.
     pub fn resolve(
@@ -178,16 +179,34 @@ impl ProfileEngine {
 
         let mut refusals = Vec::new();
         for matched in pipeline.matched.clone() {
+            let jvm_args = auth_args(&effective.jvm_args);
+            let game_args = auth_args(&effective.game_args);
             let mut draft = Draft {
                 profile: &mut effective,
                 source: matched.id().clone(),
                 refusals: &mut refusals,
             };
             matched.rewrite(&mut draft)?;
+            // `Draft::profile_mut` skips the checks of the other methods.
+            if let Some(argument) = auth_argument_change(&jvm_args, &effective.jvm_args)
+                .or_else(|| auth_argument_change(&game_args, &effective.game_args))
+            {
+                return Err(ProfileError::AuthArgument {
+                    profile: matched.id().clone(),
+                    argument,
+                });
+            }
         }
 
         validate(&settings, effective, refusals, native_libraries(profile))
     }
+}
+
+fn auth_args(args: &[ProfileArg]) -> Vec<ProfileArg> {
+    args.iter()
+        .filter(|arg| is_auth_argument(&arg.value))
+        .cloned()
+        .collect()
 }
 
 fn rule_settings(pipeline: &mut Pipeline<'_>) -> Result<RuleSettings, ProfileError> {
