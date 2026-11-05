@@ -36,5 +36,5 @@ pub use effective::{
 pub use engine::{LIBRARIES_URL, ProfileEngine};
 pub use error::{Missing, ProfileError};
 pub use pattern::{compare_versions, glob_matches};
-pub use profile::{Draft, PlatformProfile, ProfileLayer, RuleSettings, Target};
+pub use profile::{Draft, PlatformProfile, ProfileLayer, RuleSettings, Target, is_auth_argument};
 pub use resolved::{ComponentRef, LWJGL2_UID, LWJGL3_UID, MINECRAFT_UID, ResolvedProfile};

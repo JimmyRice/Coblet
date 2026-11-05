@@ -131,7 +131,23 @@ const AUTH_MARKERS: [&str; 8] = [
     "--xuid",
 ];
 
-fn is_auth_argument(value: &str) -> bool {
+/// Tells whether an argument carries account data, such as
+/// `${auth_access_token}` or `--uuid`.
+///
+/// Platform Profiles may not add or remove such arguments, and launch
+/// customizers may do so only when the launcher allows it.
+///
+/// # Examples
+///
+/// ```
+/// use coblet_platform::is_auth_argument;
+///
+/// assert!(is_auth_argument("--accessToken"));
+/// assert!(is_auth_argument("-Dname=${auth_player_name}"));
+/// assert!(!is_auth_argument("--demo"));
+/// ```
+#[must_use]
+pub fn is_auth_argument(value: &str) -> bool {
     AUTH_MARKERS.iter().any(|marker| value.contains(marker))
 }
 
