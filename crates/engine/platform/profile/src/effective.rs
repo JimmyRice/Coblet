@@ -195,6 +195,8 @@ pub enum PipelineStep {
     Rewrite,
     /// Checking the result.
     Validate,
+    /// Changes made by a launch customizer after the pipeline.
+    Customize,
 }
 
 impl fmt::Display for PipelineStep {
@@ -205,6 +207,7 @@ impl fmt::Display for PipelineStep {
             Self::Evaluate => "evaluate",
             Self::Rewrite => "rewrite",
             Self::Validate => "validate",
+            Self::Customize => "customize",
         })
     }
 }
@@ -216,13 +219,15 @@ pub enum ChangeSource {
     Metadata,
     /// A Platform Profile.
     Profile(ExtensionId),
+    /// A launch customizer chosen for this launch.
+    Customizer(ExtensionId),
 }
 
 impl fmt::Display for ChangeSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Metadata => f.write_str("metadata"),
-            Self::Profile(id) => write!(f, "{id}"),
+            Self::Profile(id) | Self::Customizer(id) => write!(f, "{id}"),
         }
     }
 }
@@ -239,6 +244,24 @@ pub struct Change {
     pub subject: String,
     /// What happened.
     pub action: String,
+}
+
+impl Change {
+    /// Creates a change.
+    #[must_use]
+    pub fn new(
+        step: PipelineStep,
+        source: ChangeSource,
+        subject: impl Into<String>,
+        action: impl Into<String>,
+    ) -> Self {
+        Self {
+            step,
+            source,
+            subject: subject.into(),
+            action: action.into(),
+        }
+    }
 }
 
 /// Warning raised by a profile, such as running under Rosetta.
