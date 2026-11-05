@@ -36,6 +36,8 @@
 #![forbid(unsafe_code)]
 
 mod account;
+#[cfg(feature = "encrypted-secrets")]
+mod encrypted;
 mod error;
 mod flow;
 mod method;
@@ -51,6 +53,8 @@ pub use account::{
     Account, AccountId, AccountIdError, AccountState, Cape, PlayerProfile, ProfileUuidError, Skin,
     SkinModel,
 };
+#[cfg(feature = "encrypted-secrets")]
+pub use encrypted::{EncryptedFileStore, EncryptionKey};
 pub use error::AuthError;
 pub use flow::{AuthFlow, CallbackReceiver, CallbackSender, callback_channel};
 pub use method::{

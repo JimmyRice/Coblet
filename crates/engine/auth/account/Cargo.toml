@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 base64 = { workspace = true, optional = true }
+chacha20poly1305 = { workspace = true, optional = true }
 coblet-launch-command.workspace = true
 coblet-runtime.workspace = true
 coblet-types.workspace = true
@@ -19,6 +20,7 @@ sha2 = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 uuid = { workspace = true, features = ["v4"] }
+zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 coblet-runtime = { workspace = true, features = ["fs"] }
@@ -30,6 +32,8 @@ tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
 msa = ["dep:base64", "dep:getrandom", "dep:sha2", "tokio/time", "tokio/macros"]
 # Built-in 127.0.0.1 listener that receives the browser redirect of a PKCE login.
 loopback = ["msa", "tokio/net", "tokio/io-util"]
+# EncryptedFileStore: secrets in one file encrypted with ChaCha20-Poly1305.
+encrypted-secrets = ["dep:chacha20poly1305", "dep:getrandom", "dep:zeroize"]
 
 [lints]
 workspace = true
