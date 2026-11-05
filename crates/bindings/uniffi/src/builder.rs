@@ -1,12 +1,23 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
+use coblet::auth::{EncryptedFileStore, MsaClientId};
 use coblet::platform::{DataProfile, ProfileEngine, ProfileLayer};
 use coblet::runtime::{Extension, UserAgent};
 use coblet::types::{ExtensionId, Platform};
 
 use crate::customize::ForeignCustomizer;
 use crate::profile::ForeignProfile;
-use crate::{Coblet, CobletError, ErrorKind, LaunchCustomizer, PlatformInfo, PlatformProfile};
+use crate::secrets::{ForeignSecrets, encryption_key};
+use crate::{
+    Coblet, CobletError, ErrorKind, LaunchCustomizer, PlatformInfo, PlatformProfile, SecretStore,
+};
+
+/// Where tokens are kept.
+enum Secrets {
+    Memory,
+    Foreign(Arc<dyn SecretStore>),
+    File(String, coblet::auth::EncryptionKey),
+}
 
 struct Settings {
     data_root: String,
@@ -15,10 +26,12 @@ struct Settings {
     auth_grants: Vec<ExtensionId>,
     profiles: Vec<Arc<dyn coblet::platform::PlatformProfile>>,
     platform: Option<Platform>,
+    msa_client_id: Option<MsaClientId>,
+    secrets: Secrets,
 }
 
-/// Settings of a [`Coblet`] before it is built: Platform Profiles and
-/// launch customizers.
+/// Settings of a [`Coblet`] before it is built: Platform Profiles, launch
+/// customizers, the Microsoft Client ID and where tokens are kept.
 ///
 /// [`CobletBuilder::build`] can be called once.
 #[derive(uniffi::Object)]
@@ -91,6 +104,8 @@ impl CobletBuilder {
                 auth_grants: Vec::new(),
                 profiles: Vec::new(),
                 platform: None,
+                msa_client_id: None,
+                secrets: Secrets::Memory,
             })),
         }))
     }
@@ -193,6 +208,52 @@ impl CobletBuilder {
         })
     }
 
+    /// Enables Microsoft login with the launcher's Azure application
+    /// Client ID, which Minecraft services must have approved. Without one,
+    /// `begin_microsoft_login` fails with `Unsupported`.
+    ///
+    /// # Errors
+    ///
+    /// Fails for an empty or malformed ID, and after `build`.
+    pub fn set_msa_client_id(&self, client_id: String) -> Result<(), CobletError> {
+        let client_id = MsaClientId::new(client_id).map_err(|error| invalid(error.to_string()))?;
+        self.with(|settings| {
+            settings.msa_client_id = Some(client_id);
+            Ok(())
+        })
+    }
+
+    /// Keeps refresh tokens and other secrets in a store written in the
+    /// host language, such as the system keychain. Replaces an earlier
+    /// `set_encrypted_secret_file`. Without either, secrets live in memory
+    /// and every Microsoft account needs a new login after a restart.
+    ///
+    /// # Errors
+    ///
+    /// Fails after `build`.
+    pub fn set_secret_store(&self, store: Arc<dyn SecretStore>) -> Result<(), CobletError> {
+        self.with(|settings| {
+            settings.secrets = Secrets::Foreign(store);
+            Ok(())
+        })
+    }
+
+    /// Keeps secrets in one file encrypted with `key`, 32 bytes such as
+    /// from `generate_secret_key`. Keep the key somewhere safer than next to
+    /// the file, such as a system keychain. Replaces an earlier
+    /// `set_secret_store`.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a key that is not 32 bytes, and after `build`.
+    pub fn set_encrypted_secret_file(&self, path: String, key: Vec<u8>) -> Result<(), CobletError> {
+        let key = encryption_key(key)?;
+        self.with(|settings| {
+            settings.secrets = Secrets::File(path, key);
+            Ok(())
+        })
+    }
+
     /// Creates the `Coblet`.
     ///
     /// # Errors
@@ -221,6 +282,20 @@ impl CobletBuilder {
         }
         for id in settings.auth_grants {
             builder = builder.allow_auth_changes(id);
+        }
+        if let Some(client_id) = settings.msa_client_id {
+            builder = builder.msa_client_id(client_id);
+        }
+        match settings.secrets {
+            Secrets::Memory => {}
+            Secrets::Foreign(store) => {
+                builder = builder.secret_store(Arc::new(ForeignSecrets(store)));
+            }
+            Secrets::File(path, key) => {
+                let storage = Arc::new(coblet::runtime::TokioStorage::new());
+                builder =
+                    builder.secret_store(Arc::new(EncryptedFileStore::new(storage, path, key)));
+            }
         }
         Ok(Arc::new(Coblet::from_inner(builder.build()?)))
     }

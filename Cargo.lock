@@ -479,6 +479,7 @@ name = "coblet-uniffi"
 version = "0.1.0"
 dependencies = [
  "coblet",
+ "tempfile",
  "thiserror",
  "tokio",
  "uniffi",
