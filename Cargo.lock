@@ -426,6 +426,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "coblet-player"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "coblet-auth",
+ "coblet-launch-command",
+ "coblet-runtime",
+ "coblet-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "coblet-runtime"
 version = "0.1.0"
 dependencies = [
