@@ -8,6 +8,7 @@ use coblet::types::{Platform, PlatformNameError, PlatformTrait};
 use crate::context::Coblet;
 use crate::customize::{CobletCustomizer, ForeignCustomizer};
 use crate::guard::{guard, put};
+use crate::profile::{CobletPlatformProfile, ForeignProfile};
 use crate::types::{CobletError, CobletErrorKind, CobletStatus, Failure, text};
 
 /// Settings of a `Coblet` handle before it is built.
@@ -27,6 +28,24 @@ impl std::fmt::Debug for CobletBuilder {
         f.debug_struct("CobletBuilder")
             .field("data_root", &self.data_root)
             .finish_non_exhaustive()
+    }
+}
+
+impl CobletBuilder {
+    fn add_profile(&mut self, profile: Arc<dyn PlatformProfile>) -> Result<(), Failure> {
+        let taken = self
+            .profiles
+            .iter()
+            .chain(ProfileEngine::builtin().profiles())
+            .any(|known| known.id() == profile.id());
+        if taken {
+            return Err(Failure::argument(
+                "platform profile",
+                &format!("`{}` is already registered", profile.id()),
+            ));
+        }
+        self.profiles.push(profile);
+        Ok(())
     }
 }
 
@@ -96,7 +115,7 @@ pub unsafe extern "C" fn coblet_builder_new(
 /// NUL-terminated; `out_err` must be NULL or writable.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn coblet_builder_add_platform_profile(
+pub unsafe extern "C" fn coblet_builder_add_platform_profile_toml(
     builder: *mut CobletBuilder,
     toml: *const c_char,
     out_err: *mut *mut CobletError,
@@ -107,21 +126,41 @@ pub unsafe extern "C" fn coblet_builder_add_platform_profile(
             let builder = builder_mut(builder)?;
             let profile = DataProfile::from_toml(text(toml, "toml")?, ProfileLayer::ThirdParty)
                 .map_err(|error| Failure::argument("toml", &error.to_string()))?;
-            let taken = builder
-                .profiles
-                .iter()
-                .chain(ProfileEngine::builtin().profiles())
-                .any(|known| known.id() == profile.id());
-            if taken {
-                return Err(Failure::argument(
-                    "toml",
-                    &format!(
-                        "declares profile `{}`, which is already registered",
-                        profile.id()
-                    ),
-                ));
-            }
-            builder.profiles.push(Arc::new(profile));
+            builder.add_profile(Arc::new(profile))?;
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+/// Adds a Platform Profile written in C, for adaptations that need code,
+/// such as probing the machine.
+///
+/// The library owns the table's user data from this call on, even when it
+/// fails, and calls its `free` once: on failure before returning, otherwise
+/// when the builder or the built `Coblet` is freed. A NULL `matches`, a
+/// malformed ID or one that is already registered fails with
+/// `COBLET_STATUS_INVALID_ARGUMENT`.
+///
+/// # Safety
+///
+/// `builder` must be a live builder handle; strings in the table must be
+/// NULL or NUL-terminated and its callbacks must stay valid until its
+/// `free` runs; `out_err` must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_builder_add_platform_profile(
+    builder: *mut CobletBuilder,
+    profile: CobletPlatformProfile,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees; the adapter owns the
+    // user data from here on.
+    let adapter = unsafe { ForeignProfile::new(&profile) };
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, move || {
+            let builder = builder_mut(builder)?;
+            builder.add_profile(Arc::new(adapter?))?;
             Ok(CobletStatus::Ok)
         })
     }

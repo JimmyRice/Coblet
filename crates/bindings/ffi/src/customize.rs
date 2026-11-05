@@ -90,9 +90,9 @@ enum Placement {
 }
 
 /// `user_data` with its `free` callback, released on drop.
-struct Owned {
-    user_data: *mut c_void,
-    free: Option<unsafe extern "C" fn(*mut c_void)>,
+pub(crate) struct Owned {
+    pub(crate) user_data: *mut c_void,
+    pub(crate) free: Option<unsafe extern "C" fn(*mut c_void)>,
 }
 
 // SAFETY: the callback tables document that `user_data` and the callbacks
@@ -135,7 +135,7 @@ impl std::fmt::Debug for CobletProfileEdit {
     }
 }
 
-fn trait_names(traits: &VersionTraits) -> Vec<&str> {
+pub(crate) fn trait_names(traits: &VersionTraits) -> Vec<&str> {
     traits.iter().map(VersionTrait::as_str).collect()
 }
 
@@ -171,6 +171,54 @@ fn library_path(path: &str) -> Result<&str, Failure> {
             "must be relative, use `/` and stay inside the libraries directory",
         ))
     }
+}
+
+/// Reads a library from C arguments: a Maven coordinate, a path inside the
+/// libraries directory, and an optional URL, SHA-1 (hex) and size (0 for
+/// unknown).
+///
+/// # Safety
+///
+/// Strings must be NULL or NUL-terminated.
+#[allow(unsafe_code, reason = "reads C string arguments")]
+pub(crate) unsafe fn c_library(
+    name: *const c_char,
+    path: *const c_char,
+    url: *const c_char,
+    sha1: *const c_char,
+    size: u64,
+) -> Result<EffectiveLibrary, Failure> {
+    // SAFETY: forwarded from the caller's guarantee.
+    let (name, path, url, sha1) = unsafe {
+        (
+            text(name, "name")?,
+            text(path, "path")?,
+            crate::types::optional_text(url, "url")?,
+            crate::types::optional_text(sha1, "sha1")?,
+        )
+    };
+    let name: MavenCoordinate =
+        name.parse()
+            .map_err(|error: coblet::types::MavenCoordinateError| {
+                Failure::argument("name", &error.to_string())
+            })?;
+    let path = library_path(path)?;
+    let sha1 = sha1
+        .map(Sha1Digest::from_hex)
+        .transpose()
+        .map_err(|error| Failure::argument("sha1", &error.to_string()))?;
+    let source = match url {
+        Some(url) => FileSource::Download {
+            url: url.to_owned(),
+            sha1,
+            size: (size > 0).then_some(size),
+        },
+        None => FileSource::Existing,
+    };
+    Ok(EffectiveLibrary::new(
+        name,
+        Some(LibraryFile::new(path, source)),
+    ))
 }
 
 /// Reads the edit handle of a callback.
@@ -347,25 +395,7 @@ pub unsafe extern "C" fn coblet_edit_add_library(
     unsafe {
         guard(out_err, || {
             let edit = edit_mut(edit)?;
-            let name: MavenCoordinate = text(name, "name")?.parse().map_err(
-                |error: coblet::types::MavenCoordinateError| {
-                    Failure::argument("name", &error.to_string())
-                },
-            )?;
-            let path = library_path(text(path, "path")?)?;
-            let sha1 = crate::types::optional_text(sha1, "sha1")?
-                .map(Sha1Digest::from_hex)
-                .transpose()
-                .map_err(|error| Failure::argument("sha1", &error.to_string()))?;
-            let source = match crate::types::optional_text(url, "url")? {
-                Some(url) => FileSource::Download {
-                    url: url.to_owned(),
-                    sha1,
-                    size: (size > 0).then_some(size),
-                },
-                None => FileSource::Existing,
-            };
-            let library = EffectiveLibrary::new(name, Some(LibraryFile::new(path, source)));
+            let library = c_library(name, path, url, sha1, size)?;
             if first {
                 edit.profile.libraries.insert(0, library);
             } else {
@@ -640,7 +670,7 @@ impl Extension for ForeignCustomizer {
     }
 }
 
-fn c_text(value: &str) -> CString {
+pub(crate) fn c_text(value: &str) -> CString {
     CString::new(value.replace('\0', "\u{fffd}")).unwrap_or_default()
 }
 

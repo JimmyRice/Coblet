@@ -23,7 +23,7 @@
 #include <stdint.h>
 
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 3
+#define COBLET_ABI_VERSION 4
 
 // Result of a call.
 typedef enum CobletStatus {
@@ -75,6 +75,40 @@ typedef enum CobletLaunchMode {
   COBLET_LAUNCH_MODE_DEMO = 1,
 } CobletLaunchMode;
 
+// Rule setting a `coblet_rules_set` call changes; the names match the
+// `[rules]` table of TOML profiles.
+typedef enum CobletRule {
+  // Mojang OS name to evaluate as: `windows`, `osx` or `linux`.
+  COBLET_RULE_MOJANG_OS = 0,
+  // Architecture string to evaluate as.
+  COBLET_RULE_MOJANG_ARCH = 1,
+  // OS version to evaluate as.
+  COBLET_RULE_OS_VERSION = 2,
+  // Value of `${arch}` in legacy native classifiers (`32` or `64`).
+  COBLET_RULE_NATIVES_ARCH = 3,
+} CobletRule;
+
+// Where the native code of libraries comes from, for `coblet_draft_handle_natives`.
+typedef enum CobletNatives {
+  // Keep the natives Mojang's rules selected and vouch for them.
+  COBLET_NATIVES_ARTIFACT = 0,
+  // The natives are not needed on this platform.
+  COBLET_NATIVES_NOT_NEEDED = 1,
+  // Installed on the system; `location` is the absolute directory.
+  COBLET_NATIVES_SYSTEM = 2,
+  // The same library with the classifier `classifier` from the Maven
+  // repository at `location`.
+  COBLET_NATIVES_MAVEN = 3,
+} CobletNatives;
+
+// How the Java runtime may be obtained.
+typedef enum CobletJavaSource {
+  // An installed Java or, failing that, a Mojang runtime.
+  COBLET_JAVA_SOURCE_ANY = 0,
+  // Only an installed Java; nothing is downloaded.
+  COBLET_JAVA_SOURCE_SYSTEM_ONLY = 1,
+} CobletJavaSource;
+
 // Library handle: the Rust `Coblet` and the runtime its work runs on.
 typedef struct Coblet Coblet;
 
@@ -87,9 +121,21 @@ typedef struct CobletBuilder CobletBuilder;
 // Running game handle.
 typedef struct CobletGame CobletGame;
 
+// Profile under construction, handed to the `rewrite` callback.
+//
+// `coblet_draft_info_json` shows the profile as it was when `rewrite`
+// started. Changes are applied in order after `rewrite` returns true,
+// with the same checks and launch report lines as TOML profiles; a
+// change that is not allowed, such as touching an authentication
+// argument, stops the launch.
+typedef struct CobletProfileDraft CobletProfileDraft;
+
 // Launch profile being edited by a C customizer; valid only during its
 // `customize` callback.
 typedef struct CobletProfileEdit CobletProfileEdit;
+
+// Rule settings being changed by the `rules` callback.
+typedef struct CobletRules CobletRules;
 
 // Reason a step failed, given with `coblet_step_fail`.
 typedef struct CobletStepFailure CobletStepFailure;
@@ -110,6 +156,42 @@ typedef struct CobletError {
   // Human-readable message.
   struct CobletString message;
 } CobletError;
+
+// Callback table of a Platform Profile written in C.
+//
+// It adapts launches to a group of platforms, as TOML profiles do, but
+// decides in code. The library copies `id` and `display_name` and owns
+// `user_data` from the call that receives the table, even when that call
+// fails; it calls `free` once when it no longer needs it. Callbacks may
+// run on any thread, one launch at a time per thread.
+typedef struct CobletPlatformProfile {
+  // ID such as `acme:haiku`.
+  const char *id;
+  // Name shown to users; may be NULL.
+  const char *display_name;
+  // Order among third-party profiles; lower values apply first, and
+  // TOML profiles default to 100.
+  int32_t priority;
+  // Passed to every callback.
+  void *user_data;
+  // Reports whether the profile applies. `target_json` is
+  // `{"schema":1,"platform":{"os","arch","os_version","libc","traits":[]},
+  // "game_version","version_type","release_time","components":[{"uid","version"}],
+  // "legacy_arguments","traits":[]}`, with `null` for unknown values.
+  // To fail, return true and fail in `rewrite`.
+  bool (*matches)(void *user_data, const char *target_json);
+  // Says how Mojang's rules are evaluated through `rules`, which is
+  // valid only during the call; called only when the profile matches.
+  // May be NULL.
+  void (*rules)(void *user_data, const char *target_json, struct CobletRules *rules);
+  // Changes the profile through `draft`, which is valid only during the
+  // call; called only when the profile matches. Returning false stops
+  // the launch; call `coblet_draft_fail` first to give the reason. May
+  // be NULL.
+  bool (*rewrite)(void *user_data, struct CobletProfileDraft *draft);
+  // Releases `user_data`; may be NULL.
+  void (*free)(void *user_data);
+} CobletPlatformProfile;
 
 // Callback table of a launch customizer written in C.
 //
@@ -199,8 +281,26 @@ enum CobletStatus coblet_builder_new(const char *data_root,
 //
 // `builder` must be a live builder handle; `toml` must be NULL or
 // NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_platform_profile_toml(struct CobletBuilder *builder,
+                                                           const char *toml,
+                                                           struct CobletError **out_err);
+
+// Adds a Platform Profile written in C, for adaptations that need code,
+// such as probing the machine.
+//
+// The library owns the table's user data from this call on, even when it
+// fails, and calls its `free` once: on failure before returning, otherwise
+// when the builder or the built `Coblet` is freed. A NULL `matches`, a
+// malformed ID or one that is already registered fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; strings in the table must be
+// NULL or NUL-terminated and its callbacks must stay valid until its
+// `free` runs; `out_err` must be NULL or writable.
 enum CobletStatus coblet_builder_add_platform_profile(struct CobletBuilder *builder,
-                                                      const char *toml,
+                                                      struct CobletPlatformProfile profile,
                                                       struct CobletError **out_err);
 
 // Describes the platform instead of detecting it from the build target,
@@ -554,6 +654,219 @@ enum CobletStatus coblet_game_wait(struct CobletGame *game,
 //
 // `game` must be NULL or a handle from `coblet_launch` that is not used afterwards.
 void coblet_game_free(struct CobletGame *game);
+
+// Sets a rule setting; NULL `value` clears what earlier profiles set.
+//
+// # Safety
+//
+// `rules` must be the handle of the running `rules` callback; `value`
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_rules_set(struct CobletRules *rules,
+                                   enum CobletRule rule,
+                                   const char *value,
+                                   struct CobletError **out_err);
+
+// Says whether the native code Mojang's rules select runs on this platform.
+//
+// # Safety
+//
+// `rules` must be the handle of the running `rules` callback; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_rules_set_native(struct CobletRules *rules,
+                                          bool native,
+                                          struct CobletError **out_err);
+
+// Returns the profile as `rewrite` started with it, as JSON.
+//
+// The document is `{"schema":1,"game_version","libraries":[{"name",
+// "native_key","has_natives","natives_handled_by","active"}],
+// "jvm_args":[],"game_args":[],"java_major"}`. `native_key` is what
+// `coblet_draft_handle_natives` patterns match. On success `*out_json`
+// receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback;
+// `out_json` must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_draft_info_json(struct CobletProfileDraft *draft,
+                                         struct CobletString *out_json,
+                                         struct CobletError **out_err);
+
+// Appends a JVM or game argument unless it is already present.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; `value`
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_draft_append_arg(struct CobletProfileDraft *draft,
+                                          enum CobletArgKind kind,
+                                          const char *value,
+                                          struct CobletError **out_err);
+
+// Removes JVM or game arguments matching a glob pattern, such as `-Xss*`.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; `pattern`
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_draft_remove_args(struct CobletProfileDraft *draft,
+                                           enum CobletArgKind kind,
+                                           const char *pattern,
+                                           struct CobletError **out_err);
+
+// Sets an environment variable.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; strings
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_draft_set_env(struct CobletProfileDraft *draft,
+                                       const char *name,
+                                       const char *value,
+                                       struct CobletError **out_err);
+
+// Puts `count` directories in front of a path-list variable, such as
+// `LD_LIBRARY_PATH`.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; `name`
+// must be NULL or NUL-terminated; `paths` must point to `count`
+// NUL-terminated strings (or be NULL when `count` is 0); `out_err` must
+// be NULL or writable.
+enum CobletStatus coblet_draft_prepend_env_paths(struct CobletProfileDraft *draft,
+                                                 const char *name,
+                                                 const char *const *paths,
+                                                 size_t count,
+                                                 struct CobletError **out_err);
+
+// Adds an absolute directory with system native libraries.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; `path`
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_draft_add_native_path(struct CobletProfileDraft *draft,
+                                               const char *path,
+                                               struct CobletError **out_err);
+
+// Says where the native code of libraries whose `native_key` matches a
+// glob pattern comes from, and marks it handled so the launch accepts it.
+// The first call that matches a library wins.
+//
+// `location` is the directory for `COBLET_NATIVES_SYSTEM` and the
+// repository URL for `COBLET_NATIVES_MAVEN`; `classifier` is used only
+// for Maven. Both may be NULL otherwise.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; strings
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_draft_handle_natives(struct CobletProfileDraft *draft,
+                                              const char *pattern,
+                                              enum CobletNatives natives,
+                                              const char *location,
+                                              const char *classifier,
+                                              struct CobletError **out_err);
+
+// Adds a library before the first one whose name matches the glob
+// `before` (`"*"` puts it first), or last when `before` is NULL.
+//
+// `name` is a Maven coordinate; `path` is inside the libraries directory,
+// with `/` separators. Without `url` the file must already be there.
+// `sha1` (hex) may be NULL; `size` 0 means unknown.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; strings
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_draft_add_library(struct CobletProfileDraft *draft,
+                                           const char *name,
+                                           const char *path,
+                                           const char *url,
+                                           const char *sha1,
+                                           uint64_t size,
+                                           const char *before,
+                                           struct CobletError **out_err);
+
+// Removes libraries whose name matches a glob pattern.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; `pattern`
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_draft_remove_libraries(struct CobletProfileDraft *draft,
+                                                const char *pattern,
+                                                struct CobletError **out_err);
+
+// Sets the Java major version.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_draft_set_java_major(struct CobletProfileDraft *draft,
+                                              uint32_t major,
+                                              struct CobletError **out_err);
+
+// Sets how the Java runtime may be obtained.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_draft_set_java_source(struct CobletProfileDraft *draft,
+                                               enum CobletJavaSource source,
+                                               struct CobletError **out_err);
+
+// Sets the platform key of the Mojang Java runtime, such as `linux`.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; `runtime`
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_draft_set_java_runtime(struct CobletProfileDraft *draft,
+                                                const char *runtime,
+                                                struct CobletError **out_err);
+
+// Sets the architecture the Java runtime must be built for, such as `x86_64`.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; `arch`
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_draft_set_java_arch(struct CobletProfileDraft *draft,
+                                             const char *arch,
+                                             struct CobletError **out_err);
+
+// Raises a warning shown in the launch report.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; `message`
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_draft_warn(struct CobletProfileDraft *draft,
+                                    const char *message,
+                                    struct CobletError **out_err);
+
+// Refuses to launch this combination; the launch fails as unsupported
+// with this reason.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; `reason`
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_draft_refuse(struct CobletProfileDraft *draft,
+                                      const char *reason,
+                                      struct CobletError **out_err);
+
+// Gives the reason the running `rewrite` callback is about to return false.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; `message`
+// must be NULL or NUL-terminated.
+enum CobletStatus coblet_draft_fail(struct CobletProfileDraft *draft, const char *message);
 
 #ifdef __cplusplus
 }  // extern "C"
