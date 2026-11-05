@@ -60,6 +60,7 @@ impl From<coblet::Error> for CobletError {
             }
             coblet::Error::Transport(_) | coblet::Error::Catalog(_) => ErrorKind::Network,
             coblet::Error::UnknownVersion(_) => ErrorKind::NotFound,
+            coblet::Error::Profile(ProfileError::Failed { .. }) => ErrorKind::Other,
             coblet::Error::Profile(_) => ErrorKind::Unsupported,
             coblet::Error::Launch(_) => ErrorKind::Launch,
             _ => ErrorKind::Other,

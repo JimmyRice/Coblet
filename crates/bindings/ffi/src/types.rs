@@ -3,7 +3,7 @@ use std::ffi::{CStr, c_char};
 use coblet::platform::ProfileError;
 
 /// Version of the C ABI; it grows with every incompatible change.
-pub const COBLET_ABI_VERSION: u32 = 3;
+pub const COBLET_ABI_VERSION: u32 = 4;
 
 /// Result of a call.
 #[repr(C)]
@@ -143,6 +143,7 @@ impl From<coblet::Error> for Failure {
             }
             coblet::Error::Transport(_) | coblet::Error::Catalog(_) => CobletErrorKind::Network,
             coblet::Error::UnknownVersion(_) => CobletErrorKind::NotFound,
+            coblet::Error::Profile(ProfileError::Failed { .. }) => CobletErrorKind::Other,
             coblet::Error::Profile(_) => CobletErrorKind::Unsupported,
             coblet::Error::Launch(_) => CobletErrorKind::Launch,
             _ => CobletErrorKind::Other,

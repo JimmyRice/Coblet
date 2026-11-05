@@ -1,18 +1,18 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
-use coblet::platform::{DataProfile, PlatformProfile, ProfileEngine, ProfileLayer};
+use coblet::platform::{DataProfile, ProfileEngine, ProfileLayer};
 use coblet::runtime::{Extension, UserAgent};
-
-use crate::customize::ForeignCustomizer;
 use coblet::types::Platform;
 
-use crate::{Coblet, CobletError, ErrorKind, LaunchCustomizer, PlatformInfo};
+use crate::customize::ForeignCustomizer;
+use crate::profile::ForeignProfile;
+use crate::{Coblet, CobletError, ErrorKind, LaunchCustomizer, PlatformInfo, PlatformProfile};
 
 struct Settings {
     data_root: String,
     user_agent: UserAgent,
     customizers: Vec<ForeignCustomizer>,
-    profiles: Vec<Arc<dyn PlatformProfile>>,
+    profiles: Vec<Arc<dyn coblet::platform::PlatformProfile>>,
     platform: Option<Platform>,
 }
 
@@ -36,6 +36,27 @@ fn invalid(message: impl Into<String>) -> CobletError {
 }
 
 impl CobletBuilder {
+    fn add_profile(
+        &self,
+        profile: Arc<dyn coblet::platform::PlatformProfile>,
+    ) -> Result<(), CobletError> {
+        self.with(|settings| {
+            let taken = settings
+                .profiles
+                .iter()
+                .chain(ProfileEngine::builtin().profiles())
+                .any(|known| known.id() == profile.id());
+            if taken {
+                return Err(invalid(format!(
+                    "platform profile `{}` is already registered",
+                    profile.id()
+                )));
+            }
+            settings.profiles.push(profile);
+            Ok(())
+        })
+    }
+
     fn with<T>(
         &self,
         body: impl FnOnce(&mut Settings) -> Result<T, CobletError>,
@@ -82,24 +103,24 @@ impl CobletBuilder {
     ///
     /// Fails for a malformed profile, an `id` that is already registered,
     /// and after `build`.
-    pub fn add_platform_profile(&self, toml: &str) -> Result<(), CobletError> {
+    pub fn add_platform_profile_toml(&self, toml: &str) -> Result<(), CobletError> {
         let profile = DataProfile::from_toml(toml, ProfileLayer::ThirdParty)
             .map_err(|error| invalid(error.to_string()))?;
-        self.with(|settings| {
-            let taken = settings
-                .profiles
-                .iter()
-                .chain(ProfileEngine::builtin().profiles())
-                .any(|known| known.id() == profile.id());
-            if taken {
-                return Err(invalid(format!(
-                    "platform profile `{}` is already registered",
-                    profile.id()
-                )));
-            }
-            settings.profiles.push(Arc::new(profile));
-            Ok(())
-        })
+        self.add_profile(Arc::new(profile))
+    }
+
+    /// Adds a Platform Profile written in this language, for adaptations
+    /// that need code, such as probing the machine.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID, an ID that is already registered, and
+    /// after `build`.
+    pub fn add_platform_profile(
+        &self,
+        profile: Arc<dyn PlatformProfile>,
+    ) -> Result<(), CobletError> {
+        self.add_profile(Arc::new(ForeignProfile::new(profile)?))
     }
 
     /// Describes the platform instead of detecting it from the build target,

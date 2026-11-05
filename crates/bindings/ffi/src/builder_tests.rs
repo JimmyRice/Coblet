@@ -3,7 +3,7 @@
 use std::ffi::{CStr, CString};
 
 use super::{
-    coblet_builder_add_platform_profile, coblet_builder_build, coblet_builder_free,
+    coblet_builder_add_platform_profile_toml, coblet_builder_build, coblet_builder_free,
     coblet_builder_new, coblet_builder_set_platform,
 };
 use crate::context::{coblet_error_free, coblet_free, coblet_platform_json, coblet_string_free};
@@ -35,7 +35,7 @@ fn add(builder: *mut super::CobletBuilder, toml: &str) -> (CobletStatus, Option<
     let mut err = std::ptr::null_mut();
     // SAFETY: a live builder, a valid string and out-pointer.
     let status =
-        unsafe { coblet_builder_add_platform_profile(builder, toml.as_ptr(), &raw mut err) };
+        unsafe { coblet_builder_add_platform_profile_toml(builder, toml.as_ptr(), &raw mut err) };
     let message = (!err.is_null()).then(|| {
         // SAFETY: the error was just returned and is freed once.
         unsafe {

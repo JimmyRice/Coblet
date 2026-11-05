@@ -1,7 +1,7 @@
 use std::ffi::c_char;
 
 use coblet::catalog::Filter;
-use coblet::types::{Libc, PlatformTrait};
+use coblet::types::{Libc, Platform, PlatformTrait};
 use tokio::runtime::Runtime;
 
 use crate::builder::{coblet_builder_build, coblet_builder_new};
@@ -51,6 +51,22 @@ pub unsafe extern "C" fn coblet_new(
     unsafe { coblet_builder_build(builder, out_coblet, out_err) }
 }
 
+/// Describes a platform as `{"os","arch","os_version","libc","traits":[]}`.
+pub(crate) fn platform_value(platform: &Platform) -> serde_json::Value {
+    let traits: Vec<&str> = platform
+        .traits()
+        .iter()
+        .map(PlatformTrait::as_str)
+        .collect();
+    serde_json::json!({
+        "os": platform.os().as_str(),
+        "arch": platform.arch().as_str(),
+        "os_version": platform.os_version(),
+        "libc": platform.libc().map(Libc::as_str),
+        "traits": traits,
+    })
+}
+
 /// Returns the platform launches are adapted to as JSON, as Platform
 /// Profiles match it: detected from the build target, or set with
 /// `coblet_builder_set_platform`.
@@ -75,20 +91,10 @@ pub unsafe extern "C" fn coblet_platform_json(
             let handle = coblet
                 .as_ref()
                 .ok_or_else(|| Failure::argument("coblet", "is NULL"))?;
-            let platform = handle.inner.platform();
-            let traits: Vec<&str> = platform
-                .traits()
-                .iter()
-                .map(PlatformTrait::as_str)
-                .collect();
-            let json = serde_json::json!({
-                "schema": 1,
-                "os": platform.os().as_str(),
-                "arch": platform.arch().as_str(),
-                "os_version": platform.os_version(),
-                "libc": platform.libc().map(Libc::as_str),
-                "traits": traits,
-            });
+            let mut json = platform_value(handle.inner.platform());
+            if let Some(map) = json.as_object_mut() {
+                map.insert("schema".into(), 1.into());
+            }
             put(out_json, CobletString::new(&json.to_string()), "out_json")?;
             Ok(CobletStatus::Ok)
         })
@@ -195,7 +201,7 @@ mod tests {
     #[test]
     #[allow(unsafe_code, reason = "calls the C ABI")]
     fn creates_and_frees_an_sdk_and_reports_bad_arguments() {
-        assert_eq!(coblet_abi_version(), 3);
+        assert_eq!(coblet_abi_version(), 4);
         let dir = tempfile::tempdir().unwrap();
         let root = CString::new(dir.path().to_str().unwrap()).unwrap();
         let agent = CString::new("coblet-ffi-test/1.0").unwrap();

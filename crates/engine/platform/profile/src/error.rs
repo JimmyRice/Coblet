@@ -62,6 +62,15 @@ pub enum ProfileError {
         /// The parser's description.
         message: String,
     },
+    /// A profile failed, such as one written in another language that
+    /// raised an error.
+    #[error("platform profile {profile} failed: {message}")]
+    Failed {
+        /// The profile.
+        profile: ExtensionId,
+        /// What went wrong.
+        message: String,
+    },
     /// A profile tried to change an authentication argument.
     #[error("profile {profile} may not change authentication argument `{argument}`")]
     AuthArgument {

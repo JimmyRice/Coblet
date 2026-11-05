@@ -18,6 +18,7 @@
 
 mod builtin;
 mod data;
+mod edit;
 mod effective;
 mod engine;
 mod error;
@@ -26,6 +27,7 @@ mod profile;
 mod resolved;
 
 pub use data::DataProfile;
+pub use edit::{NativesSource, ProfileEdit};
 pub use effective::{
     Change, ChangeSource, EffectiveLaunchProfile, EffectiveLibrary, EnvValue, FileSource,
     JavaRequirement, JavaSource, LibraryFile, NativeJar, Natives, PipelineStep, ProfileArg,

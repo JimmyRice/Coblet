@@ -1,8 +1,8 @@
 /*
- * Smoke test of the coblet C ABI: list versions, launch one with a
- * Platform Profile and a customizer that each add a JVM property, plus an
- * extra step, print their lines of the launch report, stop the game once
- * a log message contains a marker.
+ * Smoke test of the coblet C ABI: list versions, launch one with a TOML
+ * Platform Profile, a C Platform Profile and a customizer that each add a
+ * JVM property, plus an extra step, print their lines of the launch
+ * report, stop the game once a log message contains a marker.
  *
  *   cc -I include examples/smoke.c -L <target dir> -lcoblet_ffi -o smoke
  *   ./smoke <data root> <version> <offline|demo> <marker>
@@ -16,6 +16,22 @@
 static const char *SMOKE_PROFILE = "id = \"coblet-smoke:profile\"\n"
                                    "[jvm]\n"
                                    "append = [\"-Dcoblet.smoke.profile=applied\"]\n";
+
+/* Decides in code; a real one would probe the machine for libraries. */
+static bool profile_matches(void *user_data, const char *target_json) {
+    (void)user_data;
+    return strstr(target_json, "\"uid\":\"net.minecraft\"") != NULL;
+}
+
+static bool profile_rewrite(void *user_data, CobletProfileDraft *draft) {
+    (void)user_data;
+    if (coblet_draft_append_arg(draft, COBLET_ARG_KIND_JVM, "-Dcoblet.smoke.code-profile=applied",
+                                NULL) != COBLET_STATUS_OK) {
+        coblet_draft_fail(draft, "cannot add the jvm argument");
+        return false;
+    }
+    return coblet_draft_warn(draft, "smoke profile written in C", NULL) == COBLET_STATUS_OK;
+}
 
 static bool step_ran = false;
 
@@ -56,7 +72,12 @@ int main(int argc, char **argv) {
     if (coblet_builder_new(argv[1], "coblet-ffi-smoke/0.1", &builder, &err) != COBLET_STATUS_OK) {
         return fail("coblet_builder_new", err);
     }
-    if (coblet_builder_add_platform_profile(builder, SMOKE_PROFILE, &err) != COBLET_STATUS_OK) {
+    if (coblet_builder_add_platform_profile_toml(builder, SMOKE_PROFILE, &err) != COBLET_STATUS_OK) {
+        return fail("coblet_builder_add_platform_profile_toml", err);
+    }
+    CobletPlatformProfile code_profile = {"coblet-smoke:code-profile", "Smoke code profile", 100, NULL,
+                                          profile_matches, NULL, profile_rewrite, NULL};
+    if (coblet_builder_add_platform_profile(builder, code_profile, &err) != COBLET_STATUS_OK) {
         return fail("coblet_builder_add_platform_profile", err);
     }
     CobletCustomizer customizer = {"coblet-smoke:marker", "Smoke marker", NULL, NULL, customize, NULL};

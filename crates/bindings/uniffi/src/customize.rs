@@ -164,7 +164,7 @@ fn library_path(path: &str) -> Result<String, CobletError> {
     }
 }
 
-fn library(spec: LibrarySpec) -> Result<EffectiveLibrary, CobletError> {
+pub(crate) fn library(spec: LibrarySpec) -> Result<EffectiveLibrary, CobletError> {
     let name: MavenCoordinate = spec
         .name
         .parse()
@@ -474,7 +474,7 @@ impl ProfileEditor {
     }
 }
 
-fn trait_names(traits: &VersionTraits) -> Vec<String> {
+pub(crate) fn trait_names(traits: &VersionTraits) -> Vec<String> {
     traits
         .iter()
         .map(|value| value.as_str().to_owned())
