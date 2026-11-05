@@ -124,6 +124,36 @@ fn customizers_need_distinct_ids() {
     assert!(coblet.inner.launcher.customizers().get(&id).is_some());
 }
 
+#[test]
+fn auth_grants_name_registered_customizers() {
+    let id = ExtensionId::new("acme:login").unwrap();
+    let builder = || {
+        Coblet::builder()
+            .data_root("/tmp/x")
+            .transport(Arc::new(Fixtures))
+            .platform(Platform::new(OsFamily::Linux, Arch::X86_64))
+    };
+    let coblet = builder()
+        .allow_auth_changes(id.clone())
+        .customizer(Arc::new(Noop(id.clone())))
+        .build()
+        .unwrap();
+    assert!(coblet.inner.launcher.allows_auth_changes(&id));
+    let coblet = builder()
+        .customizer(Arc::new(Noop(id.clone())))
+        .build()
+        .unwrap();
+    assert!(!coblet.inner.launcher.allows_auth_changes(&id));
+    let error = builder().allow_auth_changes(id).build().unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            Error::Launch(coblet_launch::LaunchError::UnknownCustomizer(gone)) if gone.as_str() == "acme:login"
+        ),
+        "{error}"
+    );
+}
+
 /// Profile a community could publish for an architecture coblet does not name.
 const LOONGARCH: &str = r#"
 id = "community:linux-loongarch64"

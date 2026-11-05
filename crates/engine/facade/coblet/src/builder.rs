@@ -39,6 +39,8 @@ pub struct CobletBuilder<State> {
     #[cfg(feature = "launch")]
     customizers: Vec<Arc<dyn coblet_launch::LaunchCustomizer>>,
     #[cfg(feature = "launch")]
+    auth_grants: Vec<coblet_types::ExtensionId>,
+    #[cfg(feature = "launch")]
     profile_engine: Option<coblet_platform::ProfileEngine>,
     #[cfg(feature = "launch")]
     platform_profiles: Vec<Arc<dyn coblet_platform::PlatformProfile>>,
@@ -70,6 +72,8 @@ impl Coblet {
             #[cfg(feature = "launch")]
             customizers: Vec::new(),
             #[cfg(feature = "launch")]
+            auth_grants: Vec::new(),
+            #[cfg(feature = "launch")]
             profile_engine: None,
             #[cfg(feature = "launch")]
             platform_profiles: Vec::new(),
@@ -94,6 +98,8 @@ impl CobletBuilder<NoRoot> {
             launcher: self.launcher,
             #[cfg(feature = "launch")]
             customizers: self.customizers,
+            #[cfg(feature = "launch")]
+            auth_grants: self.auth_grants,
             #[cfg(feature = "launch")]
             profile_engine: self.profile_engine,
             #[cfg(feature = "launch")]
@@ -252,6 +258,22 @@ impl<State> CobletBuilder<State> {
         self.customizers.push(customizer);
         self
     }
+
+    /// Lets the customizer `id` add and remove authentication arguments,
+    /// such as `--accessToken` or `${auth_uuid}`, for example one that
+    /// points the game at a third-party login server.
+    ///
+    /// Customizers cannot do this by default: a launch fails with
+    /// [`LaunchError::AuthArgument`](coblet_launch::LaunchError::AuthArgument)
+    /// when one tries. Grant it only to customizers the launcher trusts with
+    /// the account; their changes still appear in the explanation.
+    /// [`build`](CobletBuilder::build) fails when no customizer is
+    /// registered as `id`.
+    #[cfg(feature = "launch")]
+    pub fn allow_auth_changes(mut self, id: coblet_types::ExtensionId) -> Self {
+        self.auth_grants.push(id);
+        self
+    }
 }
 
 impl CobletBuilder<WithRoot> {
@@ -279,8 +301,10 @@ impl CobletBuilder<WithRoot> {
     /// Returns [`Error::Config`] without a transport or User-Agent,
     /// [`Error::Transport`] when the default transport cannot start,
     /// [`Error::Platform`] when the platform cannot be detected and
-    /// [`Error::Registry`] when two customizers share an ID and
-    /// [`Error::Profile`] when two Platform Profiles do.
+    /// [`Error::Registry`] when two customizers share an ID,
+    /// [`Error::Launch`] when [`allow_auth_changes`](CobletBuilder::allow_auth_changes)
+    /// names a customizer that is not registered and [`Error::Profile`]
+    /// when two Platform Profiles share an ID.
     pub fn build(mut self) -> Result<Coblet, Error> {
         #[cfg(feature = "launch")]
         let profiles = {
@@ -298,6 +322,9 @@ impl CobletBuilder<WithRoot> {
             let mut launcher = self.launcher.take().unwrap_or_default();
             for customizer in std::mem::take(&mut self.customizers) {
                 launcher.register_customizer(customizer)?;
+            }
+            for id in std::mem::take(&mut self.auth_grants) {
+                launcher.allow_auth_changes(id)?;
             }
             launcher
         };
