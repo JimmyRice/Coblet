@@ -1,6 +1,8 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use coblet_runtime::{Registry, RegistryError};
+use coblet_types::ExtensionId;
 
 use crate::customize::Placement;
 use crate::{
@@ -13,11 +15,13 @@ use crate::{
 /// [`Launcher::new`] holds the built-in steps; steps can be inserted,
 /// replaced or removed by name. Registered [`LaunchCustomizer`]s run before
 /// the first step when the [`LaunchRequest`](crate::LaunchRequest) names
-/// them.
+/// them. A customizer may add or remove authentication arguments only
+/// after [`Launcher::allow_auth_changes`].
 #[derive(Clone)]
 pub struct Launcher {
     steps: Vec<Arc<dyn LaunchStep>>,
     customizers: Registry<dyn LaunchCustomizer>,
+    auth_grants: BTreeSet<ExtensionId>,
 }
 
 impl std::fmt::Debug for Launcher {
@@ -25,6 +29,7 @@ impl std::fmt::Debug for Launcher {
         f.debug_struct("Launcher")
             .field("steps", &self.names())
             .field("customizers", &self.customizers)
+            .field("auth_grants", &self.auth_grants)
             .finish()
     }
 }
@@ -49,6 +54,7 @@ impl Launcher {
         Self {
             steps: builtin_steps(),
             customizers: Registry::new(),
+            auth_grants: BTreeSet::new(),
         }
     }
 
@@ -58,6 +64,7 @@ impl Launcher {
         Self {
             steps: Vec::new(),
             customizers: Registry::new(),
+            auth_grants: BTreeSet::new(),
         }
     }
 
@@ -143,6 +150,33 @@ impl Launcher {
         self.customizers.register(customizer)
     }
 
+    /// Lets the registered customizer `id` add and remove authentication
+    /// arguments, such as `--accessToken` or `${auth_uuid}`.
+    ///
+    /// Without this, a launch fails with [`LaunchError::AuthArgument`] when
+    /// that customizer changes one, so a customizer cannot redirect or
+    /// leak the account on its own. Grant it only to customizers the
+    /// launcher trusts with the account, such as one for a third-party
+    /// login server. The changes still appear in the explanation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::UnknownCustomizer`] when no customizer is
+    /// registered as `id`.
+    pub fn allow_auth_changes(&mut self, id: ExtensionId) -> Result<(), LaunchError> {
+        if self.customizers.get(&id).is_none() {
+            return Err(LaunchError::UnknownCustomizer(id));
+        }
+        self.auth_grants.insert(id);
+        Ok(())
+    }
+
+    /// Tells whether the customizer `id` may change authentication arguments.
+    #[must_use]
+    pub fn allows_auth_changes(&self, id: &ExtensionId) -> bool {
+        self.auth_grants.contains(id)
+    }
+
     /// Returns the registered customizers.
     #[must_use]
     pub fn customizers(&self) -> &Registry<dyn LaunchCustomizer> {
@@ -180,6 +214,15 @@ impl Launcher {
             tracing::debug!(customizer = %customizer.id(), "running launch customizer");
             let before = cx.profile.clone();
             customizer.customize(&mut cx.profile, &ctx)?;
+            if !self.allows_auth_changes(customizer.id())
+                && let Some(argument) = diff::auth_change(&before, &cx.profile)
+            {
+                cx.profile = before;
+                return Err(LaunchError::AuthArgument {
+                    customizer: customizer.id().clone(),
+                    argument,
+                });
+            }
             diff::record(&before, &mut cx.profile, customizer.id());
         }
         for extra in ctx.into_steps() {
@@ -199,8 +242,10 @@ impl Launcher {
     /// # Errors
     ///
     /// Returns [`LaunchError::UnknownCustomizer`] when the request names a
-    /// customizer that is not registered, the failure of the first
-    /// customizer or step that fails, or [`LaunchError::Cancelled`].
+    /// customizer that is not registered, [`LaunchError::AuthArgument`]
+    /// when a customizer without permission adds or removes an
+    /// authentication argument, the failure of the first customizer or
+    /// step that fails, or [`LaunchError::Cancelled`].
     pub async fn run(&self, cx: &mut LaunchContext) -> Result<(), LaunchError> {
         if cx.cancel.is_cancelled() {
             return Err(LaunchError::Cancelled);

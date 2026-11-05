@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use coblet_platform::{
     Change, ChangeSource, EffectiveLaunchProfile, EffectiveLibrary, EnvValue, PipelineStep,
-    ProfileArg,
+    ProfileArg, is_auth_argument,
 };
 use coblet_types::ExtensionId;
 
@@ -206,6 +206,31 @@ fn describe_env(value: &EnvValue) -> String {
         EnvValue::PrependPaths(paths) => format!("prepends {}", paths.join(", ")),
         other => format!("set to {other:?}"),
     }
+}
+
+/// Returns the first authentication argument, JVM or game, that is in one
+/// profile and not in the other; moving one is not a change.
+pub(crate) fn auth_change(
+    before: &EffectiveLaunchProfile,
+    after: &EffectiveLaunchProfile,
+) -> Option<String> {
+    let added_or_removed = |old: &[ProfileArg], new: &[ProfileArg]| {
+        let mut left: Vec<&ProfileArg> = old
+            .iter()
+            .filter(|arg| is_auth_argument(&arg.value))
+            .collect();
+        let mut added = None;
+        for arg in new.iter().filter(|arg| is_auth_argument(&arg.value)) {
+            if let Some(index) = left.iter().position(|known| *known == arg) {
+                left.remove(index);
+            } else if added.is_none() {
+                added = Some(arg.value.clone());
+            }
+        }
+        added.or_else(|| left.first().map(|arg| arg.value.clone()))
+    };
+    added_or_removed(&before.jvm_args, &after.jvm_args)
+        .or_else(|| added_or_removed(&before.game_args, &after.game_args))
 }
 
 /// Appends a [`PipelineStep::Customize`] change to `after` for every

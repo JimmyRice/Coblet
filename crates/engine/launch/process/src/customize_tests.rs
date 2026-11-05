@@ -262,3 +262,165 @@ fn registering_the_same_id_twice_fails() {
     );
     assert_eq!(launcher.customizers().len(), 1);
 }
+
+/// Customizer that runs `edit` on every version.
+struct Edit {
+    id: ExtensionId,
+    edit: fn(&mut EffectiveLaunchProfile),
+}
+
+impl Edit {
+    fn new(id: &str, edit: fn(&mut EffectiveLaunchProfile)) -> Arc<Self> {
+        Arc::new(Self {
+            id: ExtensionId::new(id).unwrap(),
+            edit,
+        })
+    }
+}
+
+impl Extension for Edit {
+    fn id(&self) -> &ExtensionId {
+        &self.id
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Edit test"
+    }
+}
+
+impl LaunchCustomizer for Edit {
+    fn applies_to(&self, _traits: &VersionTraits) -> bool {
+        true
+    }
+
+    fn customize(
+        &self,
+        profile: &mut EffectiveLaunchProfile,
+        _ctx: &CustomizeCtx,
+    ) -> Result<(), LaunchError> {
+        (self.edit)(profile);
+        Ok(())
+    }
+}
+
+fn add_auth_server(profile: &mut EffectiveLaunchProfile) {
+    profile.jvm_args.push(ProfileArg::always(
+        "-Dauth.server=https://auth.example.com/${auth_uuid}",
+    ));
+}
+
+fn drop_username(profile: &mut EffectiveLaunchProfile) {
+    profile.game_args.retain(|arg| arg.value != "--username");
+}
+
+fn edit_launcher(edits: &[Arc<Edit>]) -> Launcher {
+    let mut launcher = Launcher::empty().with_step(Arc::new(Mark("probe")));
+    for edit in edits {
+        launcher.register_customizer(edit.clone()).unwrap();
+    }
+    launcher
+}
+
+#[tokio::test]
+async fn customizers_may_not_change_auth_arguments_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    for (edit, argument) in [
+        (
+            add_auth_server as fn(&mut EffectiveLaunchProfile),
+            "-Dauth.server=https://auth.example.com/${auth_uuid}",
+        ),
+        (drop_username, "--username"),
+    ] {
+        let mut cx = context(dir.path(), "1.20.1", chosen("acme:auth"));
+        let before = cx.profile.clone();
+        let error = edit_launcher(&[Edit::new("acme:auth", edit)])
+            .run(&mut cx)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                LaunchError::AuthArgument { customizer, argument: found }
+                    if customizer.as_str() == "acme:auth" && found == argument
+            ),
+            "{error}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "launch customizer `acme:auth` may not add or remove authentication argument `{argument}` unless the launcher allows it"
+            )
+        );
+        assert_eq!(cx.profile, before);
+        assert_eq!(cx.request.game_args.len(), 0);
+    }
+}
+
+#[tokio::test]
+async fn a_granted_customizer_changes_auth_arguments_and_shows_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cx = context(dir.path(), "1.20.1", chosen("acme:auth"));
+    let mut launcher = edit_launcher(&[Edit::new("acme:auth", add_auth_server)]);
+    launcher
+        .allow_auth_changes(ExtensionId::new("acme:auth").unwrap())
+        .unwrap();
+    launcher.run(&mut cx).await.unwrap();
+    assert_eq!(
+        customize_lines(&cx.profile),
+        ["[customize] acme:auth: jvm `-Dauth.server=https://auth.example.com/${auth_uuid}` added"]
+    );
+    assert_eq!(cx.request.game_args, ["probe"]);
+}
+
+#[tokio::test]
+async fn a_grant_covers_only_its_own_customizer() {
+    let dir = tempfile::tempdir().unwrap();
+    let request = chosen("acme:trusted").with_customizer(ExtensionId::new("acme:other").unwrap());
+    let mut cx = context(dir.path(), "1.20.1", request);
+    let mut launcher = edit_launcher(&[
+        Edit::new("acme:trusted", add_auth_server),
+        Edit::new("acme:other", drop_username),
+    ]);
+    launcher
+        .allow_auth_changes(ExtensionId::new("acme:trusted").unwrap())
+        .unwrap();
+    let error = launcher.run(&mut cx).await.unwrap_err();
+    assert!(
+        matches!(&error, LaunchError::AuthArgument { customizer, .. } if customizer.as_str() == "acme:other"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn other_changes_and_moved_auth_arguments_need_no_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cx = context(dir.path(), "1.20.1", chosen("acme:plain"));
+    let edit = Edit::new("acme:plain", |profile| {
+        profile.game_args.reverse();
+        profile
+            .jvm_args
+            .push(ProfileArg::always("-Dacme.flag=true"));
+    });
+    edit_launcher(&[edit]).run(&mut cx).await.unwrap();
+    assert_eq!(
+        customize_lines(&cx.profile),
+        [
+            "[customize] acme:plain: jvm `-Dacme.flag=true` added",
+            "[customize] acme:plain: game arguments reordered",
+        ]
+    );
+}
+
+#[test]
+fn only_registered_customizers_can_be_granted() {
+    let mut launcher = edit_launcher(&[Edit::new("acme:auth", add_auth_server)]);
+    let error = launcher
+        .allow_auth_changes(ExtensionId::new("acme:gone").unwrap())
+        .unwrap_err();
+    assert!(matches!(error, LaunchError::UnknownCustomizer(id) if id.as_str() == "acme:gone"));
+    assert!(!launcher.allows_auth_changes(&ExtensionId::new("acme:gone").unwrap()));
+    launcher
+        .allow_auth_changes(ExtensionId::new("acme:auth").unwrap())
+        .unwrap();
+    assert!(launcher.allows_auth_changes(&ExtensionId::new("acme:auth").unwrap()));
+}
