@@ -8,7 +8,7 @@ use coblet_types::{Arch, ExtensionId, MavenCoordinate};
 use serde::Deserialize;
 
 use crate::{
-    Draft, EffectiveLibrary, EnvValue, FileSource, JavaSource, LibraryFile, Natives,
+    Draft, EffectiveLibrary, EnvValue, FileSource, JavaSource, LibraryFile, NativesSource,
     PlatformProfile, ProfileArg, ProfileError, ProfileLayer, RuleSettings, Target,
     compare_versions, glob_matches,
 };
@@ -188,12 +188,12 @@ struct AddLibrary {
 struct NativesSpec {
     #[serde(rename = "match")]
     pattern: String,
-    source: NativesSource,
+    source: NativesSpecSource,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(untagged)]
-enum NativesSource {
+enum NativesSpecSource {
     Keyword(NativesKeyword),
     System { system: PathBuf },
     Maven { maven: String, classifier: String },
@@ -278,14 +278,6 @@ impl DataProfile {
                 message: error.message().to_owned(),
             })?;
         Ok(Self { file, layer })
-    }
-
-    fn natives_for(&self, key: &str) -> Option<&NativesSource> {
-        self.file
-            .natives
-            .iter()
-            .find(|spec| glob_matches(&spec.pattern, key))
-            .map(|spec| &spec.source)
     }
 }
 
@@ -492,128 +484,51 @@ fn apply_library(draft: &mut Draft<'_>, spec: &LibrarySpec) {
     if spec.remove
         && let Some(pattern) = &spec.pattern
     {
-        let mut removed = Vec::new();
-        draft.profile_mut().libraries.retain(|library| {
-            let name = library.name.to_string();
-            let hit = glob_matches(pattern, &name);
-            if hit {
-                removed.push(name);
-            }
-            !hit
-        });
-        for name in removed {
-            draft.note(format!("library {name}"), "removed");
-        }
+        draft.remove_libraries(pattern);
     }
     if let Some(add) = &spec.add {
-        let library = added_library(add);
-        let name = library.name.to_string();
-        let libraries = &mut draft.profile_mut().libraries;
-        let index = position.unwrap_or(libraries.len()).min(libraries.len());
-        libraries.insert(index, library);
-        draft.note(format!("library {name}"), "added");
+        let anchor = position.and_then(|index| {
+            draft
+                .profile()
+                .libraries
+                .get(index)
+                .map(|library| library.name.to_string())
+        });
+        draft.add_library(added_library(add), anchor.as_deref());
     }
 }
 
 fn apply_natives(profile: &DataProfile, draft: &mut Draft<'_>) {
-    let by = profile.id().clone();
-    let mut notes = Vec::new();
-    let mut system_paths = Vec::new();
-    for library in &mut draft.profile_mut().libraries {
-        if library.natives == Natives::None {
-            continue;
-        }
-        let key = library.native_key();
-        let Some(source) = profile.natives_for(&key) else {
-            continue;
+    for spec in &profile.file.natives {
+        let source = match &spec.source {
+            NativesSpecSource::Keyword(NativesKeyword::Artifact) => NativesSource::Artifact,
+            NativesSpecSource::Keyword(NativesKeyword::None) => NativesSource::NotNeeded,
+            NativesSpecSource::System { system } => NativesSource::System(system.clone()),
+            NativesSpecSource::Maven { maven, classifier } => NativesSource::Maven {
+                repository: maven.clone(),
+                classifier: classifier.clone(),
+            },
         };
-        let action = match source {
-            NativesSource::Keyword(NativesKeyword::Artifact) => "natives kept".to_owned(),
-            NativesSource::Keyword(NativesKeyword::None) => {
-                drop_natives(library);
-                "natives not needed".to_owned()
-            }
-            NativesSource::System { system } => {
-                drop_natives(library);
-                system_paths.push(system.clone());
-                format!("natives from system path `{}`", system.display())
-            }
-            NativesSource::Maven { maven, classifier } => {
-                replace_natives(library, maven, classifier);
-                format!("natives replaced by {classifier} from {maven}")
-            }
-        };
-        library.natives = Natives::Handled { by: by.clone() };
-        notes.push((format!("library {key}"), action));
-    }
-    for (subject, action) in notes {
-        draft.note(subject, action);
-    }
-    for path in system_paths {
-        draft.add_native_path(path);
-    }
-}
-
-/// Removes the native jar of a library; a classifier jar that only holds
-/// natives leaves the classpath too.
-fn drop_natives(library: &mut EffectiveLibrary) {
-    if library.extract.take().is_none() {
-        library.classpath = None;
-    }
-}
-
-fn replace_natives(library: &mut EffectiveLibrary, maven: &str, classifier: &str) {
-    let base = maven.trim_end_matches('/');
-    let coordinate = MavenCoordinate::new(
-        library.name.group(),
-        library.name.artifact(),
-        library.name.version(),
-    )
-    .and_then(|name| name.with_classifier(classifier));
-    let Ok(coordinate) = coordinate else {
-        return;
-    };
-    let path = coordinate.relative_path();
-    let file = LibraryFile::new(
-        path.clone(),
-        FileSource::Sidecar {
-            url: format!("{base}/{path}"),
-        },
-    );
-    if let Some(jar) = &mut library.extract {
-        jar.file = file;
-        classifier.clone_into(&mut jar.classifier);
-    } else {
-        library.name = coordinate;
-        library.classpath = Some(file);
+        draft.handle_natives(&spec.pattern, &source);
     }
 }
 
 fn apply_java(draft: &mut Draft<'_>, spec: &JavaSpec) {
-    let mut notes = Vec::new();
-    let java = &mut draft.profile_mut().java;
     if let Some(major) = spec.major {
-        java.major = major;
-        notes.push(format!("major version set to {major}"));
+        draft.set_java_major(major);
     }
     if let Some(source) = spec.source {
-        java.source = match source {
+        draft.set_java_source(match source {
             JavaSourceSpec::Any => JavaSource::Any,
             JavaSourceSpec::SystemOnly => JavaSource::SystemOnly,
-        };
-        notes.push(format!("source set to {source:?}"));
+        });
     }
     if let Some(runtime) = &spec.runtime {
-        java.runtime_platform = Some(runtime.clone());
-        notes.push(format!("Mojang runtime platform set to `{runtime}`"));
+        draft.set_java_runtime(runtime.clone());
     }
-    if let Some(arch) = &spec.arch {
-        if let Ok(name) = coblet_types::ArchName::new(arch) {
-            java.arch = Arch::from(name);
-        }
-        notes.push(format!("architecture set to {arch}"));
-    }
-    for note in notes {
-        draft.note("java", note);
+    if let Some(arch) = &spec.arch
+        && let Ok(name) = coblet_types::ArchName::new(arch)
+    {
+        draft.set_java_arch(Arch::from(name));
     }
 }
