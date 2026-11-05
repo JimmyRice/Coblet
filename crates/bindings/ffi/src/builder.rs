@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use coblet::platform::{DataProfile, PlatformProfile, ProfileEngine, ProfileLayer};
 use coblet::runtime::{Extension, UserAgent};
+use coblet::types::{Platform, PlatformNameError, PlatformTrait};
 
 use crate::context::Coblet;
 use crate::customize::{CobletCustomizer, ForeignCustomizer};
@@ -18,6 +19,7 @@ pub struct CobletBuilder {
     user_agent: UserAgent,
     customizers: Vec<ForeignCustomizer>,
     profiles: Vec<Arc<dyn PlatformProfile>>,
+    platform: Option<Platform>,
 }
 
 impl std::fmt::Debug for CobletBuilder {
@@ -72,6 +74,7 @@ pub unsafe extern "C" fn coblet_builder_new(
                 user_agent,
                 customizers: Vec::new(),
                 profiles: Vec::new(),
+                platform: None,
             });
             put(out_builder, Box::into_raw(builder), "out_builder")?;
             Ok(CobletStatus::Ok)
@@ -119,6 +122,69 @@ pub unsafe extern "C" fn coblet_builder_add_platform_profile(
                 ));
             }
             builder.profiles.push(Arc::new(profile));
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+fn platform_from_json(json: &str) -> Result<Platform, Failure> {
+    let bad = |problem: &str| Failure::argument("platform_json", problem);
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|error| bad(&format!("is not JSON: {error}")))?;
+    let field = |name: &str| -> Result<Option<&str>, Failure> {
+        match value.get(name) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(serde_json::Value::String(text)) => Ok(Some(text)),
+            Some(_) => Err(bad(&format!("has a non-string `{name}`"))),
+        }
+    };
+    let name = |error: PlatformNameError| bad(&error.to_string());
+    let os = field("os")?.ok_or_else(|| bad("has no `os`"))?;
+    let arch = field("arch")?.ok_or_else(|| bad("has no `arch`"))?;
+    let mut platform = Platform::new(os.parse().map_err(name)?, arch.parse().map_err(name)?);
+    if let Some(version) = field("os_version")? {
+        platform = platform.with_os_version(version);
+    }
+    if let Some(libc) = field("libc")? {
+        platform = platform.with_libc(libc.parse().map_err(name)?);
+    }
+    if let Some(traits) = value.get("traits") {
+        let traits = traits
+            .as_array()
+            .ok_or_else(|| bad("has a `traits` that is not an array"))?;
+        for item in traits {
+            let item = item
+                .as_str()
+                .ok_or_else(|| bad("has a trait that is not a string"))?;
+            platform = platform.with_trait(PlatformTrait::new(item).map_err(name)?);
+        }
+    }
+    Ok(platform)
+}
+
+/// Describes the platform instead of detecting it from the build target,
+/// for example to give the OS version or platform traits that profiles
+/// match on.
+///
+/// `platform_json` is `{"os","arch","os_version","libc","traits":[]}`;
+/// `os` and `arch` are required, the rest may be absent or `null`.
+///
+/// # Safety
+///
+/// `builder` must be a live builder handle; `platform_json` must be NULL
+/// or NUL-terminated; `out_err` must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_builder_set_platform(
+    builder: *mut CobletBuilder,
+    platform_json: *const c_char,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let builder = builder_mut(builder)?;
+            builder.platform = Some(platform_from_json(text(platform_json, "platform_json")?)?);
             Ok(CobletStatus::Ok)
         })
     }
@@ -196,6 +262,7 @@ pub unsafe extern "C" fn coblet_builder_build(
                 user_agent,
                 customizers,
                 profiles,
+                platform,
             } = *builder;
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -205,6 +272,9 @@ pub unsafe extern "C" fn coblet_builder_build(
             let mut options = coblet::Coblet::builder()
                 .data_root(data_root)
                 .user_agent(user_agent);
+            if let Some(platform) = platform {
+                options = options.platform(platform);
+            }
             for profile in profiles {
                 options = options.platform_profile(profile);
             }

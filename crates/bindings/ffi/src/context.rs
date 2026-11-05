@@ -1,6 +1,7 @@
 use std::ffi::c_char;
 
 use coblet::catalog::Filter;
+use coblet::types::{Libc, PlatformTrait};
 use tokio::runtime::Runtime;
 
 use crate::builder::{coblet_builder_build, coblet_builder_new};
@@ -48,6 +49,50 @@ pub unsafe extern "C" fn coblet_new(
     }
     // SAFETY: the builder was just created and is not used afterwards.
     unsafe { coblet_builder_build(builder, out_coblet, out_err) }
+}
+
+/// Returns the platform launches are adapted to as JSON, as Platform
+/// Profiles match it: detected from the build target, or set with
+/// `coblet_builder_set_platform`.
+///
+/// The document is `{"schema":1,"os","arch","os_version","libc","traits":[]}`.
+/// On success `*out_json` receives a string to free with `coblet_string_free`.
+///
+/// # Safety
+///
+/// `coblet` must be a live handle; `out_json` must be writable; `out_err`
+/// must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_platform_json(
+    coblet: *const Coblet,
+    out_json: *mut CobletString,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let handle = coblet
+                .as_ref()
+                .ok_or_else(|| Failure::argument("coblet", "is NULL"))?;
+            let platform = handle.inner.platform();
+            let traits: Vec<&str> = platform
+                .traits()
+                .iter()
+                .map(PlatformTrait::as_str)
+                .collect();
+            let json = serde_json::json!({
+                "schema": 1,
+                "os": platform.os().as_str(),
+                "arch": platform.arch().as_str(),
+                "os_version": platform.os_version(),
+                "libc": platform.libc().map(Libc::as_str),
+                "traits": traits,
+            });
+            put(out_json, CobletString::new(&json.to_string()), "out_json")?;
+            Ok(CobletStatus::Ok)
+        })
+    }
 }
 
 /// Frees a `Coblet` handle; NULL is ignored.

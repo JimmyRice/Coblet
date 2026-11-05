@@ -19,11 +19,11 @@ mod types;
 
 pub use builder::{
     CobletBuilder, coblet_builder_add_customizer, coblet_builder_add_platform_profile,
-    coblet_builder_build, coblet_builder_free, coblet_builder_new,
+    coblet_builder_build, coblet_builder_free, coblet_builder_new, coblet_builder_set_platform,
 };
 pub use context::{
-    Coblet, coblet_abi_version, coblet_error_free, coblet_free, coblet_new, coblet_string_free,
-    coblet_versions_json,
+    Coblet, coblet_abi_version, coblet_error_free, coblet_free, coblet_new, coblet_platform_json,
+    coblet_string_free, coblet_versions_json,
 };
 pub use customize::{
     CobletArgKind, CobletCustomizer, CobletProfileEdit, CobletStep, CobletStepFailure,

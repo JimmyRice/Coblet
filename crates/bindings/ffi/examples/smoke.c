@@ -68,6 +68,13 @@ int main(int argc, char **argv) {
         return fail("coblet_builder_build", err);
     }
 
+    CobletString platform = {0};
+    if (coblet_platform_json(coblet, &platform, &err) != COBLET_STATUS_OK) {
+        return fail("coblet_platform_json", err);
+    }
+    printf("platform: %s\n", platform.ptr);
+    coblet_string_free(platform);
+
     CobletString versions = {0};
     if (coblet_versions_json(coblet, &versions, &err) != COBLET_STATUS_OK) {
         return fail("coblet_versions_json", err);

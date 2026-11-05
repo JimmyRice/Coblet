@@ -203,6 +203,21 @@ enum CobletStatus coblet_builder_add_platform_profile(struct CobletBuilder *buil
                                                       const char *toml,
                                                       struct CobletError **out_err);
 
+// Describes the platform instead of detecting it from the build target,
+// for example to give the OS version or platform traits that profiles
+// match on.
+//
+// `platform_json` is `{"os","arch","os_version","libc","traits":[]}`;
+// `os` and `arch` are required, the rest may be absent or `null`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `platform_json` must be NULL
+// or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_set_platform(struct CobletBuilder *builder,
+                                              const char *platform_json,
+                                              struct CobletError **out_err);
+
 // Adds a launch customizer; it runs only for launches that name its ID in
 // `coblet_launch_customized`.
 //
@@ -258,6 +273,21 @@ enum CobletStatus coblet_new(const char *data_root,
                              const char *user_agent,
                              struct Coblet **out_coblet,
                              struct CobletError **out_err);
+
+// Returns the platform launches are adapted to as JSON, as Platform
+// Profiles match it: detected from the build target, or set with
+// `coblet_builder_set_platform`.
+//
+// The document is `{"schema":1,"os","arch","os_version","libc","traits":[]}`.
+// On success `*out_json` receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `out_json` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_platform_json(const struct Coblet *coblet,
+                                       struct CobletString *out_json,
+                                       struct CobletError **out_err);
 
 // Frees a `Coblet` handle; NULL is ignored.
 //

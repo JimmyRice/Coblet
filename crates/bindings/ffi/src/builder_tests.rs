@@ -4,10 +4,11 @@ use std::ffi::{CStr, CString};
 
 use super::{
     coblet_builder_add_platform_profile, coblet_builder_build, coblet_builder_free,
-    coblet_builder_new,
+    coblet_builder_new, coblet_builder_set_platform,
 };
-use crate::context::{coblet_error_free, coblet_free};
+use crate::context::{coblet_error_free, coblet_free, coblet_platform_json, coblet_string_free};
 use crate::types::CobletStatus;
+use crate::types::CobletString;
 
 const LOONGARCH: &str = r#"
 id = "community:linux-loongarch64"
@@ -111,4 +112,43 @@ fn bad_profiles_are_rejected_when_added() {
     assert_eq!(add(builder, &builtin).0, CobletStatus::InvalidArgument);
     // SAFETY: the builder is live and not used afterwards.
     unsafe { coblet_builder_free(builder) };
+}
+
+#[test]
+fn the_platform_can_be_described() {
+    let builder = builder();
+    let json = CString::new(
+        r#"{"os":"linux","arch":"loongarch64","os_version":"6.6","libc":"glibc","traits":["acme-gpu"]}"#,
+    )
+    .unwrap();
+    let bad = CString::new(r#"{"arch":"x86_64"}"#).unwrap();
+    let mut coblet = std::ptr::null_mut();
+    let mut out = CobletString::empty();
+    // SAFETY: live handles, valid strings and out-pointers; each is freed once.
+    unsafe {
+        let null = std::ptr::null_mut();
+        assert_eq!(
+            coblet_builder_set_platform(builder, bad.as_ptr(), null),
+            CobletStatus::InvalidArgument
+        );
+        assert_eq!(
+            coblet_builder_set_platform(builder, json.as_ptr(), null),
+            CobletStatus::Ok
+        );
+        assert_eq!(
+            coblet_builder_build(builder, &raw mut coblet, null),
+            CobletStatus::Ok
+        );
+        assert_eq!(
+            coblet_platform_json(coblet, &raw mut out, null),
+            CobletStatus::Ok
+        );
+        let text = CStr::from_ptr(out.ptr).to_str().unwrap().to_owned();
+        coblet_string_free(out);
+        coblet_free(coblet);
+        assert_eq!(
+            text,
+            r#"{"arch":"loongarch64","libc":"glibc","os":"linux","os_version":"6.6","schema":1,"traits":["acme-gpu"]}"#
+        );
+    }
 }
