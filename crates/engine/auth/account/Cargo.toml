@@ -1,0 +1,39 @@
+[package]
+name = "coblet-auth"
+description = "Accounts for coblet: offline and Microsoft logins, token refresh, multi-account storage and credential handling."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64 = { workspace = true, optional = true }
+chacha20poly1305 = { workspace = true, optional = true }
+coblet-launch-command.workspace = true
+coblet-runtime.workspace = true
+coblet-types.workspace = true
+getrandom = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+uuid = { workspace = true, features = ["v4"] }
+zeroize = { workspace = true, optional = true }
+
+[dev-dependencies]
+coblet-runtime = { workspace = true, features = ["fs"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
+
+[features]
+# Microsoft login: device code and PKCE flows, Xbox Live, Minecraft services.
+msa = ["dep:base64", "dep:getrandom", "dep:sha2", "tokio/time", "tokio/macros"]
+# Built-in 127.0.0.1 listener that receives the browser redirect of a PKCE login.
+loopback = ["msa", "tokio/net", "tokio/io-util"]
+# EncryptedFileStore: secrets in one file encrypted with ChaCha20-Poly1305.
+encrypted-secrets = ["dep:chacha20poly1305", "dep:getrandom", "dep:zeroize"]
+
+[lints]
+workspace = true

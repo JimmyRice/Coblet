@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/bindings/ffi",
     "crates/bindings/uniffi",
+    "crates/engine/auth/account",
     "crates/engine/facade/coblet",
     "crates/engine/foundation/runtime",
     "crates/engine/foundation/types",
@@ -24,6 +25,7 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
+coblet-auth = { path = "crates/engine/auth/account" }
 coblet-runtime = { path = "crates/engine/foundation/runtime" }
 coblet-types = { path = "crates/engine/foundation/types" }
 coblet-catalog = { path = "crates/engine/metadata/catalog" }
@@ -35,9 +37,12 @@ coblet-launch = { path = "crates/engine/launch/process" }
 coblet = { path = "crates/engine/facade/coblet", default-features = false }
 coblet-download = { path = "crates/engine/transfer/download" }
 
+base64 = { version = "0.23.1", default-features = false, features = ["alloc"] }
 bytes = { version = "1.12.1", default-features = false, features = ["std"] }
 sha1 = { version = "0.11.0", default-features = false }
 sha2 = { version = "0.11.0", default-features = false }
+chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }
+getrandom = { version = "0.4.3", default-features = false }
 httpdate = { version = "1.0.3", default-features = false }
 insta = { version = "1.49.0", default-features = false }
 md-5 = { version = "0.11.0", default-features = false }
@@ -54,6 +59,7 @@ tempfile = { version = "3.27.0", default-features = false }
 zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 thiserror = { version = "2.0.21", default-features = false, features = ["std"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+zeroize = { version = "1.9.1", default-features = false, features = ["alloc"] }
 uuid = { version = "1.29.0", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
