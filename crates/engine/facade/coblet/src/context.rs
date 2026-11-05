@@ -32,6 +32,9 @@ pub struct Coblet {
 }
 
 pub(crate) struct Inner {
+    pub(crate) accounts: coblet_auth::AccountStore,
+    #[cfg(feature = "auth-msa")]
+    pub(crate) skins: coblet_player::SkinLibrary,
     pub(crate) data_root: PathBuf,
     pub(crate) transport: Arc<dyn Transport>,
     pub(crate) storage: Arc<dyn Storage>,

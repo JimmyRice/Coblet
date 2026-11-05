@@ -268,6 +268,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 name = "coblet"
 version = "0.1.0"
 dependencies = [
+ "coblet-auth",
  "coblet-catalog",
  "coblet-download",
  "coblet-java",
@@ -275,6 +276,7 @@ dependencies = [
  "coblet-launch-command",
  "coblet-mojang",
  "coblet-platform",
+ "coblet-player",
  "coblet-runtime",
  "coblet-types",
  "tempfile",

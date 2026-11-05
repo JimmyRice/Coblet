@@ -32,4 +32,15 @@ pub enum Error {
     #[cfg(feature = "launch")]
     #[error(transparent)]
     Launch(#[from] coblet_launch::LaunchError),
+    /// The feature is not available in this setup, such as Microsoft login
+    /// without a Client ID.
+    #[error("{0}")]
+    Unsupported(String),
+    /// A login, refresh or account change failed.
+    #[error(transparent)]
+    Auth(#[from] coblet_auth::AuthError),
+    /// A skin or cape change failed.
+    #[cfg(feature = "auth-msa")]
+    #[error(transparent)]
+    Player(#[from] coblet_player::PlayerError),
 }

@@ -3,11 +3,12 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use coblet_auth::{AccountStore, AuthCtx, AuthMethod};
 use coblet_catalog::MetaCache;
 use coblet_download::{Downloader, DownloaderConfig};
 use coblet_runtime::{
-    EventBus, PlatformProbe, ProcessSpawner, StdPlatformProbe, Storage, TokioSpawner, TokioStorage,
-    Transport, UserAgent,
+    EventBus, MemorySecretStore, PlatformProbe, ProcessSpawner, SecretStore, StdPlatformProbe,
+    Storage, TokioSpawner, TokioStorage, Transport, UserAgent,
 };
 use coblet_types::Platform;
 
@@ -44,7 +45,17 @@ pub struct CobletBuilder<State> {
     profile_engine: Option<coblet_platform::ProfileEngine>,
     #[cfg(feature = "launch")]
     platform_profiles: Vec<Arc<dyn coblet_platform::PlatformProfile>>,
+    auth: AuthSettings,
     state: PhantomData<State>,
+}
+
+/// Account settings collected by the builder.
+#[derive(Default)]
+struct AuthSettings {
+    secrets: Option<Arc<dyn SecretStore>>,
+    methods: Vec<Arc<dyn AuthMethod>>,
+    #[cfg(feature = "auth-msa")]
+    msa: Option<coblet_auth::MsaConfig>,
 }
 
 impl<State> std::fmt::Debug for CobletBuilder<State> {
@@ -77,6 +88,7 @@ impl Coblet {
             profile_engine: None,
             #[cfg(feature = "launch")]
             platform_profiles: Vec::new(),
+            auth: AuthSettings::default(),
             state: PhantomData,
         }
     }
@@ -104,6 +116,7 @@ impl CobletBuilder<NoRoot> {
             profile_engine: self.profile_engine,
             #[cfg(feature = "launch")]
             platform_profiles: self.platform_profiles,
+            auth: self.auth,
             state: PhantomData,
         }
     }
@@ -137,6 +150,40 @@ impl<State> CobletBuilder<State> {
     /// Describes the platform instead of detecting it.
     pub fn platform(mut self, platform: Platform) -> Self {
         self.platform = Some(platform);
+        self
+    }
+
+    /// Keeps account tokens in this store instead of process memory, for
+    /// example a system keychain or an
+    /// [`EncryptedFileStore`](coblet_auth::EncryptedFileStore).
+    ///
+    /// Without one, tokens are lost when the process exits and Microsoft
+    /// accounts have to sign in again.
+    pub fn secret_store(mut self, store: Arc<dyn SecretStore>) -> Self {
+        self.auth.secrets = Some(store);
+        self
+    }
+
+    /// Registers an auth method, such as a third-party login server.
+    pub fn auth_method(mut self, method: Arc<dyn AuthMethod>) -> Self {
+        self.auth.methods.push(method);
+        self
+    }
+
+    /// Enables Microsoft login with the launcher's own Client ID.
+    ///
+    /// Without it, Microsoft logins and launches of Microsoft accounts fail
+    /// with [`Error::Unsupported`].
+    #[cfg(feature = "auth-msa")]
+    pub fn msa_client_id(mut self, client_id: coblet_auth::MsaClientId) -> Self {
+        self.auth.msa = Some(coblet_auth::MsaConfig::new(client_id));
+        self
+    }
+
+    /// Enables Microsoft login with full settings, such as other scopes.
+    #[cfg(feature = "auth-msa")]
+    pub fn msa_config(mut self, config: coblet_auth::MsaConfig) -> Self {
+        self.auth.msa = Some(config);
         self
     }
 
@@ -277,6 +324,30 @@ impl<State> CobletBuilder<State> {
 }
 
 impl CobletBuilder<WithRoot> {
+    fn accounts(
+        &mut self,
+        data_root: &std::path::Path,
+        transport: &Arc<dyn Transport>,
+        storage: &Arc<dyn Storage>,
+        events: &EventBus,
+    ) -> Result<AccountStore, Error> {
+        let secrets = self
+            .auth
+            .secrets
+            .take()
+            .unwrap_or_else(|| Arc::new(MemorySecretStore::new()));
+        let ctx = AuthCtx::new(Arc::clone(transport)).with_events(events.clone());
+        let mut store = AccountStore::new(Arc::clone(storage), data_root, secrets, ctx);
+        #[cfg(feature = "auth-msa")]
+        if let Some(config) = self.auth.msa.take() {
+            store.register(Arc::new(coblet_auth::MicrosoftMethod::new(config)))?;
+        }
+        for method in std::mem::take(&mut self.auth.methods) {
+            store.register(method)?;
+        }
+        Ok(store)
+    }
+
     fn transport_or_default(&mut self) -> Result<Arc<dyn Transport>, Error> {
         if let Some(transport) = self.transport.take() {
             return Ok(transport);
@@ -301,7 +372,7 @@ impl CobletBuilder<WithRoot> {
     /// Returns [`Error::Config`] without a transport or User-Agent,
     /// [`Error::Transport`] when the default transport cannot start,
     /// [`Error::Platform`] when the platform cannot be detected and
-    /// [`Error::Registry`] when two customizers share an ID,
+    /// [`Error::Registry`] when two customizers or two auth methods share an ID,
     /// [`Error::Launch`] when [`allow_auth_changes`](CobletBuilder::allow_auth_changes)
     /// names a customizer that is not registered and [`Error::Profile`]
     /// when two Platform Profiles share an ID.
@@ -361,7 +432,17 @@ impl CobletBuilder<WithRoot> {
             )
             .with_cache_root(data_root.join("cache"));
         let downloader = Downloader::new(Arc::clone(&transport), Arc::clone(&storage), config);
+        let accounts = self.accounts(&data_root, &transport, &storage, &events)?;
+        #[cfg(feature = "auth-msa")]
+        let skins = coblet_player::SkinLibrary::new(
+            Arc::clone(&storage),
+            coblet_player::Player::new(Arc::clone(&transport)),
+            data_root.join("skins"),
+        );
         Ok(Coblet::from_inner(Inner {
+            accounts,
+            #[cfg(feature = "auth-msa")]
+            skins,
             #[cfg(feature = "mojang")]
             versions: crate::versions::version_catalog(meta.clone(), events.clone()),
             #[cfg(feature = "launch")]
