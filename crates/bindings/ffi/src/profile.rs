@@ -2,8 +2,8 @@ use std::ffi::{c_char, c_void};
 use std::path::PathBuf;
 
 use coblet::platform::{
-    Draft, EffectiveLaunchProfile, EnvValue, JavaSource, Natives, NativesSource, ProfileArg,
-    ProfileEdit, ProfileError, RuleSettings, Target,
+    DetachedDraft, Draft, EnvValue, JavaSource, Natives, NativesSource, ProfileArg, ProfileEdit,
+    ProfileError, RuleSettings, Target,
 };
 use coblet::runtime::Extension;
 use coblet::types::{Arch, ArchName, ExtensionId, VersionType};
@@ -11,7 +11,9 @@ use coblet::types::{Arch, ArchName, ExtensionId, VersionType};
 use crate::context::platform_value;
 use crate::customize::{CobletArgKind, Owned, c_library, c_text, trait_names};
 use crate::guard::{guard, put};
-use crate::types::{CobletError, CobletStatus, CobletString, Failure, optional_text, text};
+use crate::types::{
+    CobletError, CobletErrorKind, CobletStatus, CobletString, Failure, optional_text, text,
+};
 
 /// Callback table of a Platform Profile written in C.
 ///
@@ -36,12 +38,19 @@ pub struct CobletPlatformProfile {
     /// `{"schema":1,"platform":{"os","arch","os_version","libc","traits":[]},
     /// "game_version","version_type","release_time","components":[{"uid","version"}],
     /// "legacy_arguments","traits":[]}`, with `null` for unknown values.
-    /// To fail, return true and fail in `rewrite`.
-    pub matches:
-        Option<unsafe extern "C" fn(user_data: *mut c_void, target_json: *const c_char) -> bool>,
+    /// When the profile cannot decide, call `coblet_match_fail` with
+    /// `failure`: the profile is then skipped with a warning in the launch
+    /// report, whatever the callback returns.
+    pub matches: Option<
+        unsafe extern "C" fn(
+            user_data: *mut c_void,
+            target_json: *const c_char,
+            failure: *mut CobletMatchFailure,
+        ) -> bool,
+    >,
     /// Says how Mojang's rules are evaluated through `rules`, which is
     /// valid only during the call; called only when the profile matches.
-    /// May be NULL.
+    /// Calling `coblet_rules_fail` stops the launch. May be NULL.
     pub rules: Option<
         unsafe extern "C" fn(
             user_data: *mut c_void,
@@ -100,22 +109,29 @@ pub enum CobletJavaSource {
     SystemOnly = 1,
 }
 
+/// Reason the `matches` callback cannot decide, given with `coblet_match_fail`.
+#[derive(Debug, Default)]
+pub struct CobletMatchFailure {
+    message: Option<String>,
+}
+
 /// Rule settings being changed by the `rules` callback.
 #[derive(Debug)]
 pub struct CobletRules {
     settings: RuleSettings,
+    failure: Option<String>,
 }
 
 /// Profile under construction, handed to the `rewrite` callback.
 ///
-/// `coblet_draft_info_json` shows the profile as it was when `rewrite`
-/// started. Changes are applied in order after `rewrite` returns true,
-/// with the same checks and launch report lines as TOML profiles; a
-/// change that is not allowed, such as touching an authentication
-/// argument, stops the launch.
+/// Each `coblet_draft_*` change applies at once, with the same checks and
+/// launch report lines as TOML profiles, and `coblet_draft_info_json`
+/// shows it. A change that is not allowed, such as touching an
+/// authentication argument, fails with `COBLET_STATUS_INVALID_ARGUMENT`
+/// and changes nothing. The changes reach the launch only when `rewrite`
+/// returns true.
 pub struct CobletProfileDraft {
-    snapshot: EffectiveLaunchProfile,
-    edits: Vec<ProfileEdit>,
+    draft: DetachedDraft,
     failure: Option<String>,
 }
 
@@ -149,13 +165,13 @@ unsafe fn draft_mut<'a>(
     unsafe { draft.as_mut() }.ok_or_else(|| Failure::argument("draft", "is NULL"))
 }
 
-/// Runs `body` with the draft of the running callback and queues its edit.
+/// Makes the change `body` describes on the draft of the running callback.
 ///
 /// # Safety
 ///
 /// As for [`draft_mut`]; `out_err` must be NULL or writable.
 #[allow(unsafe_code, reason = "reads a handle argument")]
-unsafe fn queue(
+unsafe fn apply(
     draft: *mut CobletProfileDraft,
     out_err: *mut *mut CobletError,
     body: impl FnOnce() -> Result<ProfileEdit, Failure>,
@@ -164,7 +180,10 @@ unsafe fn queue(
     unsafe {
         guard(out_err, || {
             let draft = draft_mut(draft)?;
-            draft.edits.push(body()?);
+            let edit = body()?;
+            draft.draft.draft().apply(edit).map_err(|error| {
+                Failure::new(CobletErrorKind::InvalidArgument, error.to_string())
+            })?;
             Ok(CobletStatus::Ok)
         })
     }
@@ -210,6 +229,53 @@ pub unsafe extern "C" fn coblet_rules_set(
     }
 }
 
+/// Gives the reason the running `rules` callback cannot decide; the launch
+/// stops with it once the callback returns.
+///
+/// # Safety
+///
+/// `rules` must be the handle of the running `rules` callback; `message`
+/// must be NULL or NUL-terminated.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_rules_fail(
+    rules: *mut CobletRules,
+    message: *const c_char,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(std::ptr::null_mut(), || {
+            rules_mut(rules)?.failure = Some(text(message, "message")?.to_owned());
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+/// Gives the reason the running `matches` callback cannot decide; the
+/// profile is skipped with a warning once the callback returns.
+///
+/// # Safety
+///
+/// `failure` must be the handle passed to the running `matches` callback;
+/// `message` must be NULL or NUL-terminated.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_match_fail(
+    failure: *mut CobletMatchFailure,
+    message: *const c_char,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(std::ptr::null_mut(), || {
+            let failure = failure
+                .as_mut()
+                .ok_or_else(|| Failure::argument("failure", "is NULL"))?;
+            failure.message = Some(text(message, "message")?.to_owned());
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
 /// Says whether the native code Mojang's rules select runs on this platform.
 ///
 /// # Safety
@@ -232,7 +298,7 @@ pub unsafe extern "C" fn coblet_rules_set_native(
     }
 }
 
-/// Returns the profile as `rewrite` started with it, as JSON.
+/// Returns the profile with the changes made so far, as JSON.
 ///
 /// The document is `{"schema":1,"game_version","libraries":[{"name",
 /// "native_key","has_natives","natives_handled_by","active"}],
@@ -254,7 +320,7 @@ pub unsafe extern "C" fn coblet_draft_info_json(
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
         guard(out_err, || {
-            let profile = &draft_mut(draft)?.snapshot;
+            let profile = draft_mut(draft)?.draft.profile();
             if out_json.is_null() {
                 return Err(Failure::argument("out_json", "is NULL"));
             }
@@ -307,7 +373,7 @@ pub unsafe extern "C" fn coblet_draft_append_arg(
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
-        queue(draft, out_err, || {
+        apply(draft, out_err, || {
             let arg = ProfileArg::always(text(value, "value")?);
             Ok(match kind {
                 CobletArgKind::Jvm => ProfileEdit::AppendJvmArg(arg),
@@ -333,7 +399,7 @@ pub unsafe extern "C" fn coblet_draft_remove_args(
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
-        queue(draft, out_err, || {
+        apply(draft, out_err, || {
             let pattern = text(pattern, "pattern")?.to_owned();
             Ok(match kind {
                 CobletArgKind::Jvm => ProfileEdit::RemoveJvmArgs(pattern),
@@ -359,7 +425,7 @@ pub unsafe extern "C" fn coblet_draft_set_env(
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
-        queue(draft, out_err, || {
+        apply(draft, out_err, || {
             Ok(ProfileEdit::SetEnv(
                 text(name, "name")?.to_owned(),
                 EnvValue::Set(text(value, "value")?.to_owned()),
@@ -388,7 +454,7 @@ pub unsafe extern "C" fn coblet_draft_prepend_env_paths(
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
-        queue(draft, out_err, || {
+        apply(draft, out_err, || {
             let name = text(name, "name")?.to_owned();
             let items = if count == 0 {
                 &[][..]
@@ -421,7 +487,7 @@ pub unsafe extern "C" fn coblet_draft_add_native_path(
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
-        queue(draft, out_err, || {
+        apply(draft, out_err, || {
             Ok(ProfileEdit::AddNativePath(absolute(
                 text(path, "path")?,
                 "path",
@@ -454,7 +520,7 @@ pub unsafe extern "C" fn coblet_draft_handle_natives(
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
-        queue(draft, out_err, || {
+        apply(draft, out_err, || {
             let pattern = text(pattern, "pattern")?.to_owned();
             let source = match natives {
                 CobletNatives::Artifact => NativesSource::Artifact,
@@ -497,7 +563,7 @@ pub unsafe extern "C" fn coblet_draft_add_library(
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
-        queue(draft, out_err, || {
+        apply(draft, out_err, || {
             Ok(ProfileEdit::AddLibrary {
                 library: Box::new(c_library(name, path, url, sha1, size)?),
                 before: optional_text(before, "before")?.map(str::to_owned),
@@ -521,7 +587,7 @@ pub unsafe extern "C" fn coblet_draft_remove_libraries(
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
-        queue(draft, out_err, || {
+        apply(draft, out_err, || {
             Ok(ProfileEdit::RemoveLibraries(
                 text(pattern, "pattern")?.to_owned(),
             ))
@@ -543,7 +609,7 @@ pub unsafe extern "C" fn coblet_draft_set_java_major(
     out_err: *mut *mut CobletError,
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
-    unsafe { queue(draft, out_err, || Ok(ProfileEdit::JavaMajor(major))) }
+    unsafe { apply(draft, out_err, || Ok(ProfileEdit::JavaMajor(major))) }
 }
 
 /// Sets how the Java runtime may be obtained.
@@ -564,7 +630,7 @@ pub unsafe extern "C" fn coblet_draft_set_java_source(
         CobletJavaSource::SystemOnly => JavaSource::SystemOnly,
     };
     // SAFETY: forwarded from the caller's guarantees.
-    unsafe { queue(draft, out_err, || Ok(ProfileEdit::JavaSource(source))) }
+    unsafe { apply(draft, out_err, || Ok(ProfileEdit::JavaSource(source))) }
 }
 
 /// Sets the platform key of the Mojang Java runtime, such as `linux`.
@@ -582,7 +648,7 @@ pub unsafe extern "C" fn coblet_draft_set_java_runtime(
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
-        queue(draft, out_err, || {
+        apply(draft, out_err, || {
             Ok(ProfileEdit::JavaRuntime(
                 text(runtime, "runtime")?.to_owned(),
             ))
@@ -605,7 +671,7 @@ pub unsafe extern "C" fn coblet_draft_set_java_arch(
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
-        queue(draft, out_err, || {
+        apply(draft, out_err, || {
             let name = ArchName::new(text(arch, "arch")?)
                 .map_err(|error| Failure::argument("arch", &error.to_string()))?;
             Ok(ProfileEdit::JavaArch(Arch::from(name)))
@@ -628,7 +694,7 @@ pub unsafe extern "C" fn coblet_draft_warn(
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
-        queue(draft, out_err, || {
+        apply(draft, out_err, || {
             Ok(ProfileEdit::Warn(text(message, "message")?.to_owned()))
         })
     }
@@ -650,7 +716,7 @@ pub unsafe extern "C" fn coblet_draft_refuse(
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
-        queue(draft, out_err, || {
+        apply(draft, out_err, || {
             Ok(ProfileEdit::Refuse(text(reason, "reason")?.to_owned()))
         })
     }
@@ -677,7 +743,7 @@ pub unsafe extern "C" fn coblet_draft_fail(
     }
 }
 
-type MatchesFn = unsafe extern "C" fn(*mut c_void, *const c_char) -> bool;
+type MatchesFn = unsafe extern "C" fn(*mut c_void, *const c_char, *mut CobletMatchFailure) -> bool;
 type RulesFn = unsafe extern "C" fn(*mut c_void, *const c_char, *mut CobletRules);
 type RewriteFn = unsafe extern "C" fn(*mut c_void, *mut CobletProfileDraft) -> bool;
 
@@ -736,6 +802,15 @@ impl ForeignProfile {
     }
 }
 
+impl ForeignProfile {
+    fn failed(&self, message: String) -> ProfileError {
+        ProfileError::Failed {
+            profile: self.id.clone(),
+            message,
+        }
+    }
+}
+
 impl Extension for ForeignProfile {
     fn id(&self) -> &ExtensionId {
         &self.id
@@ -771,27 +846,51 @@ impl coblet::platform::PlatformProfile for ForeignProfile {
         self.priority
     }
 
-    #[allow(unsafe_code, reason = "calls the C callback")]
     fn matches(&self, target: &Target<'_>) -> bool {
-        let json = target_json(target);
-        // SAFETY: the callback and user data are valid until `free`, and
-        // the string lives for the call.
-        unsafe { (self.matches)(self.owned.user_data, json.as_ptr()) }
+        self.try_matches(target).unwrap_or(false)
     }
 
     #[allow(unsafe_code, reason = "calls the C callback")]
+    fn try_matches(&self, target: &Target<'_>) -> Result<bool, ProfileError> {
+        let json = target_json(target);
+        let mut failure = CobletMatchFailure::default();
+        // SAFETY: the callback and user data are valid until `free`; the
+        // string and the failure handle live for the call.
+        let matches =
+            unsafe { (self.matches)(self.owned.user_data, json.as_ptr(), &raw mut failure) };
+        match failure.message {
+            Some(message) => Err(self.failed(message)),
+            None => Ok(matches),
+        }
+    }
+
     fn rules(&self, target: &Target<'_>, settings: &mut RuleSettings) {
+        // Only reached by callers that ignore errors; the engine uses try_rules.
+        let _ = self.try_rules(target, settings);
+    }
+
+    #[allow(unsafe_code, reason = "calls the C callback")]
+    fn try_rules(
+        &self,
+        target: &Target<'_>,
+        settings: &mut RuleSettings,
+    ) -> Result<(), ProfileError> {
         let Some(rules) = self.rules else {
-            return;
+            return Ok(());
         };
         let json = target_json(target);
         let mut handle = CobletRules {
             settings: settings.clone(),
+            failure: None,
         };
         // SAFETY: the callback and user data are valid until `free`; the
         // string and the handle live for the call.
         unsafe { rules(self.owned.user_data, json.as_ptr(), &raw mut handle) };
+        if let Some(message) = handle.failure {
+            return Err(self.failed(message));
+        }
         *settings = handle.settings;
+        Ok(())
     }
 
     #[allow(unsafe_code, reason = "calls the C callback")]
@@ -800,24 +899,20 @@ impl coblet::platform::PlatformProfile for ForeignProfile {
             return Ok(());
         };
         let mut handle = CobletProfileDraft {
-            snapshot: draft.profile().clone(),
-            edits: Vec::new(),
+            draft: draft.detach(),
             failure: None,
         };
         // SAFETY: the callback and user data are valid until `free`; the
         // handle lives for the call.
         let ok = unsafe { rewrite(self.owned.user_data, &raw mut handle) };
         if !ok {
-            return Err(ProfileError::Failed {
-                profile: self.id.clone(),
-                message: handle
+            return Err(self.failed(
+                handle
                     .failure
                     .unwrap_or_else(|| "the profile failed".to_owned()),
-            });
+            ));
         }
-        for edit in handle.edits {
-            draft.apply(edit)?;
-        }
+        draft.attach(handle.draft);
         Ok(())
     }
 }

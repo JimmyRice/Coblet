@@ -23,7 +23,7 @@
 #include <stdint.h>
 
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 4
+#define COBLET_ABI_VERSION 5
 
 // Result of a call.
 typedef enum CobletStatus {
@@ -121,13 +121,17 @@ typedef struct CobletBuilder CobletBuilder;
 // Running game handle.
 typedef struct CobletGame CobletGame;
 
+// Reason the `matches` callback cannot decide, given with `coblet_match_fail`.
+typedef struct CobletMatchFailure CobletMatchFailure;
+
 // Profile under construction, handed to the `rewrite` callback.
 //
-// `coblet_draft_info_json` shows the profile as it was when `rewrite`
-// started. Changes are applied in order after `rewrite` returns true,
-// with the same checks and launch report lines as TOML profiles; a
-// change that is not allowed, such as touching an authentication
-// argument, stops the launch.
+// Each `coblet_draft_*` change applies at once, with the same checks and
+// launch report lines as TOML profiles, and `coblet_draft_info_json`
+// shows it. A change that is not allowed, such as touching an
+// authentication argument, fails with `COBLET_STATUS_INVALID_ARGUMENT`
+// and changes nothing. The changes reach the launch only when `rewrite`
+// returns true.
 typedef struct CobletProfileDraft CobletProfileDraft;
 
 // Launch profile being edited by a C customizer; valid only during its
@@ -178,11 +182,13 @@ typedef struct CobletPlatformProfile {
   // `{"schema":1,"platform":{"os","arch","os_version","libc","traits":[]},
   // "game_version","version_type","release_time","components":[{"uid","version"}],
   // "legacy_arguments","traits":[]}`, with `null` for unknown values.
-  // To fail, return true and fail in `rewrite`.
-  bool (*matches)(void *user_data, const char *target_json);
+  // When the profile cannot decide, call `coblet_match_fail` with
+  // `failure`: the profile is then skipped with a warning in the launch
+  // report, whatever the callback returns.
+  bool (*matches)(void *user_data, const char *target_json, struct CobletMatchFailure *failure);
   // Says how Mojang's rules are evaluated through `rules`, which is
   // valid only during the call; called only when the profile matches.
-  // May be NULL.
+  // Calling `coblet_rules_fail` stops the launch. May be NULL.
   void (*rules)(void *user_data, const char *target_json, struct CobletRules *rules);
   // Changes the profile through `draft`, which is valid only during the
   // call; called only when the profile matches. Returning false stops
@@ -666,6 +672,24 @@ enum CobletStatus coblet_rules_set(struct CobletRules *rules,
                                    const char *value,
                                    struct CobletError **out_err);
 
+// Gives the reason the running `rules` callback cannot decide; the launch
+// stops with it once the callback returns.
+//
+// # Safety
+//
+// `rules` must be the handle of the running `rules` callback; `message`
+// must be NULL or NUL-terminated.
+enum CobletStatus coblet_rules_fail(struct CobletRules *rules, const char *message);
+
+// Gives the reason the running `matches` callback cannot decide; the
+// profile is skipped with a warning once the callback returns.
+//
+// # Safety
+//
+// `failure` must be the handle passed to the running `matches` callback;
+// `message` must be NULL or NUL-terminated.
+enum CobletStatus coblet_match_fail(struct CobletMatchFailure *failure, const char *message);
+
 // Says whether the native code Mojang's rules select runs on this platform.
 //
 // # Safety
@@ -676,7 +700,7 @@ enum CobletStatus coblet_rules_set_native(struct CobletRules *rules,
                                           bool native,
                                           struct CobletError **out_err);
 
-// Returns the profile as `rewrite` started with it, as JSON.
+// Returns the profile with the changes made so far, as JSON.
 //
 // The document is `{"schema":1,"game_version","libraries":[{"name",
 // "native_key","has_natives","natives_handled_by","active"}],
