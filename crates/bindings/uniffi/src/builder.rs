@@ -4,13 +4,16 @@ use coblet::platform::{DataProfile, PlatformProfile, ProfileEngine, ProfileLayer
 use coblet::runtime::{Extension, UserAgent};
 
 use crate::customize::ForeignCustomizer;
-use crate::{Coblet, CobletError, ErrorKind, LaunchCustomizer};
+use coblet::types::Platform;
+
+use crate::{Coblet, CobletError, ErrorKind, LaunchCustomizer, PlatformInfo};
 
 struct Settings {
     data_root: String,
     user_agent: UserAgent,
     customizers: Vec<ForeignCustomizer>,
     profiles: Vec<Arc<dyn PlatformProfile>>,
+    platform: Option<Platform>,
 }
 
 /// Settings of a [`Coblet`] before it is built: Platform Profiles and
@@ -64,6 +67,7 @@ impl CobletBuilder {
                 user_agent,
                 customizers: Vec::new(),
                 profiles: Vec::new(),
+                platform: None,
             })),
         }))
     }
@@ -94,6 +98,21 @@ impl CobletBuilder {
                 )));
             }
             settings.profiles.push(Arc::new(profile));
+            Ok(())
+        })
+    }
+
+    /// Describes the platform instead of detecting it from the build target,
+    /// for example to give the OS version or platform traits that profiles
+    /// match on.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed name and after `build`.
+    pub fn set_platform(&self, platform: PlatformInfo) -> Result<(), CobletError> {
+        let platform = platform.into_platform()?;
+        self.with(|settings| {
+            settings.platform = Some(platform);
             Ok(())
         })
     }
@@ -139,6 +158,9 @@ impl CobletBuilder {
         let mut builder = coblet::Coblet::builder()
             .data_root(settings.data_root)
             .user_agent(settings.user_agent);
+        if let Some(platform) = settings.platform {
+            builder = builder.platform(platform);
+        }
         for profile in settings.profiles {
             builder = builder.platform_profile(profile);
         }

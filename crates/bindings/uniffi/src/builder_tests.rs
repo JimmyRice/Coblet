@@ -1,5 +1,5 @@
 use super::CobletBuilder;
-use crate::{CobletError, ErrorKind};
+use crate::{CobletError, ErrorKind, PlatformInfo};
 
 const LOONGARCH: &str = r#"
 id = "community:linux-loongarch64"
@@ -69,4 +69,34 @@ fn bad_profiles_are_rejected_when_added() {
     assert!(error.to_string().contains("already registered"), "{error}");
     let builtin = LOONGARCH.replace("community:linux-loongarch64", "coblet:linux-arm64");
     assert!(builder.add_platform_profile(&builtin).is_err());
+}
+
+#[test]
+fn the_platform_can_be_described() {
+    let builder = builder();
+    builder
+        .set_platform(PlatformInfo {
+            os: "linux".to_owned(),
+            arch: "loongarch64".to_owned(),
+            os_version: Some("6.6".to_owned()),
+            libc: Some("glibc".to_owned()),
+            traits: vec!["acme-gpu".to_owned()],
+        })
+        .unwrap();
+    let info = builder.build().unwrap().platform();
+    assert_eq!(info.arch, "loongarch64");
+    assert_eq!(info.os_version.as_deref(), Some("6.6"));
+    assert_eq!(info.traits, ["acme-gpu"]);
+
+    let error = CobletBuilder::new("/tmp/x".to_owned(), "coblet-test/1.0".to_owned())
+        .unwrap()
+        .set_platform(PlatformInfo {
+            os: "Not An OS".to_owned(),
+            arch: "x86_64".to_owned(),
+            os_version: None,
+            libc: None,
+            traits: Vec::new(),
+        })
+        .unwrap_err();
+    assert_eq!(kind(&error), ErrorKind::InvalidArgument);
 }

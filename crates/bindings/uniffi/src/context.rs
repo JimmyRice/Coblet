@@ -4,7 +4,7 @@ use coblet::catalog::Filter;
 use coblet::launch::LaunchRequest;
 use coblet::launch_command::LaunchAuth;
 use coblet::mojang::GameVersion;
-use coblet::types::{ExtensionId, PlayerName};
+use coblet::types::{ExtensionId, Platform, PlatformNameError, PlatformTrait, PlayerName};
 
 use crate::{CobletError, ErrorKind, GameHandle};
 
@@ -64,9 +64,50 @@ pub struct PlatformInfo {
     /// Architecture, such as `aarch64` or `loongarch64`.
     pub arch: String,
     /// Operating system version, when known.
+    #[uniffi(default = None)]
     pub os_version: Option<String>,
     /// C library, such as `glibc` or `musl`, when known.
+    #[uniffi(default = None)]
     pub libc: Option<String>,
+    /// Platform traits that profiles can match with `platform_traits`.
+    #[uniffi(default = [])]
+    pub traits: Vec<String>,
+}
+
+impl PlatformInfo {
+    pub(crate) fn from_platform(platform: &Platform) -> Self {
+        Self {
+            os: platform.os().as_str().to_owned(),
+            arch: platform.arch().as_str().to_owned(),
+            os_version: platform.os_version().map(str::to_owned),
+            libc: platform.libc().map(|libc| libc.as_str().to_owned()),
+            traits: platform
+                .traits()
+                .iter()
+                .map(|value| value.as_str().to_owned())
+                .collect(),
+        }
+    }
+
+    pub(crate) fn into_platform(self) -> Result<Platform, CobletError> {
+        let invalid = |error: PlatformNameError| {
+            CobletError::new(ErrorKind::InvalidArgument, error.to_string())
+        };
+        let mut platform = Platform::new(
+            self.os.parse().map_err(invalid)?,
+            self.arch.parse().map_err(invalid)?,
+        );
+        if let Some(version) = self.os_version {
+            platform = platform.with_os_version(version);
+        }
+        if let Some(libc) = &self.libc {
+            platform = platform.with_libc(libc.parse().map_err(invalid)?);
+        }
+        for name in &self.traits {
+            platform = platform.with_trait(PlatformTrait::new(name).map_err(invalid)?);
+        }
+        Ok(platform)
+    }
 }
 
 /// coblet library handle: version catalog and launching.
@@ -97,15 +138,11 @@ impl Coblet {
     }
 
     /// Returns the platform launches are adapted to, as Platform Profiles
-    /// match it.
+    /// match it: detected from the build target, or set with
+    /// `CobletBuilder.set_platform`.
+    #[must_use]
     pub fn platform(&self) -> PlatformInfo {
-        let platform = self.inner.platform();
-        PlatformInfo {
-            os: platform.os().as_str().to_owned(),
-            arch: platform.arch().as_str().to_owned(),
-            os_version: platform.os_version().map(str::to_owned),
-            libc: platform.libc().map(|libc| libc.as_str().to_owned()),
-        }
+        PlatformInfo::from_platform(self.inner.platform())
     }
 
     /// Lists game versions, newest first.
