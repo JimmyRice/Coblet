@@ -36,7 +36,7 @@ fn kind(error: &CobletError) -> ErrorKind {
 #[test]
 fn profiles_from_toml_reach_the_coblet() {
     let builder = builder();
-    builder.add_platform_profile(LOONGARCH).unwrap();
+    builder.add_platform_profile_toml(LOONGARCH).unwrap();
     let coblet = builder.build().unwrap();
     assert!(
         coblet
@@ -53,7 +53,7 @@ fn profiles_from_toml_reach_the_coblet() {
 
     let error = builder.build().err().unwrap();
     assert_eq!(kind(&error), ErrorKind::InvalidState);
-    let error = builder.add_platform_profile(LOONGARCH).unwrap_err();
+    let error = builder.add_platform_profile_toml(LOONGARCH).unwrap_err();
     assert_eq!(kind(&error), ErrorKind::InvalidState);
 }
 
@@ -61,14 +61,14 @@ fn profiles_from_toml_reach_the_coblet() {
 fn bad_profiles_are_rejected_when_added() {
     let builder = builder();
     let error = builder
-        .add_platform_profile("id = \"community:x\"\nunknown = 1\n")
+        .add_platform_profile_toml("id = \"community:x\"\nunknown = 1\n")
         .unwrap_err();
     assert_eq!(kind(&error), ErrorKind::InvalidArgument);
-    builder.add_platform_profile(LOONGARCH).unwrap();
-    let error = builder.add_platform_profile(LOONGARCH).unwrap_err();
+    builder.add_platform_profile_toml(LOONGARCH).unwrap();
+    let error = builder.add_platform_profile_toml(LOONGARCH).unwrap_err();
     assert!(error.to_string().contains("already registered"), "{error}");
     let builtin = LOONGARCH.replace("community:linux-loongarch64", "coblet:linux-arm64");
-    assert!(builder.add_platform_profile(&builtin).is_err());
+    assert!(builder.add_platform_profile_toml(&builtin).is_err());
 }
 
 #[test]

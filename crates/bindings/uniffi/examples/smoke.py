@@ -58,7 +58,7 @@ class Marker(coblet.LaunchCustomizer):
 async def main(data_root: str, version: str, mode: str, marker: str) -> int:
     marker_customizer = Marker()
     builder = coblet.CobletBuilder(data_root, "coblet-uniffi-smoke/0.1")
-    builder.add_platform_profile(SMOKE_PROFILE)
+    builder.add_platform_profile_toml(SMOKE_PROFILE)
     builder.add_customizer(marker_customizer)
     launcher = builder.build()
     print(f"platform: {launcher.platform()}")
