@@ -11,6 +11,7 @@ use std::process::ExitCode;
 mod header;
 mod layers;
 mod module_roots;
+mod test_layout;
 mod workspace;
 
 const USAGE: &str = "\
@@ -19,6 +20,7 @@ usage: cargo xtask <command>
 commands:
   check-layers         reject dependencies that break the crate layering rules
   check-module-roots   reject definitions inside lib.rs and mod.rs files
+  check-test-layout    reject unit tests kept outside the file they test
   gen-header [--check] regenerate the C header of coblet-ffi, or check it is current
   help                 print this message";
 
@@ -27,6 +29,7 @@ fn main() -> ExitCode {
     let outcome = match command.as_deref() {
         Some("check-layers") => layers::run(&workspace::root()),
         Some("check-module-roots") => module_roots::run(&workspace::root()),
+        Some("check-test-layout") => test_layout::run(&workspace::root()),
         Some("gen-header") => header::run(
             &workspace::root(),
             std::env::args().nth(2).as_deref() == Some("--check"),
