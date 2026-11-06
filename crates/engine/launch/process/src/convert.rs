@@ -75,5 +75,5 @@ fn template_args(args: &[ProfileArg]) -> Vec<TemplateArg> {
 }
 
 #[cfg(test)]
-#[path = "convert_tests.rs"]
+#[path = "../tests/convert.rs"]
 mod tests;
