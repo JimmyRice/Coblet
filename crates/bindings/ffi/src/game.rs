@@ -2,7 +2,9 @@ use std::ffi::c_char;
 
 use std::str::FromStr as _;
 
-use coblet::launch::{GameSession, LaunchRequest, LogItem, LogStream};
+use std::sync::{Mutex, PoisonError};
+
+use coblet::launch::{GameKiller, GameSession, LaunchRequest, LogItem, LogStream};
 use coblet::launch_command::LaunchAuth;
 use coblet::runtime::{GameLogLine, OperationId};
 use coblet::types::{ExtensionId, PlayerName};
@@ -100,12 +102,18 @@ pub(crate) fn log_json(line: &GameLogLine) -> serde_json::Value {
 }
 
 /// Running game handle.
+///
+/// Several threads may use one handle at once: `coblet_game_kill` stops
+/// the game while another thread blocks in `coblet_game_wait` or
+/// `coblet_game_next_log`. Only `coblet_game_free` needs the handle to
+/// itself.
 pub struct CobletGame {
     op: OperationId,
     runtime: tokio::runtime::Handle,
     report: String,
-    session: Option<GameSession>,
-    logs: LogStream,
+    session: Mutex<Option<GameSession>>,
+    killer: GameKiller,
+    logs: tokio::sync::Mutex<LogStream>,
 }
 
 /// Starts a version offline or in Demo mode.
@@ -249,8 +257,9 @@ unsafe fn start(
         op: session.operation(),
         runtime: handle.runtime.handle().clone(),
         report: session.profile().explain(),
-        session: Some(session),
-        logs,
+        killer: session.killer(),
+        session: Mutex::new(Some(session)),
+        logs: tokio::sync::Mutex::new(logs),
     }));
     // SAFETY: forwarded from the caller's guarantee.
     unsafe { put(out_game, game, "out_game") }.inspect_err(|_| {
@@ -352,12 +361,12 @@ pub unsafe extern "C" fn coblet_game_report(
 ///
 /// # Safety
 ///
-/// `game` must be a live handle not used by another thread; `out_line` must
-/// be writable; `out_err` must be NULL or writable.
+/// `game` must be a live handle; `out_line` must be writable; `out_err`
+/// must be NULL or writable.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn coblet_game_next_log(
-    game: *mut CobletGame,
+    game: *const CobletGame,
     out_line: *mut CobletString,
     out_err: *mut *mut CobletError,
 ) -> CobletStatus {
@@ -365,12 +374,15 @@ pub unsafe extern "C" fn coblet_game_next_log(
     unsafe {
         guard(out_err, || {
             let game = game
-                .as_mut()
+                .as_ref()
                 .ok_or_else(|| Failure::argument("game", "is NULL"))?;
             if out_line.is_null() {
                 return Err(Failure::argument("out_line", "is NULL"));
             }
-            let json = match game.runtime.block_on(game.logs.next()) {
+            let next = game
+                .runtime
+                .block_on(async { game.logs.lock().await.next().await });
+            let json = match next {
                 None => return Ok(CobletStatus::End),
                 Some(LogItem::Missed(count)) => {
                     let message = format!("{count} lines were skipped");
@@ -441,7 +453,9 @@ pub unsafe extern "C" fn coblet_generate_operation_id(
     }
 }
 
-/// Kills the game; `coblet_game_wait` still reports the exit.
+/// Kills the game, also while another thread blocks in `coblet_game_wait`;
+/// `coblet_game_wait` still reports the exit. Calling it after the game
+/// ended does nothing.
 ///
 /// # Safety
 ///
@@ -453,25 +467,20 @@ pub unsafe extern "C" fn coblet_game_kill(game: *const CobletGame) -> CobletStat
     let Some(game) = (unsafe { game.as_ref() }) else {
         return CobletStatus::InvalidArgument;
     };
-    match &game.session {
-        Some(session) => {
-            session.kill();
-            CobletStatus::Ok
-        }
-        None => CobletStatus::Error,
-    }
+    game.killer.kill();
+    CobletStatus::Ok
 }
 
 /// Waits for the game to end. Can be called once per handle.
 ///
 /// # Safety
 ///
-/// `game` must be a live handle not used by another thread; `out_exit` must
-/// be writable; `out_err` must be NULL or writable.
+/// `game` must be a live handle; `out_exit` must be writable; `out_err`
+/// must be NULL or writable.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn coblet_game_wait(
-    game: *mut CobletGame,
+    game: *const CobletGame,
     out_exit: *mut CobletGameExit,
     out_err: *mut *mut CobletError,
 ) -> CobletStatus {
@@ -479,12 +488,17 @@ pub unsafe extern "C" fn coblet_game_wait(
     unsafe {
         guard(out_err, || {
             let game = game
-                .as_mut()
+                .as_ref()
                 .ok_or_else(|| Failure::argument("game", "is NULL"))?;
             if out_exit.is_null() {
                 return Err(Failure::argument("out_exit", "is NULL"));
             }
-            let session = game.session.take().ok_or_else(|| {
+            let taken = game
+                .session
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            let session = taken.ok_or_else(|| {
                 Failure::new(
                     CobletErrorKind::InvalidState,
                     "the game was already waited for",
