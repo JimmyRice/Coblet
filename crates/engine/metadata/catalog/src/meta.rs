@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use coblet_runtime::{
-    Expectation, HttpUrl, RelPath, Request, Storage, StreamHasher, Transport, VerifyError, Warning,
-    WarningCode,
+    ArtifactKind, Expectation, HttpUrl, RelPath, Request, Storage, StreamHasher, Transport,
+    UrlRewriter, UrlRewriters, VerifyError, Warning, WarningCode,
 };
 use coblet_types::FileHash;
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,7 @@ pub enum Origin {
 ///     RelPath::new("mojang/version_manifest_v2.json")?,
 /// );
 /// assert!(request.expect.is_none());
+/// assert_eq!(request.kind, coblet_runtime::ArtifactKind::Metadata);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[non_exhaustive]
@@ -71,6 +72,8 @@ pub struct MetaRequest {
     pub expect: Option<FileHash>,
     /// Largest accepted document.
     pub max_size: u64,
+    /// What the document is, for [`UrlRewriter`]s; [`ArtifactKind::Metadata`] by default.
+    pub kind: ArtifactKind,
 }
 
 impl MetaRequest {
@@ -82,7 +85,14 @@ impl MetaRequest {
             key,
             expect: None,
             max_size: DEFAULT_MAX_SIZE,
+            kind: ArtifactKind::Metadata,
         }
+    }
+
+    /// Marks the document as another kind, such as [`ArtifactKind::Loader`].
+    #[must_use]
+    pub fn with_kind(self, kind: ArtifactKind) -> Self {
+        Self { kind, ..self }
     }
 
     /// Requires the document to match a hash.
@@ -122,17 +132,22 @@ struct Validators {
 /// the `ETag` and `Last-Modified` validators. Version manifests, version
 /// JSON files and Mod Loader indexes all go through it, so the launcher can
 /// list versions without a network connection.
+///
+/// [`UrlRewriter`]s change the address a document is requested from, not
+/// where it is cached, so switching mirrors keeps the cache.
 #[derive(Clone)]
 pub struct MetaCache {
     transport: Arc<dyn Transport>,
     storage: Arc<dyn Storage>,
     root: PathBuf,
+    rewriters: UrlRewriters,
 }
 
 impl std::fmt::Debug for MetaCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MetaCache")
             .field("root", &self.root)
+            .field("rewriters", &self.rewriters)
             .finish_non_exhaustive()
     }
 }
@@ -156,7 +171,29 @@ impl MetaCache {
             transport,
             storage,
             root: root.into(),
+            rewriters: UrlRewriters::new(),
         }
+    }
+
+    /// Adds a rewriter; rewriters run in the order they were added.
+    #[must_use]
+    pub fn with_rewriter(self, rewriter: Arc<dyn UrlRewriter>) -> Self {
+        Self {
+            rewriters: self.rewriters.with(rewriter),
+            ..self
+        }
+    }
+
+    /// Replaces the rewriter chain, for example with one shared with a downloader.
+    #[must_use]
+    pub fn with_rewriters(self, rewriters: UrlRewriters) -> Self {
+        Self { rewriters, ..self }
+    }
+
+    /// Returns the rewriter chain.
+    #[must_use]
+    pub fn rewriters(&self) -> &UrlRewriters {
+        &self.rewriters
     }
 
     /// Returns the cache root.
@@ -215,15 +252,16 @@ impl MetaCache {
             return Ok(cache_hit(body.clone(), Origin::Cache));
         }
 
+        let url = self.rewriters.apply(&request.url, &request.kind);
         let validators = match (&cached, policy) {
             (Some(_), CachePolicy::Revalidate) => self
                 .read_optional(&self.validators_path(&request.key))
                 .await?
                 .and_then(|bytes| serde_json::from_slice::<Validators>(&bytes).ok())
-                .filter(|validators| validators.url == request.url.as_str()),
+                .filter(|validators| validators.url == url.as_str()),
             _ => None,
         };
-        let mut http = Request::get(request.url.clone());
+        let mut http = Request::get(url.clone());
         if let Some(validators) = &validators {
             if let Some(etag) = &validators.etag {
                 http = http.header("If-None-Match", etag.clone());
@@ -239,30 +277,30 @@ impl MetaCache {
                     return Ok(cache_hit(body, Origin::NotModified));
                 }
                 CatalogError::Status {
-                    url: request.url.clone(),
+                    url: url.clone(),
                     status: 304,
                 }
             }
             Ok(response) if response.status() == 200 => {
                 let fresh = Validators {
-                    url: request.url.as_str().to_owned(),
+                    url: url.as_str().to_owned(),
                     etag: response.header("ETag").map(str::to_owned),
                     last_modified: response.header("Last-Modified").map(str::to_owned),
                 };
                 match response.bytes(request.max_size).await {
-                    Ok(body) => return self.store(request, &path, body, &fresh).await,
+                    Ok(body) => return self.store(request, &url, &path, body, &fresh).await,
                     Err(source) => CatalogError::Transport {
-                        url: request.url.clone(),
+                        url: url.clone(),
                         source,
                     },
                 }
             }
             Ok(response) => CatalogError::Status {
-                url: request.url.clone(),
+                url: url.clone(),
                 status: response.status(),
             },
             Err(source) => CatalogError::Transport {
-                url: request.url.clone(),
+                url: url.clone(),
                 source,
             },
         };
@@ -270,14 +308,14 @@ impl MetaCache {
         let Some(body) = cached else {
             return Err(failure);
         };
-        tracing::warn!(url = %request.url, error = %failure, "using cached metadata");
+        tracing::warn!(url = %url, error = %failure, "using cached metadata");
         Ok(Fetched {
             body,
             origin: Origin::OfflineCache,
             warning: Some(Warning {
                 op: None,
                 code: OFFLINE_CACHE,
-                message: format!("using the cached copy of {}: {failure}", request.url),
+                message: format!("using the cached copy of {url}: {failure}"),
             }),
         })
     }
@@ -285,6 +323,7 @@ impl MetaCache {
     async fn store(
         &self,
         request: &MetaRequest,
+        url: &HttpUrl,
         path: &Path,
         body: Bytes,
         validators: &Validators,
@@ -293,7 +332,7 @@ impl MetaCache {
             && let Err(source) = check(&body, expect)
         {
             return Err(CatalogError::Verify {
-                url: request.url.clone(),
+                url: url.clone(),
                 source,
             });
         }

@@ -51,7 +51,11 @@ async fn sidecar_sha1(
     let key = RelPath::new(format!("sidecar/{relative}.sha1"))
         .map_err(|error| LaunchError::InvalidMetadata(format!("{relative}: {error}")))?;
     let body = catalog
-        .fetch(&MetaRequest::new(url(&format!("{file_url}.sha1"))?, key))
+        .fetch(
+            // The sidecar sits next to the library, so library mirrors apply.
+            &MetaRequest::new(url(&format!("{file_url}.sha1"))?, key)
+                .with_kind(coblet_runtime::ArtifactKind::Library),
+        )
         .await?;
     let text = String::from_utf8_lossy(&body);
     let hex = text.split_whitespace().next().unwrap_or_default();
