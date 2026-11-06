@@ -1,6 +1,8 @@
 use std::sync::Mutex;
+use std::time::SystemTime;
 
 use coblet::launch::{GameSession, LogItem, LogStream};
+use coblet::runtime::GameLogLine;
 
 use crate::{CobletError, ErrorKind};
 
@@ -17,6 +19,23 @@ pub struct LogLine {
     pub logger: Option<String>,
     /// The message, with secrets redacted.
     pub message: String,
+    /// Time of a log4j event, when known.
+    pub time: Option<SystemTime>,
+    /// The text as received, with secrets redacted.
+    pub raw: String,
+}
+
+/// Converts an engine log line.
+pub(crate) fn log_line(line: GameLogLine) -> LogLine {
+    LogLine {
+        source: format!("{:?}", line.source).to_lowercase(),
+        level: line.level.as_str().to_owned(),
+        thread: line.thread,
+        logger: line.logger,
+        message: line.message,
+        time: line.time,
+        raw: line.raw,
+    }
 }
 
 /// How a game ended.
@@ -35,6 +54,7 @@ pub struct GameExitInfo {
 /// Running game.
 #[derive(uniffi::Object)]
 pub struct GameHandle {
+    op: String,
     pid: Option<u32>,
     report: String,
     session: Mutex<Option<GameSession>>,
@@ -52,6 +72,7 @@ impl std::fmt::Debug for GameHandle {
 impl GameHandle {
     pub(crate) fn new(session: GameSession) -> Self {
         Self {
+            op: session.operation().to_string(),
             pid: session.pid(),
             report: session.profile().explain(),
             logs: tokio::sync::Mutex::new(session.logs()),
@@ -69,6 +90,11 @@ impl GameHandle {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl GameHandle {
+    /// Returns the launch ID that this game's events carry.
+    pub fn operation_id(&self) -> String {
+        self.op.clone()
+    }
+
     /// Returns the process ID, when known.
     pub fn pid(&self) -> Option<u32> {
         self.pid
@@ -84,20 +110,19 @@ impl GameHandle {
     pub async fn next_log(&self) -> Option<LogLine> {
         let mut logs = self.logs.lock().await;
         match logs.next().await? {
-            LogItem::Line(line) => Some(LogLine {
-                source: format!("{:?}", line.source).to_lowercase(),
-                level: line.level.as_str().to_owned(),
-                thread: line.thread,
-                logger: line.logger,
-                message: line.message,
-            }),
-            LogItem::Missed(count) => Some(LogLine {
-                source: "launcher".to_owned(),
-                level: "WARN".to_owned(),
-                thread: None,
-                logger: None,
-                message: format!("{count} lines were skipped"),
-            }),
+            LogItem::Line(line) => Some(log_line(line)),
+            LogItem::Missed(count) => {
+                let message = format!("{count} lines were skipped");
+                Some(LogLine {
+                    source: "launcher".to_owned(),
+                    level: "WARN".to_owned(),
+                    thread: None,
+                    logger: None,
+                    raw: message.clone(),
+                    message,
+                    time: None,
+                })
+            }
         }
     }
 

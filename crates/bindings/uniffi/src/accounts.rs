@@ -339,20 +339,27 @@ impl Coblet {
     /// Launches a version with an account, renewing its tokens first when
     /// needed. Without `game_dir` the game runs in
     /// `<data_root>/games/<version>`; `customizers` names registered
-    /// customizers to run, in order.
+    /// customizers to run, in order. `operation_id`, from
+    /// `generate_operation_id`, is the launch ID its events carry; a random
+    /// one is used when absent.
     ///
     /// # Errors
     ///
     /// Fails with `NoLicense` for an account that does not own the game,
     /// `Auth` when the user has to sign in again, and like `launch_with`.
+    #[uniffi::method(default(operation_id = None))]
     pub async fn launch_account(
         &self,
         version_id: String,
         account: String,
         game_dir: Option<String>,
         customizers: Vec<String>,
+        operation_id: Option<String>,
     ) -> Result<Arc<GameHandle>, CobletError> {
         let mut request = self.inner.launch_request(&account_id(&account)?).await?;
+        if let Some(id) = operation_id {
+            request = request.with_operation(crate::events::operation_id(&id)?);
+        }
         for id in customizers {
             request =
                 request.with_customizer(ExtensionId::new(id).map_err(|error| invalid(&error))?);

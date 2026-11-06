@@ -54,6 +54,10 @@ pub struct LaunchOptions {
     /// IDs of registered customizers to run, in order.
     #[uniffi(default = [])]
     pub customizers: Vec<String>,
+    /// Launch ID for events, from `generate_operation_id`; random when
+    /// absent.
+    #[uniffi(default = None)]
+    pub operation_id: Option<String>,
 }
 
 /// Platform as Platform Profiles see it.
@@ -183,6 +187,7 @@ impl Coblet {
             mode,
             game_dir,
             customizers: Vec::new(),
+            operation_id: None,
         };
         self.launch_with(version_id, options).await
     }
@@ -207,6 +212,9 @@ impl Coblet {
             LaunchMode::Demo => LaunchAuth::demo(name),
         };
         let mut request = LaunchRequest::new(auth);
+        if let Some(id) = options.operation_id {
+            request = request.with_operation(crate::events::operation_id(&id)?);
+        }
         for id in options.customizers {
             request =
                 request.with_customizer(ExtensionId::new(id).map_err(|error| invalid(&error))?);
