@@ -1,99 +1,97 @@
-//! `check-test-layout`: unit tests live in each crate's `tests` directory,
-//! mirroring the `src` path, and are pulled in with
-//! `#[cfg(test)] #[path = "..."] mod tests;` so they keep access to private
-//! items. Cargo would also build those files as integration tests, so the
-//! crate sets `autotests = false`, and a file nothing pulls in would never
-//! compile; this check catches both.
+//! `check-test-layout`: unit tests sit inline at the end of the file they
+//! test, in `#[cfg(test)] mod tests { ... }`, the layout the Rust book
+//! describes. Test helpers such as mocks may be ordinary module files, but
+//! no test module points elsewhere with `#[path]`.
 
-use std::collections::BTreeSet;
 use std::fmt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use proc_macro2::{TokenStream, TokenTree};
 use syn::spanned::Spanned;
-use syn::{Attribute, Expr, ExprLit, Item, ItemMod, Lit, Meta};
+use syn::{Attribute, Item, ItemMod, Meta};
 
 use crate::workspace;
 
-/// One `#[cfg(test)]` module declaration found in a source file.
+/// One test module that breaks the layout.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct TestModule {
+pub(crate) struct Violation {
     pub(crate) line: usize,
-    pub(crate) name: String,
-    /// Value of its `#[path]` attribute.
-    pub(crate) path: Option<String>,
-    /// Whether the body is written inline instead of in a file.
-    pub(crate) inline: bool,
-    /// Whether it sits inside an inline module, where `#[path]` resolves differently.
-    pub(crate) nested: bool,
+    pub(crate) what: String,
 }
 
-/// Checks every crate under `root`.
+/// Scans every source file under `root`.
 pub(crate) fn run(root: &Path) -> Result<(), String> {
-    let manifests = workspace::manifests(root)
-        .map_err(|error| format!("failed to list manifests under {}: {error}", root.display()))?;
+    let files = workspace::rust_files(root).map_err(|error| {
+        format!(
+            "failed to list source files under {}: {error}",
+            root.display()
+        )
+    })?;
     let mut failures = Vec::new();
-    let mut referenced_total = 0_usize;
-    for manifest in &manifests {
-        let toml = read(manifest)?;
-        if !toml.contains("[package]") {
-            continue;
-        }
-        let krate = manifest.parent().unwrap_or(root);
-        let (referenced, mut problems) = check_crate(krate)?;
-        referenced_total += referenced.len();
-        problems.extend(orphans(krate, &referenced, &toml)?);
-        if !referenced.is_empty() && !has_autotests_off(&toml) {
-            problems.push(Failure::new(
-                manifest,
-                1,
-                "has unit tests under tests/ but does not set `autotests = false`".to_owned(),
-            ));
-        }
-        failures.extend(
-            problems
-                .into_iter()
-                .map(|failure| failure.relative_to(root)),
-        );
+    let mut modules = 0_usize;
+    for path in files.iter().filter(|path| in_src(path)) {
+        let source = std::fs::read_to_string(path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        let (count, violations) = check_source(&source)
+            .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
+        modules += count;
+        failures.extend(violations.into_iter().map(|violation| Failure {
+            path: workspace::relative(root, path),
+            violation,
+        }));
     }
     if failures.is_empty() {
-        println!("check-test-layout: {referenced_total} test files ok");
+        println!("check-test-layout: {modules} test modules ok");
         return Ok(());
     }
     let report: Vec<String> = failures.iter().map(ToString::to_string).collect();
     Err(format!(
-        "{} test layout problem(s):\n{}",
+        "{} test module(s) outside the inline layout:\n{}",
         failures.len(),
         report.join("\n")
     ))
 }
 
-/// Parses one source file and returns its `#[cfg(test)]` module declarations.
-pub(crate) fn test_modules(source: &str) -> syn::Result<Vec<TestModule>> {
+/// Parses one source file and returns how many test modules it declares
+/// and the ones that break the layout.
+pub(crate) fn check_source(source: &str) -> syn::Result<(usize, Vec<Violation>)> {
     let file = syn::parse_file(source)?;
-    let mut found = Vec::new();
-    collect(&file.items, false, &mut found);
-    Ok(found)
+    let mut count = 0;
+    let mut violations = Vec::new();
+    collect(&file.items, &mut count, &mut violations);
+    Ok((count, violations))
 }
 
-fn collect(items: &[Item], nested: bool, found: &mut Vec<TestModule>) {
+fn collect(items: &[Item], count: &mut usize, violations: &mut Vec<Violation>) {
     for item in items {
         let Item::Mod(module) = item else { continue };
         if is_cfg_test(&module.attrs) {
-            found.push(TestModule {
-                line: module.span().start().line,
-                name: module.ident.to_string(),
-                path: path_attr(&module.attrs),
-                inline: module.content.is_some(),
-                nested,
-            });
-        } else if let ItemMod {
-            content: Some((_, inner)),
-            ..
-        } = module
-        {
-            collect(inner, true, found);
+            *count += 1;
+            if let Some(what) = problem(module) {
+                violations.push(Violation {
+                    line: module.span().start().line,
+                    what,
+                });
+            }
+        } else if let Some((_, inner)) = &module.content {
+            collect(inner, count, violations);
         }
+    }
+}
+
+fn problem(module: &ItemMod) -> Option<String> {
+    let name = &module.ident;
+    if module.attrs.iter().any(|attr| attr.path().is_ident("path")) {
+        Some(format!(
+            "test module `{name}` uses #[path]; keep tests next to the code they test"
+        ))
+    } else if name == "tests" && module.content.is_none() {
+        Some(
+            "`mod tests;` lives in another file; write it inline at the end of this file"
+                .to_owned(),
+        )
+    } else {
+        None
     }
 }
 
@@ -124,161 +122,65 @@ fn mentions_test(tokens: TokenStream) -> bool {
     false
 }
 
-fn path_attr(attrs: &[Attribute]) -> Option<String> {
-    attrs.iter().find_map(|attr| match &attr.meta {
-        Meta::NameValue(pair) if pair.path.is_ident("path") => match &pair.value {
-            Expr::Lit(ExprLit {
-                lit: Lit::Str(text),
-                ..
-            }) => Some(text.value()),
-            _ => None,
-        },
-        _ => None,
-    })
-}
-
-/// Checks the declarations in `<crate>/src` and returns the test files they reference.
-fn check_crate(krate: &Path) -> Result<(BTreeSet<PathBuf>, Vec<Failure>), String> {
-    let src = krate.join("src");
-    let tests = krate.join("tests");
-    let mut referenced = BTreeSet::new();
-    let mut failures = Vec::new();
-    if !src.is_dir() {
-        return Ok((referenced, failures));
-    }
-    let files = workspace::rust_files(&src)
-        .map_err(|error| format!("failed to list {}: {error}", src.display()))?;
-    for file in &files {
-        let modules = test_modules(&read(file)?)
-            .map_err(|error| format!("failed to parse {}: {error}", file.display()))?;
-        for module in modules {
-            let problem = if module.inline {
-                Some(format!(
-                    "inline test module `{}`; move its body under tests/",
-                    module.name
-                ))
-            } else if module.nested {
-                Some(format!(
-                    "test module `{}` inside an inline module; declare it at the top of the file",
-                    module.name
-                ))
-            } else if let Some(path) = &module.path {
-                let target = normalize(&file.parent().unwrap_or(krate).join(path));
-                if !target.starts_with(&tests) {
-                    Some(format!(
-                        "test module `{}` points outside tests/: {path}",
-                        module.name
-                    ))
-                } else if !target.is_file() {
-                    Some(format!(
-                        "test module `{}` points to a missing file: {path}",
-                        module.name
-                    ))
-                } else {
-                    referenced.insert(target);
-                    None
-                }
-            } else {
-                Some(format!(
-                    "test module `{}` has no #[path] into tests/",
-                    module.name
-                ))
-            };
-            if let Some(what) = problem {
-                failures.push(Failure::new(file, module.line, what));
-            }
-        }
-    }
-    Ok((referenced, failures))
-}
-
-/// Reports `.rs` files under `<crate>/tests` that no declaration pulls in
-/// and the manifest does not name, since they would never compile.
-fn orphans(
-    krate: &Path,
-    referenced: &BTreeSet<PathBuf>,
-    toml: &str,
-) -> Result<Vec<Failure>, String> {
-    let tests = krate.join("tests");
-    if !tests.is_dir() {
-        return Ok(Vec::new());
-    }
-    let files = workspace::rust_files(&tests)
-        .map_err(|error| format!("failed to list {}: {error}", tests.display()))?;
-    Ok(files
-        .into_iter()
-        .filter(|file| !referenced.contains(file))
-        .filter(|file| {
-            let relative = workspace::relative(krate, file);
-            !toml.contains(&format!("\"{}\"", relative.display()))
-        })
-        .map(|file| {
-            Failure::new(
-                &file,
-                1,
-                "no #[cfg(test)] module pulls this file in, so it never compiles".to_owned(),
-            )
-        })
-        .collect())
-}
-
-/// Reports whether a manifest switches off integration test discovery.
-pub(crate) fn has_autotests_off(toml: &str) -> bool {
-    toml.lines().any(|line| {
-        let line: String = line.chars().filter(|c| !c.is_whitespace()).collect();
-        line == "autotests=false"
-    })
-}
-
-/// Resolves `.` and `..` without touching the file system.
-pub(crate) fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::ParentDir => {
-                out.pop();
-            }
-            Component::CurDir => {}
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-fn read(path: &Path) -> Result<String, String> {
-    std::fs::read_to_string(path)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))
+/// Reports whether a file belongs to a crate's `src`, where unit tests live;
+/// integration tests, examples and build scripts are left alone.
+fn in_src(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == "src")
 }
 
 struct Failure {
     path: PathBuf,
-    line: usize,
-    what: String,
-}
-
-impl Failure {
-    fn new(path: &Path, line: usize, what: String) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            line,
-            what,
-        }
-    }
-
-    fn relative_to(self, root: &Path) -> Self {
-        Self {
-            path: workspace::relative(root, &self.path),
-            ..self
-        }
-    }
+    violation: Violation,
 }
 
 impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "  {}:{}: {}", self.path.display(), self.line, self.what)
+        write!(
+            f,
+            "  {}:{}: {}",
+            self.path.display(),
+            self.violation.line,
+            self.violation.what
+        )
     }
 }
 
 #[cfg(test)]
-#[path = "../tests/test_layout.rs"]
-mod tests;
+mod tests {
+    use super::check_source;
+
+    #[test]
+    fn accepts_inline_tests_and_helper_files() {
+        let source = r"
+mod plain;
+
+#[cfg(test)]
+mod mock;
+
+#[cfg(all(test, unix))]
+mod tests {
+    #[test]
+    fn works() {}
+}
+
+#[cfg(not(test))]
+mod release;
+";
+        assert_eq!(check_source(source).unwrap(), (2, Vec::new()));
+    }
+
+    #[test]
+    fn rejects_path_attributes_and_out_of_line_tests() {
+        let source = "#[cfg(test)]\n#[path = \"../tests/a.rs\"]\nmod tests;\n\n\
+                      mod outer {\n    #[cfg(test)]\n    mod tests;\n}\n";
+        let (count, violations) = check_source(source).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(
+            violations.iter().map(|v| v.line).collect::<Vec<_>>(),
+            [1, 6]
+        );
+        assert!(violations[0].what.contains("#[path]"), "{violations:?}");
+        assert!(violations[1].what.contains("inline"), "{violations:?}");
+    }
+}

@@ -38,7 +38,6 @@ mod item;
 mod meta;
 mod source;
 #[cfg(test)]
-#[path = "../tests/testing.rs"]
 mod testing;
 mod timestamp;
 

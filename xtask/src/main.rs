@@ -20,7 +20,7 @@ usage: cargo xtask <command>
 commands:
   check-layers         reject dependencies that break the crate layering rules
   check-module-roots   reject definitions inside lib.rs and mod.rs files
-  check-test-layout    reject unit tests outside each crate's tests directory
+  check-test-layout    reject unit tests kept outside the file they test
   gen-header [--check] regenerate the C header of coblet-ffi, or check it is current
   help                 print this message";
 
