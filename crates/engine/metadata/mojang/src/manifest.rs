@@ -90,6 +90,57 @@ pub struct GameVersion {
     pub traits: VersionTraits,
 }
 
+impl GameVersion {
+    /// Creates a version for a catalog source other than the Mojang manifest.
+    ///
+    /// The version is not the latest release, has compliance level 0 and
+    /// no traits; launching derives traits from its version file anyway.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use coblet_catalog::Timestamp;
+    /// use coblet_mojang::GameVersion;
+    /// use coblet_runtime::HttpUrl;
+    /// use coblet_types::{GameVersionId, Sha1Digest, VersionType};
+    ///
+    /// let version = GameVersion::new(
+    ///     GameVersionId::new("1.16_combat-6")?,
+    ///     VersionType::Experiment,
+    ///     HttpUrl::new("https://meta.example/1.16_combat-6.json")?,
+    ///     Sha1Digest::from_hex("a9993e364706816aba3e25717850c26c9cd0d89d")?,
+    ///     "2020-08-14T12:00:00Z".parse::<Timestamp>()?,
+    /// );
+    /// assert!(!version.latest_release);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn new(
+        id: GameVersionId,
+        version_type: VersionType,
+        url: HttpUrl,
+        sha1: Sha1Digest,
+        released: Timestamp,
+    ) -> Self {
+        Self {
+            id,
+            version_type,
+            url,
+            sha1,
+            released,
+            compliance_level: 0,
+            latest_release: false,
+            traits: VersionTraits::new(),
+        }
+    }
+
+    /// Sets the traits known before the version file is fetched.
+    #[must_use]
+    pub fn with_traits(self, traits: VersionTraits) -> Self {
+        Self { traits, ..self }
+    }
+}
+
 impl CatalogItem for GameVersion {
     fn key(&self) -> &str {
         self.id.as_str()
