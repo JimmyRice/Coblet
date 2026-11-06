@@ -415,5 +415,5 @@ impl CobletBuilder {
 }
 
 #[cfg(test)]
-#[path = "builder_tests.rs"]
+#[path = "../tests/builder.rs"]
 mod tests;

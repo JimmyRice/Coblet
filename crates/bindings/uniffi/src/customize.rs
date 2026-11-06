@@ -584,5 +584,5 @@ impl coblet::launch::LaunchStep for ForeignStep {
 }
 
 #[cfg(test)]
-#[path = "customize_tests.rs"]
+#[path = "../tests/customize.rs"]
 mod tests;

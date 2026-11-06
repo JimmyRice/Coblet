@@ -139,5 +139,5 @@ pub unsafe extern "C" fn coblet_rewrite_set_url(
 }
 
 #[cfg(test)]
-#[path = "sources_tests.rs"]
+#[path = "../tests/sources.rs"]
 mod tests;

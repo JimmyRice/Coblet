@@ -374,5 +374,5 @@ impl Coblet {
 }
 
 #[cfg(test)]
-#[path = "accounts_tests.rs"]
+#[path = "../tests/accounts.rs"]
 mod tests;
