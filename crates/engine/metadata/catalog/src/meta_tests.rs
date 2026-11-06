@@ -77,7 +77,7 @@ async fn revalidates_with_etag_and_last_modified() {
     assert_eq!(transport.header_of(2, "If-None-Match"), None);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn falls_back_to_the_cache_with_a_warning() {
     let (_dir, transport, cache, request) =
         setup(vec![Reply::Ok(200, Vec::new(), "abc"), Reply::Fail]);
@@ -96,7 +96,8 @@ async fn falls_back_to_the_cache_with_a_warning() {
     transport.push(Reply::Ok(503, Vec::new(), ""));
     let unavailable = cache.fetch(&request, CachePolicy::Refresh).await.unwrap();
     assert_eq!(unavailable.origin, Origin::OfflineCache);
-    assert_eq!(transport.count(), 3);
+    // One success, then three tries for each failing fetch.
+    assert_eq!(transport.count(), 7);
 }
 
 #[tokio::test]
@@ -288,7 +289,7 @@ async fn a_mismatching_mirror_falls_back_to_the_original_address() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_trusted_mirror_copy_is_used_when_the_original_fails_and_kept() {
     let (_dir, transport, cache, request) =
         setup(vec![Reply::Ok(200, Vec::new(), "abd"), Reply::Fail]);
@@ -317,10 +318,11 @@ async fn a_trusted_mirror_copy_is_used_when_the_original_fails_and_kept() {
         (Origin::Cache, &b"abd"[..])
     );
     assert_eq!(again.warning.unwrap().code, super::UNVERIFIED_MIRROR);
-    assert_eq!(transport.count(), 2);
+    // The mirror once, the original three times.
+    assert_eq!(transport.count(), 4);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_untrusted_mirror_copy_is_rejected() {
     let (dir, transport, cache, request) =
         setup(vec![Reply::Ok(200, Vec::new(), "abd"), Reply::Fail]);
@@ -330,7 +332,7 @@ async fn an_untrusted_mirror_copy_is_rejected() {
         .await
         .unwrap_err();
     assert!(matches!(error, CatalogError::Transport { .. }), "{error}");
-    assert_eq!(transport.count(), 2);
+    assert_eq!(transport.count(), 4);
     assert!(!dir.path().join("cache/meta/example/manifest.json").exists());
 }
 
@@ -364,4 +366,28 @@ async fn without_fallback_only_the_mirror_is_asked() {
         .await
         .unwrap_err();
     assert!(matches!(error, CatalogError::Verify { .. }), "{error}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn transient_failures_are_retried_on_the_same_address() {
+    let (_dir, transport, cache, request) = setup(vec![
+        Reply::Fail,
+        Reply::Ok(503, Vec::new(), ""),
+        Reply::Ok(200, Vec::new(), "abc"),
+    ]);
+    let fetched = cache
+        .fetch(&request, CachePolicy::Revalidate)
+        .await
+        .unwrap();
+    assert_eq!(&fetched.body[..], b"abc");
+    assert_eq!(transport.count(), 3);
+
+    let (_dir, transport, cache, request) = setup(vec![Reply::Ok(404, Vec::new(), "")]);
+    assert!(
+        cache
+            .fetch(&request, CachePolicy::Revalidate)
+            .await
+            .is_err()
+    );
+    assert_eq!(transport.count(), 1, "a 404 is not retried");
 }

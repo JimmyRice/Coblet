@@ -18,6 +18,12 @@ pub const OFFLINE_CACHE: WarningCode = WarningCode::from_static("catalog.offline
 /// used although it does not match its expected hash.
 pub const UNVERIFIED_MIRROR: WarningCode = WarningCode::from_static("catalog.unverified-mirror");
 
+/// Requests to one address before moving on, when the failures are transient.
+const ATTEMPTS_PER_ADDRESS: u32 = 3;
+
+/// Wait before the second request to an address; doubled for each later one.
+const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// Largest metadata document read into memory by default (64 MiB).
 pub const DEFAULT_MAX_SIZE: u64 = 64 * 1024 * 1024;
 
@@ -159,6 +165,18 @@ struct Mismatch {
     validators: Validators,
     expected: FileHash,
     actual: FileHash,
+}
+
+impl Failed {
+    /// Reports whether another request to the same address can succeed:
+    /// connection failures, timeouts and server errors, but not a 429.
+    fn is_transient(&self) -> bool {
+        match &self.error {
+            CatalogError::Transport { source, .. } => source.is_retryable(),
+            CatalogError::Status { status, .. } => matches!(status, 500 | 502 | 503 | 504),
+            _ => false,
+        }
+    }
 }
 
 impl From<CatalogError> for Failed {
@@ -385,8 +403,35 @@ impl MetaCache {
         })
     }
 
-    /// Requests the document from one address.
+    /// Requests the document from one address, repeating transient failures.
     async fn attempt(
+        &self,
+        request: &MetaRequest,
+        url: &HttpUrl,
+        path: &Path,
+        cached: Option<&Bytes>,
+        validators: Option<&Validators>,
+    ) -> Result<Fetched, Failed> {
+        let mut delay = RETRY_DELAY;
+        let mut tries = 1;
+        loop {
+            match self
+                .attempt_once(request, url, path, cached, validators)
+                .await
+            {
+                Err(failed) if failed.is_transient() && tries < ATTEMPTS_PER_ADDRESS => {
+                    tracing::debug!(%url, error = %failed.error, tries, "retrying metadata request");
+                    tokio::time::sleep(delay).await;
+                    delay *= 2;
+                    tries += 1;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    /// Requests the document from one address once.
+    async fn attempt_once(
         &self,
         request: &MetaRequest,
         url: &HttpUrl,
