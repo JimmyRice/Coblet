@@ -8,7 +8,7 @@ use coblet_launch_command::{
 };
 use coblet_mojang::{AssetIndex, VersionTrait};
 use coblet_platform::EffectiveLaunchProfile;
-use coblet_runtime::{BoxFuture, ProcessSpec};
+use coblet_runtime::{BoxFuture, Event, ProcessSpec, TransferKind, TransferProgress};
 use coblet_types::OsFamily;
 
 use crate::files::{
@@ -138,8 +138,9 @@ async fn select_java(cx: &mut LaunchContext) -> Result<(), LaunchError> {
         }
         install
     } else {
+        let progress = TransferProgress::new();
         let java = JavaContext {
-            progress: None,
+            progress: Some(&progress),
             storage: &*services.storage,
             spawner: &*services.spawner,
             os: &services.os,
@@ -147,7 +148,12 @@ async fn select_java(cx: &mut LaunchContext) -> Result<(), LaunchError> {
             installer: services.java_installer.as_ref(),
             catalog: &services.catalog,
         };
-        find_or_install(java, requirement, &cx.cancel).await?
+        let install = find_or_install(java, requirement, &cx.cancel);
+        let events = services.events.as_ref();
+        let op = cx.request.operation;
+        progress
+            .track(events, op, TransferKind::JavaRuntime, install)
+            .await?
     };
     tracing::info!(java = %install.executable.display(), version = %install.version, "selected java");
     cx.java = Some(install);
@@ -157,15 +163,20 @@ async fn select_java(cx: &mut LaunchContext) -> Result<(), LaunchError> {
 async fn verify_files(cx: &mut LaunchContext) -> Result<(), LaunchError> {
     let services = &cx.services;
     let storage = &*services.storage;
+    let (events, op) = (services.events.as_ref(), cx.request.operation);
     let set = FileSet::for_profile(&cx.profile, &cx.layout, &services.catalog).await?;
     check_existing(storage, &set.existing).await?;
-    fetch_all(
+    let progress = TransferProgress::new();
+    let fetch = fetch_all(
         &services.downloader,
         set.tasks,
         cx.request.verify,
         &cx.cancel,
-    )
-    .await?;
+        &progress,
+    );
+    progress
+        .track(events, op, TransferKind::GameFiles, fetch)
+        .await?;
     let Some(reference) = &cx.profile.asset_index else {
         return Ok(());
     };
@@ -174,7 +185,17 @@ async fn verify_files(cx: &mut LaunchContext) -> Result<(), LaunchError> {
         LaunchError::InvalidMetadata(format!("asset index {}: {error}", reference.id))
     })?;
     let tasks = asset_tasks(&index, &cx.layout)?;
-    fetch_all(&services.downloader, tasks, cx.request.verify, &cx.cancel).await?;
+    let progress = TransferProgress::new();
+    let fetch = fetch_all(
+        &services.downloader,
+        tasks,
+        cx.request.verify,
+        &cx.cancel,
+        &progress,
+    );
+    progress
+        .track(events, op, TransferKind::Assets, fetch)
+        .await?;
     if let Some(base) = by_name_directory(&index, &cx.layout, &reference.id) {
         copy_by_name(storage, &index, &cx.layout, &base).await?;
         cx.game_assets = Some(base);
@@ -393,13 +414,21 @@ async fn spawn(cx: &mut LaunchContext) -> Result<(), LaunchError> {
         spawner: Arc::clone(&cx.services.spawner),
         game_directory: cx.layout.game_directory().to_path_buf(),
         post_exit: cx.request.post_exit.clone(),
+        op: cx.request.operation,
     };
-    cx.session = Some(GameSession::start(
-        command,
-        cx.profile.clone(),
-        process,
-        monitor,
-    ));
+    let session = GameSession::start(command, cx.profile.clone(), process, monitor);
+    if let Some(events) = cx
+        .services
+        .events
+        .as_ref()
+        .filter(|bus| bus.has_subscribers())
+    {
+        events.publish(Event::GameStarted {
+            op: cx.request.operation,
+            pid: session.pid(),
+        });
+    }
+    cx.session = Some(session);
     Ok(())
 }
 

@@ -7,6 +7,7 @@ use coblet_mojang::{AssetIndex, Download};
 use coblet_platform::{EffectiveLaunchProfile, FileSource, LibraryFile};
 use coblet_runtime::{
     ArtifactKind, CancellationToken, EntryKind, Expectation, HttpUrl, RelPath, Sources, Storage,
+    TransferProgress,
 };
 use coblet_types::{FileHash, Sha1Digest};
 
@@ -156,12 +157,14 @@ impl FileSet {
     }
 }
 
-/// Downloads missing or damaged files; `Strict` rehashes files that look unchanged.
+/// Downloads missing or damaged files; `Strict` rehashes files that look
+/// unchanged. Every file is counted in `progress`.
 pub(crate) async fn fetch_all(
     downloader: &Downloader,
     tasks: Vec<DownloadTask>,
     mode: VerifyMode,
     cancel: &CancellationToken,
+    progress: &TransferProgress,
 ) -> Result<(), LaunchError> {
     if mode == VerifyMode::Strict {
         for task in &tasks {
@@ -182,7 +185,9 @@ pub(crate) async fn fetch_all(
             _ => PathBuf::new(),
         })
         .collect();
-    let results = downloader.download_all(tasks, cancel).await;
+    let results = downloader
+        .download_all_with_progress(tasks, cancel, Some(progress))
+        .await;
     if cancel.is_cancelled() {
         return Err(LaunchError::Cancelled);
     }

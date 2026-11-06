@@ -3,8 +3,11 @@
 //! ```text
 //! cargo run -p coblet --example launch -- <version|latest> [--demo] [--name NAME]
 //!     [--data DIR] [--game DIR] [--java PATH] [--until TEXT] [--run-for SECONDS]
-//!     [--timeout SECONDS]
+//!     [--timeout SECONDS] [--progress]
 //! ```
+//!
+//! `--progress` prints launch steps, download totals and the game's start
+//! and exit from the event stream.
 //!
 //! With `--until`, the game is stopped once a log message contains TEXT;
 //! with `--run-for`, once it ran that long. The example then exits with 0.
@@ -22,7 +25,7 @@ use std::time::Duration;
 use coblet::Coblet;
 use coblet::launch::{LaunchRequest, LogItem};
 use coblet::launch_command::LaunchAuth;
-use coblet::runtime::UserAgent;
+use coblet::runtime::{Event, EventSubscription, Received, UserAgent};
 use coblet::types::PlayerName;
 
 struct Args {
@@ -35,6 +38,7 @@ struct Args {
     until: Option<String>,
     run_for: Option<Duration>,
     timeout: Duration,
+    progress: bool,
 }
 
 fn seconds(text: &str) -> Result<Duration, String> {
@@ -55,11 +59,13 @@ fn parse() -> Result<Args, String> {
         until: None,
         run_for: None,
         timeout: Duration::from_secs(600),
+        progress: false,
     };
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
         match arg.as_str() {
             "--demo" => parsed.demo = true,
+            "--progress" => parsed.progress = true,
             "--name" => parsed.name = value()?,
             "--data" => parsed.data = value()?.into(),
             "--game" => parsed.game = Some(value()?.into()),
@@ -72,7 +78,7 @@ fn parse() -> Result<Args, String> {
         }
     }
     if parsed.version.is_empty() {
-        return Err("usage: launch <version|latest> [--demo] [--name NAME] [--data DIR] [--game DIR] [--java PATH] [--until TEXT] [--run-for SECONDS] [--timeout SECONDS]".to_owned());
+        return Err("usage: launch <version|latest> [--demo] [--name NAME] [--data DIR] [--game DIR] [--java PATH] [--until TEXT] [--run-for SECONDS] [--timeout SECONDS] [--progress]".to_owned());
     }
     Ok(parsed)
 }
@@ -114,6 +120,9 @@ async fn run(args: Args) -> Result<bool, Box<dyn std::error::Error>> {
     let game = args
         .game
         .unwrap_or_else(|| args.data.join("games").join(version.id.as_str()));
+    if args.progress {
+        tokio::spawn(print_progress(coblet.subscribe()));
+    }
     let session = coblet.launch_profile(profile, game, request).await?;
     println!("== started pid {:?}: {}", session.pid(), session.command());
     let mut logs = session.logs();
@@ -163,6 +172,43 @@ async fn run(args: Args) -> Result<bool, Box<dyn std::error::Error>> {
     } else {
         !exit.suspected_crash
     })
+}
+
+async fn print_progress(mut events: EventSubscription) {
+    while let Some(received) = events.recv().await {
+        let event = match received {
+            Received::Event(event) => event,
+            Received::Missed(count) => {
+                println!("== progress: missed {count} events");
+                continue;
+            }
+        };
+        match event {
+            Event::LaunchStep {
+                step, index, count, ..
+            } => println!("== step {}/{count}: {step}", index + 1),
+            Event::Transfer { kind, progress, .. } => {
+                let total = progress
+                    .bytes_total
+                    .map_or_else(|| "?".to_owned(), |total| total.to_string());
+                println!(
+                    "== {}: {}/{} files, {}/{total} bytes",
+                    kind.as_str(),
+                    progress.files_done,
+                    progress.files_total,
+                    progress.bytes_done
+                );
+            }
+            Event::GameStarted { pid, .. } => println!("== game started, pid {pid:?}"),
+            Event::OperationFinished { outcome, .. } => println!("== launch finished: {outcome:?}"),
+            Event::GameExited {
+                exit,
+                suspected_crash,
+                ..
+            } => println!("== game exited: {exit:?}, suspected crash {suspected_crash}"),
+            _ => {}
+        }
+    }
 }
 
 #[tokio::main]

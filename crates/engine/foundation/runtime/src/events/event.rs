@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::fmt;
 
 use super::{AuthPrompt, GameLogLine, TransferKind, TransferSnapshot};
-use crate::{OperationId, StepId};
+use crate::{OperationId, ProcessExit, StepId};
 
 /// Event published while coblet works: Operation progress, warnings, game
 /// logs and login prompts.
@@ -58,8 +58,46 @@ pub enum Event {
     },
     /// Something went wrong without stopping the work, such as falling back to cached metadata.
     Warning(Warning),
+    /// A launch began one of its steps, such as `verify-files`. A launch
+    /// is reported as an Operation of kind `launch`: it starts with
+    /// [`OperationStarted`](Self::OperationStarted) and finishes with
+    /// [`OperationFinished`](Self::OperationFinished) once the game runs or
+    /// the launch failed.
+    LaunchStep {
+        /// The launch.
+        op: OperationId,
+        /// Step name, such as `select-java` or `spawn`.
+        step: String,
+        /// Position of the step, from 0.
+        index: u32,
+        /// Number of steps in this launch.
+        count: u32,
+    },
+    /// The game process started.
+    GameStarted {
+        /// The launch that started it.
+        op: OperationId,
+        /// Operating system process ID, when known.
+        pid: Option<u32>,
+    },
     /// A line of a running game's output.
-    GameLog(GameLogLine),
+    GameLog {
+        /// The launch that started the game.
+        op: OperationId,
+        /// The line.
+        line: GameLogLine,
+    },
+    /// The game process ended.
+    GameExited {
+        /// The launch that started it.
+        op: OperationId,
+        /// Exit status; `None` when waiting for the process failed.
+        exit: Option<ProcessExit>,
+        /// Whether the launcher killed the game.
+        killed: bool,
+        /// Whether the game probably crashed.
+        suspected_crash: bool,
+    },
     /// A login flow waits for the user, such as entering a device code.
     AuthPrompt(AuthPrompt),
 }
@@ -73,9 +111,13 @@ impl Event {
             | Self::StepProgress { op, .. }
             | Self::StepFinished { op, .. }
             | Self::OperationFinished { op, .. }
-            | Self::Transfer { op, .. } => Some(*op),
+            | Self::Transfer { op, .. }
+            | Self::LaunchStep { op, .. }
+            | Self::GameStarted { op, .. }
+            | Self::GameLog { op, .. }
+            | Self::GameExited { op, .. } => Some(*op),
             Self::Warning(warning) => warning.op,
-            Self::GameLog(_) | Self::AuthPrompt(_) => None,
+            Self::AuthPrompt(_) => None,
         }
     }
 }
