@@ -139,6 +139,7 @@ async fn select_java(cx: &mut LaunchContext) -> Result<(), LaunchError> {
         install
     } else {
         let java = JavaContext {
+            progress: None,
             storage: &*services.storage,
             spawner: &*services.spawner,
             os: &services.os,

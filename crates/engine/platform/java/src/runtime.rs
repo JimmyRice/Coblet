@@ -7,7 +7,7 @@ use coblet_download::{Destination, DownloadTask, Downloader};
 use coblet_platform::{JavaRequirement, JavaSource};
 use coblet_runtime::{
     ArtifactKind, CancellationToken, Expectation, HttpUrl, ProcessSpawner, RelPath, Sources,
-    Storage,
+    Storage, TransferProgress,
 };
 use coblet_types::{FileHash, OsFamily, Sha1Digest};
 use serde::Deserialize;
@@ -205,7 +205,8 @@ impl RuntimeInstaller {
     /// Installs a runtime and returns its `java` executable.
     ///
     /// Files already present with the right hash are kept, so an interrupted
-    /// install resumes where it stopped.
+    /// install resumes where it stopped. Each file and received chunk is
+    /// counted in `progress`.
     ///
     /// # Errors
     ///
@@ -218,6 +219,7 @@ impl RuntimeInstaller {
         component: &str,
         os: &OsFamily,
         cancel: &CancellationToken,
+        progress: Option<&TransferProgress>,
     ) -> Result<PathBuf, JavaError> {
         let not_available = || JavaError::NotAvailable {
             platform: platform.to_owned(),
@@ -268,7 +270,10 @@ impl RuntimeInstaller {
             files = tasks.len(),
             "installing java runtime"
         );
-        let results = self.downloader.download_all(tasks, cancel).await;
+        let results = self
+            .downloader
+            .download_all_with_progress(tasks, cancel, progress)
+            .await;
         for (relative, result) in paths.into_iter().zip(results) {
             result.map_err(|source| JavaError::Download {
                 path: relative,
@@ -314,6 +319,8 @@ pub struct JavaContext<'a> {
     pub installer: Option<&'a RuntimeInstaller>,
     /// Metadata context for the runtime index.
     pub catalog: &'a CatalogContext,
+    /// Counters for a runtime download, if one happens.
+    pub progress: Option<&'a TransferProgress>,
 }
 
 impl std::fmt::Debug for JavaContext<'_> {
@@ -358,7 +365,7 @@ pub async fn find_or_install(
         return Err(not_found("runtime downloads are disabled"));
     };
     let executable = installer
-        .install(cx.catalog, platform, component, cx.os, cancel)
+        .install(cx.catalog, platform, component, cx.os, cancel, cx.progress)
         .await?;
     let install = probe(
         cx.spawner,

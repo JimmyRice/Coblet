@@ -1,10 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use coblet_runtime::{
     BoxFuture, CancellationToken, DownloadHandler, DownloadStep, EntryKind, Expectation, HttpUrl,
-    Request, StepContext, StepError, StepOutcome, Storage, StorageError, StreamHasher, Transport,
+    Request, StepContext, StepError, StepOutcome, Storage, StorageError, StreamHasher,
+    TransferProgress, Transport,
 };
 use coblet_types::FileHash;
 use tokio::task::JoinSet;
@@ -53,6 +55,38 @@ impl From<StorageError> for AttemptError {
     fn from(error: StorageError) -> Self {
         Self::Storage(error)
     }
+}
+
+/// Downloads one task, keeping `progress` in step with the bytes on disk.
+async fn tracked(
+    downloader: &Downloader,
+    task: &DownloadTask,
+    cancel: &CancellationToken,
+    progress: &TransferProgress,
+) -> Result<DownloadOutcome, DownloadError> {
+    // Bytes of this file already counted; a new attempt reports from its
+    // resume offset, which may be lower.
+    let counted = AtomicU64::new(0);
+    let report = |done: u64, _size: Option<u64>| {
+        let before = counted.swap(done, Ordering::Relaxed);
+        if done >= before {
+            progress.add_bytes(done - before);
+        } else {
+            progress.remove_bytes(before - done);
+        }
+    };
+    let result = downloader.download(task, cancel, &report).await;
+    if result.is_ok() {
+        // Present or cached files never report chunks; count their size.
+        let counted = counted.load(Ordering::Relaxed);
+        if let Some(size) = task.expect.size()
+            && size > counted
+        {
+            progress.add_bytes(size - counted);
+        }
+        progress.file_done();
+    }
+    result
 }
 
 /// Status code and `Retry-After` value of a response, which is not `Sync` itself.
@@ -204,6 +238,28 @@ impl Downloader {
         tasks: Vec<DownloadTask>,
         cancel: &CancellationToken,
     ) -> Vec<Result<DownloadOutcome, DownloadError>> {
+        self.download_all_with_progress(tasks, cancel, None).await
+    }
+
+    /// Like [`download_all`](Self::download_all), counting every file and
+    /// received chunk in `progress`.
+    ///
+    /// All tasks are added to the totals before the first one starts. Files
+    /// already present count as done with their full size. A retried
+    /// attempt takes back the bytes of the attempt it replaces, so the
+    /// counters never run ahead of the files on disk. Updates are relaxed
+    /// atomic additions; [`TransferProgress::track`] turns them into events.
+    pub async fn download_all_with_progress(
+        &self,
+        tasks: Vec<DownloadTask>,
+        cancel: &CancellationToken,
+        progress: Option<&TransferProgress>,
+    ) -> Vec<Result<DownloadOutcome, DownloadError>> {
+        if let Some(progress) = progress {
+            for task in &tasks {
+                progress.add_file(task.expect.size());
+            }
+        }
         let mut order: Vec<usize> = (0..tasks.len()).collect();
         order.sort_by_key(|&index| std::cmp::Reverse(tasks[index].priority));
         let tasks = Arc::new(tasks);
@@ -212,9 +268,14 @@ impl Downloader {
             let this = self.clone();
             let tasks = Arc::clone(&tasks);
             let cancel = cancel.clone();
+            let progress = progress.cloned();
             running.spawn(async move {
                 let task = &tasks[index];
-                (index, this.download(task, &cancel, &|_, _| {}).await)
+                let result = match progress {
+                    Some(progress) => tracked(&this, task, &cancel, &progress).await,
+                    None => this.download(task, &cancel, &|_, _| {}).await,
+                };
+                (index, result)
             });
         }
         let mut results: Vec<Option<Result<DownloadOutcome, DownloadError>>> =

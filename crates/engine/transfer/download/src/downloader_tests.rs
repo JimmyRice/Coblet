@@ -304,3 +304,57 @@ async fn rewrites_addresses_and_runs_batches() {
             .all(|(url, _)| url.starts_with("https://mirror.example/"))
     );
 }
+
+/// Transport that answers by path, handing out each path's replies in order.
+struct ByPath(Mutex<std::collections::HashMap<&'static str, VecDeque<&'static str>>>);
+
+impl Transport for ByPath {
+    fn send(&self, request: Request) -> BoxFuture<'_, Result<Response, TransportError>> {
+        let path = request
+            .url()
+            .as_str()
+            .rsplit('/')
+            .next()
+            .unwrap_or_default();
+        let body = self
+            .0
+            .lock()
+            .unwrap()
+            .get_mut(path)
+            .and_then(VecDeque::pop_front);
+        Box::pin(async move {
+            Ok(match body {
+                Some(body) => Response::new(200, Vec::new(), MemoryBody::new(body)),
+                None => Response::new(404, Vec::new(), MemoryBody::default()),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn batches_count_files_and_bytes_on_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("present"), "abcdef").unwrap();
+    let replies = [
+        ("fresh", VecDeque::from(["abcdef"])),
+        // A corrupt first copy is taken back before the retry counts again.
+        ("flaky", VecDeque::from(["abcxyz", "abcdef"])),
+    ];
+    let transport = Arc::new(ByPath(Mutex::new(replies.into_iter().collect())));
+    let downloader = Downloader::new(transport, Arc::new(TokioStorage::new()), config());
+    let tasks = ["present", "fresh", "flaky", "missing"]
+        .map(|name| task(&dir.path().join(name), Sources::single(url(name))))
+        .to_vec();
+    let progress = coblet_runtime::TransferProgress::new();
+    let results = downloader
+        .download_all_with_progress(tasks, &CancellationToken::new(), Some(&progress))
+        .await;
+    assert_eq!(
+        results[0].as_ref().unwrap(),
+        &DownloadOutcome::AlreadyPresent
+    );
+    assert!(results[1].is_ok() && results[2].is_ok() && results[3].is_err());
+    let totals = progress.snapshot();
+    assert_eq!((totals.files_done, totals.files_total), (3, 4));
+    assert_eq!((totals.bytes_done, totals.bytes_total), (18, Some(24)));
+}

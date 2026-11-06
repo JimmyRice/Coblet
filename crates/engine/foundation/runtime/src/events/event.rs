@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use super::{AuthPrompt, GameLogLine};
+use super::{AuthPrompt, GameLogLine, TransferKind, TransferSnapshot};
 use crate::{OperationId, StepId};
 
 /// Event published while coblet works: Operation progress, warnings, game
@@ -45,12 +45,39 @@ pub enum Event {
         /// How the Operation ended.
         outcome: OperationOutcome,
     },
+    /// A batch of files made progress, such as the assets of a launch.
+    /// Published at most 30 times per second per batch, only when the
+    /// totals changed, and once more when the batch ends.
+    Transfer {
+        /// The Operation or launch the files belong to.
+        op: OperationId,
+        /// Which files.
+        kind: TransferKind,
+        /// Totals so far.
+        progress: TransferSnapshot,
+    },
     /// Something went wrong without stopping the work, such as falling back to cached metadata.
     Warning(Warning),
     /// A line of a running game's output.
     GameLog(GameLogLine),
     /// A login flow waits for the user, such as entering a device code.
     AuthPrompt(AuthPrompt),
+}
+
+impl Event {
+    /// Returns the Operation or launch the event belongs to, if any.
+    #[must_use]
+    pub fn op(&self) -> Option<OperationId> {
+        match self {
+            Self::OperationStarted { op, .. }
+            | Self::StepProgress { op, .. }
+            | Self::StepFinished { op, .. }
+            | Self::OperationFinished { op, .. }
+            | Self::Transfer { op, .. } => Some(*op),
+            Self::Warning(warning) => warning.op,
+            Self::GameLog(_) | Self::AuthPrompt(_) => None,
+        }
+    }
 }
 
 /// Final state of a step.
