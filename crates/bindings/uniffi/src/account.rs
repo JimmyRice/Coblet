@@ -33,6 +33,29 @@ impl From<coblet::auth::AccountState> for AccountState {
     }
 }
 
+/// What an account's entitlements said about the game at its last check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum GameLicense {
+    /// The account bought the game.
+    Purchased,
+    /// The account may play without a purchase on record, for example
+    /// through a subscription.
+    Entitled,
+    /// The account may not play the full game.
+    Missing,
+}
+
+impl From<coblet::auth::GameLicense> for GameLicense {
+    fn from(license: coblet::auth::GameLicense) -> Self {
+        use coblet::auth::GameLicense as License;
+        match license {
+            License::Purchased => Self::Purchased,
+            License::Entitled => Self::Entitled,
+            _ => Self::Missing,
+        }
+    }
+}
+
 /// Arm width of a skin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum SkinModel {
@@ -145,6 +168,14 @@ pub struct AccountInfo {
     pub player: Option<PlayerInfo>,
     /// When the current game session expires, when there is one.
     pub session_expires_at: Option<SystemTime>,
+    /// Result of the last license check; absent for offline accounts and
+    /// accounts never checked, such as imported ones.
+    pub license: Option<GameLicense>,
+    /// When `license` was read.
+    pub license_checked_at: Option<SystemTime>,
+    /// Whether the last check found that the account bought the game, like
+    /// Prism Launcher's "owns Minecraft". False for subscriptions.
+    pub owns_game: bool,
 }
 
 impl From<&Account> for AccountInfo {
@@ -155,6 +186,9 @@ impl From<&Account> for AccountInfo {
             state: account.state.into(),
             player: account.profile.as_ref().map(PlayerInfo::from),
             session_expires_at: account.session_expires_at,
+            license: account.license.map(|check| check.license.into()),
+            license_checked_at: account.license.map(|check| check.checked_at),
+            owns_game: account.owns_game(),
         }
     }
 }

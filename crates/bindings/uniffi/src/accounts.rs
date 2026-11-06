@@ -145,6 +145,39 @@ impl Coblet {
         Ok(AccountInfo::from(&account.map_err(auth)?))
     }
 
+    /// Checks with Minecraft services whether the account still owns the
+    /// game, saves the result and returns the updated account; read
+    /// `owns_game` and `license` on it.
+    ///
+    /// It reuses the current session, so it costs two requests unless the
+    /// session needs renewing. An account that bought the game since its
+    /// last check becomes `Ready`, one that lost it `NoLicense`. Offline
+    /// accounts are returned unchanged, without a license.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `Auth` when the user has to sign in again and `Network`
+    /// when a service cannot be reached; the last license stays saved.
+    pub async fn verify_license(&self, id: String) -> Result<AccountInfo, CobletError> {
+        let account = self
+            .inner
+            .accounts()
+            .verify_license(&account_id(&id)?)
+            .await;
+        Ok(AccountInfo::from(&account.map_err(auth)?))
+    }
+
+    /// Returns whether any saved account bought the game as of its last
+    /// check, without network access. Prism Launcher allows offline
+    /// accounts only when this holds; the policy is the launcher's.
+    ///
+    /// # Errors
+    ///
+    /// Fails when `accounts.json` cannot be read.
+    pub async fn any_account_owns_game(&self) -> Result<bool, CobletError> {
+        self.inner.accounts().any_owns_game().await.map_err(auth)
+    }
+
     /// Imports the accounts of a Prism Launcher `accounts.json`. Microsoft
     /// accounts come in as `NeedsReauth`: their tokens are not copied.
     ///

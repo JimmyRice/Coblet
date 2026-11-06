@@ -334,14 +334,20 @@ extern "C" {
 #endif // __cplusplus
 
 // Lists the saved accounts as JSON: `{"schema":1,"default","accounts":[
-// {"id","method","state","player","session_expires_at"}]}`.
+// {"id","method","state","player","session_expires_at","license",
+// "license_checked_at","owns_game"}]}`.
 //
 // `default` is the default account's ID or null. `state` is `ready`,
 // `needs-refresh`, `needs-reauth`, `no-license` or `no-profile`. `player`
 // is null or `{"name","uuid","skins":[{"id","url","model","active"}],
 // "capes":[{"id","alias","url","active"}]}` with `model` `classic` or
-// `slim`. `session_expires_at` is in Unix seconds or null. On success
-// `*out_json` receives a string to free with `coblet_string_free`.
+// `slim`. `session_expires_at` is in Unix seconds or null. `license` is
+// the last license check, `purchased`, `entitled` (for example through a
+// subscription) or `missing`, and null for offline or never checked
+// accounts; `license_checked_at` is its time in Unix seconds or null.
+// `owns_game` is true when `license` is `purchased`, like Prism
+// Launcher's "owns Minecraft". On success `*out_json` receives a string
+// to free with `coblet_string_free`.
 //
 // Reading the list needs no network. Each `player` is the snapshot from
 // the account's last login, token renewal or skin change;
@@ -411,6 +417,40 @@ enum CobletStatus coblet_account_refresh(const struct Coblet *coblet,
                                          const char *account_id,
                                          struct CobletString *out_json,
                                          struct CobletError **out_err);
+
+// Checks with Minecraft services whether the account still owns the
+// game, saves the result and returns the account as JSON in the format of
+// `coblet_accounts_json` with a `schema` field; read its `owns_game` and
+// `license`.
+//
+// The current session is reused, so this costs two requests unless the
+// session needs renewing. An account that bought the game since its last
+// check becomes `ready`, one that lost it `no-license`. Offline accounts
+// are returned unchanged with a null `license`. Fails with
+// `COBLET_ERROR_KIND_AUTH` when the user has to sign in again; the last
+// license stays saved.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `account_id` must be NULL or
+// NUL-terminated; `out_json` must be writable; `out_err` must be NULL or
+// writable.
+enum CobletStatus coblet_account_verify_license(const struct Coblet *coblet,
+                                                const char *account_id,
+                                                struct CobletString *out_json,
+                                                struct CobletError **out_err);
+
+// Writes to `*out_owns` whether any saved account bought the game as of
+// its last license check, without network access. Prism Launcher allows
+// offline accounts only when this holds; the policy is the launcher's.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `out_owns` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_any_account_owns_game(const struct Coblet *coblet,
+                                               bool *out_owns,
+                                               struct CobletError **out_err);
 
 // Fetches the account's player profile (name, UUID, skins and capes)
 // from Minecraft services now, saves it and returns the updated account

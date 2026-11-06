@@ -12,6 +12,7 @@
 //!   remove ACCOUNT
 //!   refresh ACCOUNT
 //!   profile ACCOUNT
+//!   license ACCOUNT
 //!   skin ACCOUNT upload FILE [--slim] | url URL [--slim] | model classic|slim | reset
 //!   cape ACCOUNT CAPE-ID|none
 //!   launch ACCOUNT VERSION [--run-for SECONDS] [--until TEXT]
@@ -55,7 +56,7 @@ use coblet::{Coblet, Error};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn usage() -> String {
-    "usage: accounts [--data DIR] login|offline|list|default|remove|refresh|profile|skin|cape|launch ...; see the file header".to_owned()
+    "usage: accounts [--data DIR] login|offline|list|default|remove|refresh|profile|license|skin|cape|launch ...; see the file header".to_owned()
 }
 
 fn secret_key(data: &Path) -> Result<EncryptionKey> {
@@ -95,8 +96,11 @@ fn describe(account: &Account) -> String {
     let name = account
         .player_name()
         .map_or("<no profile>".to_owned(), ToString::to_string);
+    let license = account
+        .license
+        .map_or("unchecked", |check| check.license.as_str());
     format!(
-        "{}  {name}  {}  {}",
+        "{}  {name}  {}  {}  license {license}",
         account.id, account.method, account.state
     )
 }
@@ -305,6 +309,8 @@ async fn run(args: Vec<String>) -> Result<bool> {
                 };
                 println!("{mark} {}", describe(&account));
             }
+            let owns = coblet.accounts().any_owns_game().await?;
+            println!("an account owns the game: {owns}");
         }
         "default" => {
             coblet
@@ -323,6 +329,11 @@ async fn run(args: Vec<String>) -> Result<bool> {
             if let Some(profile) = &account.profile {
                 show(profile);
             }
+        }
+        "license" => {
+            let account = coblet.accounts().verify_license(&account().await?).await?;
+            println!("{}", describe(&account));
+            println!("owns the game: {}", account.owns_game());
         }
         "skin" => skin(&coblet, &account().await?, &rest[1..]).await?,
         "cape" => {

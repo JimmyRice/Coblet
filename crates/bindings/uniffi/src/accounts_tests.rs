@@ -1,14 +1,16 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use coblet::auth::{AccountState, AccountUpdate, AuthFlow, PlayerProfile, callback_channel};
+use coblet::auth::{
+    AccountState, AccountUpdate, AuthFlow, LicenseCheck, PlayerProfile, callback_channel,
+};
 use coblet::runtime::{AuthPrompt, SecretKey, SecretStore as _};
 use coblet::types::{ExtensionId, PlayerName};
 
 use crate::secrets::ForeignSecrets;
 use crate::{
-    AccountState as State, CobletBuilder, CobletError, ErrorKind, LoginFlow, LoginInteraction,
-    LoginPrompt, SecretStore, generate_secret_key,
+    AccountState as State, CobletBuilder, CobletError, ErrorKind, GameLicense, LoginFlow,
+    LoginInteraction, LoginPrompt, SecretStore, generate_secret_key,
 };
 
 fn kind(error: &CobletError) -> ErrorKind {
@@ -74,6 +76,10 @@ async fn offline_accounts_refresh_to_themselves() {
     assert_eq!(kind(&error), ErrorKind::Unsupported);
     let unchanged = coblet.refresh_profile(steve.id.clone()).await.unwrap();
     assert_eq!(unchanged, steve);
+    let unchecked = coblet.verify_license(steve.id.clone()).await.unwrap();
+    assert_eq!(unchecked, steve);
+    assert_eq!((steve.license, steve.owns_game), (None, false));
+    assert!(!coblet.any_account_owns_game().await.unwrap());
     let bad = coblet.download_texture("not a url".to_owned()).await;
     assert_eq!(kind(&bad.unwrap_err()), ErrorKind::InvalidArgument);
 }
@@ -175,7 +181,12 @@ fn notch() -> AccountUpdate {
         "069a79f444e94726a5befca90e38aaf5",
     )
     .unwrap();
-    AccountUpdate::new(AccountState::Ready).with_profile(profile)
+    let mut update = AccountUpdate::new(AccountState::Ready).with_profile(profile);
+    update.license = Some(LicenseCheck::new(
+        coblet::auth::GameLicense::Purchased,
+        std::time::SystemTime::UNIX_EPOCH,
+    ));
+    update
 }
 
 #[tokio::test]
@@ -210,6 +221,12 @@ async fn login_flows_take_a_redirect_and_finish_once() {
     );
 
     let account = flow.finish().await.unwrap();
+    assert_eq!(account.license, Some(GameLicense::Purchased));
+    assert_eq!(
+        account.license_checked_at,
+        Some(std::time::SystemTime::UNIX_EPOCH)
+    );
+    assert!(account.owns_game);
     assert_eq!(account.player.unwrap().name, "Notch");
     assert_eq!(
         kind(&flow.finish().await.unwrap_err()),
