@@ -8,7 +8,7 @@ use coblet_catalog::MetaCache;
 use coblet_download::{Downloader, DownloaderConfig};
 use coblet_runtime::{
     EventBus, MemorySecretStore, PlatformProbe, ProcessSpawner, SecretStore, StdPlatformProbe,
-    Storage, TokioSpawner, TokioStorage, Transport, UserAgent,
+    Storage, TokioSpawner, TokioStorage, Transport, UrlRewriter, UrlRewriters, UserAgent,
 };
 use coblet_types::Platform;
 
@@ -35,6 +35,9 @@ pub struct CobletBuilder<State> {
     spawner: Option<Arc<dyn ProcessSpawner>>,
     platform: Option<Platform>,
     events: Option<EventBus>,
+    rewriters: UrlRewriters,
+    #[cfg(feature = "mojang")]
+    versions: VersionSettings,
     #[cfg(feature = "launch")]
     launcher: Option<coblet_launch::Launcher>,
     #[cfg(feature = "launch")]
@@ -47,6 +50,14 @@ pub struct CobletBuilder<State> {
     platform_profiles: Vec<Arc<dyn coblet_platform::PlatformProfile>>,
     auth: AuthSettings,
     state: PhantomData<State>,
+}
+
+/// Version catalog settings collected by the builder.
+#[cfg(feature = "mojang")]
+#[derive(Default)]
+pub(crate) struct VersionSettings {
+    pub(crate) mojang: Option<coblet_mojang::MojangVersions>,
+    pub(crate) sources: Vec<Arc<dyn coblet_catalog::CatalogSource<coblet_mojang::GameVersion>>>,
 }
 
 /// Account settings collected by the builder.
@@ -78,6 +89,9 @@ impl Coblet {
             spawner: None,
             platform: None,
             events: None,
+            rewriters: UrlRewriters::new(),
+            #[cfg(feature = "mojang")]
+            versions: VersionSettings::default(),
             #[cfg(feature = "launch")]
             launcher: None,
             #[cfg(feature = "launch")]
@@ -106,6 +120,9 @@ impl CobletBuilder<NoRoot> {
             spawner: self.spawner,
             platform: self.platform,
             events: self.events,
+            rewriters: self.rewriters,
+            #[cfg(feature = "mojang")]
+            versions: self.versions,
             #[cfg(feature = "launch")]
             launcher: self.launcher,
             #[cfg(feature = "launch")]
@@ -184,6 +201,58 @@ impl<State> CobletBuilder<State> {
     #[cfg(feature = "auth-msa")]
     pub fn msa_config(mut self, config: coblet_auth::MsaConfig) -> Self {
         self.auth.msa = Some(config);
+        self
+    }
+
+    /// Sends requests through `rewriter`, for regional mirrors and proxies.
+    ///
+    /// Rewriters apply to game files, libraries, assets, Java runtimes and
+    /// metadata (version manifest, version files, runtime indexes), in the
+    /// order they were added. Hashes are still checked, so a mirror cannot
+    /// change content that is listed with a hash. Account and skin requests
+    /// are not rewritten. [`PrefixRewriter`](coblet_runtime::PrefixRewriter)
+    /// describes a mirror without code.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use coblet::Coblet;
+    /// use coblet::runtime::{ArtifactKind, PrefixRewriter};
+    ///
+    /// let builder = Coblet::builder().url_rewriter(Arc::new(
+    ///     PrefixRewriter::new("https://libraries.minecraft.net/", "https://mirror.example/libraries/")?
+    ///         .for_kinds([ArtifactKind::Library]),
+    /// ));
+    /// # drop(builder);
+    /// # Ok::<(), coblet::runtime::HttpUrlError>(())
+    /// ```
+    pub fn url_rewriter(mut self, rewriter: Arc<dyn UrlRewriter>) -> Self {
+        self.rewriters = self.rewriters.with(rewriter);
+        self
+    }
+
+    /// Uses this Mojang version source, for example one with another
+    /// manifest address or extra trait sources.
+    #[cfg(feature = "mojang")]
+    pub fn mojang_versions(mut self, source: coblet_mojang::MojangVersions) -> Self {
+        self.versions.mojang = Some(source);
+        self
+    }
+
+    /// Adds a game version source after the Mojang manifest, such as one
+    /// listing experimental versions.
+    ///
+    /// When two sources list the same version ID, the earlier one wins.
+    /// Launching a version fetches its version file from the address the
+    /// source gave, checked against the source's SHA-1.
+    #[cfg(feature = "mojang")]
+    pub fn version_source(
+        mut self,
+        source: Arc<dyn coblet_catalog::CatalogSource<coblet_mojang::GameVersion>>,
+    ) -> Self {
+        self.versions.sources.push(source);
         self
     }
 
@@ -420,18 +489,21 @@ impl CobletBuilder<WithRoot> {
             .events
             .take()
             .unwrap_or_else(|| EventBus::new(EVENT_CAPACITY));
+        let rewriters = std::mem::take(&mut self.rewriters);
         let meta = MetaCache::new(
             Arc::clone(&transport),
             Arc::clone(&storage),
             data_root.join("meta"),
-        );
+        )
+        .with_rewriters(rewriters.clone());
         let config = DownloaderConfig::default()
             .with_limits(
                 NonZeroUsize::new(32).unwrap_or(NonZeroUsize::MIN),
                 NonZeroUsize::new(16).unwrap_or(NonZeroUsize::MIN),
             )
             .with_cache_root(data_root.join("cache"));
-        let downloader = Downloader::new(Arc::clone(&transport), Arc::clone(&storage), config);
+        let downloader = Downloader::new(Arc::clone(&transport), Arc::clone(&storage), config)
+            .with_rewriters(rewriters);
         let accounts = self.accounts(&data_root, &transport, &storage, &events)?;
         #[cfg(feature = "auth-msa")]
         let skins = coblet_player::SkinLibrary::new(
@@ -444,7 +516,11 @@ impl CobletBuilder<WithRoot> {
             #[cfg(feature = "auth-msa")]
             skins,
             #[cfg(feature = "mojang")]
-            versions: crate::versions::version_catalog(meta.clone(), events.clone()),
+            versions: crate::versions::version_catalog(
+                meta.clone(),
+                events.clone(),
+                std::mem::take(&mut self.versions),
+            ),
             #[cfg(feature = "launch")]
             launcher,
             #[cfg(feature = "launch")]

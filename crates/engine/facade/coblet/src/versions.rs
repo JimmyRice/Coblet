@@ -4,20 +4,27 @@ use coblet_catalog::{Catalog, Filter, MetaCache};
 use coblet_mojang::{GameVersion, MojangVersions};
 use coblet_runtime::EventBus;
 
+use crate::builder::VersionSettings;
 use crate::{Coblet, Error};
 
-/// Game version catalog backed by the Mojang manifest.
+/// Game version catalog: the Mojang manifest first, then added sources.
 pub(crate) struct VersionCatalog {
     pub(crate) catalog: Catalog<GameVersion>,
     pub(crate) mojang: Arc<MojangVersions>,
 }
 
-pub(crate) fn version_catalog(meta: MetaCache, events: EventBus) -> VersionCatalog {
-    let mojang = Arc::new(MojangVersions::new());
+pub(crate) fn version_catalog(
+    meta: MetaCache,
+    events: EventBus,
+    settings: VersionSettings,
+) -> VersionCatalog {
+    let mojang = Arc::new(settings.mojang.unwrap_or_default());
+    let catalog = settings.sources.into_iter().fold(
+        Catalog::new(meta).with_source(Arc::clone(&mojang) as _),
+        Catalog::with_source,
+    );
     VersionCatalog {
-        catalog: Catalog::new(meta)
-            .with_source(Arc::clone(&mojang) as _)
-            .with_events(events),
+        catalog: catalog.with_events(events),
         mojang,
     }
 }

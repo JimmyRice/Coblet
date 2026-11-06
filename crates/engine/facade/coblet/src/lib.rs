@@ -8,6 +8,11 @@
 //! Accounts are always available: offline accounts, the account store and
 //! third-party auth methods.
 //!
+//! Every source can be replaced or extended:
+//! [`CobletBuilder::url_rewriter`] points downloads and metadata at
+//! mirrors, and [`CobletBuilder::version_source`] adds game versions next
+//! to the Mojang manifest.
+//!
 //! Features: `mojang`, `java` and `launch` (all default) select subsystems;
 //! `tls-rustls` (default) provides the default transport. `auth-msa` adds
 //! Microsoft login, skins and capes, `auth-loopback` its built-in redirect
