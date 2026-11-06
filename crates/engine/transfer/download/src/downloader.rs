@@ -16,7 +16,7 @@ use crate::retry::{backoff, retry_after};
 use crate::verify::{FileIndex, verify_file};
 use crate::{
     Destination, DownloadError, DownloadOutcome, DownloadTask, DownloaderConfig, FetchError,
-    UrlRewriter, VerifyMode,
+    UrlRewriter, UrlRewriters, VerifyMode,
 };
 
 /// Progress callback: bytes of the current file received so far, and its size when known.
@@ -40,7 +40,7 @@ pub struct Downloader {
     storage: Arc<dyn Storage>,
     config: DownloaderConfig,
     limits: Arc<Limits>,
-    rewriters: Vec<Arc<dyn UrlRewriter>>,
+    rewriters: UrlRewriters,
     index: Arc<FileIndex>,
 }
 
@@ -135,7 +135,7 @@ impl Downloader {
             storage,
             config,
             limits,
-            rewriters: Vec::new(),
+            rewriters: UrlRewriters::new(),
             index: Arc::new(FileIndex::new()),
         }
     }
@@ -143,8 +143,20 @@ impl Downloader {
     /// Adds a rewriter; rewriters run in the order they were added.
     #[must_use]
     pub fn with_rewriter(mut self, rewriter: Arc<dyn UrlRewriter>) -> Self {
-        self.rewriters.push(rewriter);
+        self.rewriters = self.rewriters.with(rewriter);
         self
+    }
+
+    /// Replaces the rewriter chain, for example with one shared with a metadata cache.
+    #[must_use]
+    pub fn with_rewriters(self, rewriters: UrlRewriters) -> Self {
+        Self { rewriters, ..self }
+    }
+
+    /// Returns the rewriter chain.
+    #[must_use]
+    pub fn rewriters(&self) -> &UrlRewriters {
+        &self.rewriters
     }
 
     /// Uses `index` for fast verification, for example one loaded from disk.
@@ -311,11 +323,7 @@ impl Downloader {
     fn sources(&self, task: &DownloadTask) -> Vec<HttpUrl> {
         task.sources
             .iter()
-            .map(|url| {
-                self.rewriters.iter().fold(url.clone(), |url, rewriter| {
-                    rewriter.rewrite(&url, &task.kind).unwrap_or(url)
-                })
-            })
+            .map(|url| self.rewriters.apply(url, &task.kind))
             .collect()
     }
 

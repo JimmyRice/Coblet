@@ -146,3 +146,84 @@ fn auth_grants_name_added_customizers_and_reach_the_launcher() {
         assert_eq!(kind(&error), ErrorKind::InvalidState);
     }
 }
+
+struct Proxy;
+
+impl crate::UrlRewriter for Proxy {
+    fn rewrite(&self, url: String, kind: crate::ArtifactKind) -> Option<String> {
+        if kind == crate::ArtifactKind::Asset {
+            return Some("not a url".to_owned());
+        }
+        url.strip_prefix("https://mirror.example/")
+            .map(|rest| format!("https://proxy.example/{rest}"))
+    }
+}
+
+#[test]
+fn mirrors_and_rewriters_reach_downloads_and_metadata() {
+    use coblet::runtime::{ArtifactKind, HttpUrl};
+
+    let builder = builder();
+    builder
+        .add_mirror(
+            "https://libraries.minecraft.net/".to_owned(),
+            "https://mirror.example/libraries/".to_owned(),
+            vec![crate::ArtifactKind::Library],
+        )
+        .unwrap();
+    builder
+        .add_url_rewriter(std::sync::Arc::new(Proxy))
+        .unwrap();
+    let error = builder
+        .add_mirror(
+            "file:///x".to_owned(),
+            "https://a.example/".to_owned(),
+            Vec::new(),
+        )
+        .unwrap_err();
+    assert_eq!(kind(&error), ErrorKind::InvalidArgument);
+    let coblet = builder.build().unwrap();
+
+    let library = HttpUrl::new("https://libraries.minecraft.net/a/b.jar").unwrap();
+    for rewriters in [
+        coblet.inner.meta().rewriters(),
+        coblet.inner.downloader().rewriters(),
+    ] {
+        assert_eq!(
+            rewriters.apply(&library, &ArtifactKind::Library).as_str(),
+            "https://proxy.example/libraries/a/b.jar"
+        );
+        assert_eq!(
+            rewriters.apply(&library, &ArtifactKind::Metadata).as_str(),
+            library.as_str()
+        );
+    }
+    let asset = HttpUrl::new("https://resources.download.minecraft.net/ab/abc").unwrap();
+    assert_eq!(
+        coblet
+            .inner
+            .downloader()
+            .rewriters()
+            .apply(&asset, &ArtifactKind::Asset)
+            .as_str(),
+        asset.as_str()
+    );
+}
+
+#[test]
+fn version_manifests_need_unique_ids() {
+    let builder = builder();
+    let url = "https://meta.example/experiments.json".to_owned();
+    builder
+        .add_version_manifest("acme:experiments", url.clone())
+        .unwrap();
+    for id in ["acme:experiments", "coblet:mojang", "no namespace"] {
+        let error = builder.add_version_manifest(id, url.clone()).unwrap_err();
+        assert_eq!(kind(&error), ErrorKind::InvalidArgument, "{id}");
+    }
+    let error = builder
+        .add_version_manifest("acme:other", "ftp://x".to_owned())
+        .unwrap_err();
+    assert_eq!(kind(&error), ErrorKind::InvalidArgument);
+    builder.build().unwrap();
+}

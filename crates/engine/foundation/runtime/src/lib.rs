@@ -5,7 +5,8 @@
 //! clock directly. They take these traits as `Arc<dyn Trait>`:
 //!
 //! - [`Transport`] for HTTP, with [`Request`] / [`Response`] and a streaming [`Body`];
-//!   `ReqwestTransport` (feature `reqwest`) is the default client
+//!   `ReqwestTransport` (feature `reqwest`) is the default client, and
+//!   [`UrlRewriter`]s point requests at mirrors
 //! - [`Storage`] for files, directories and advisory locks, with `TokioStorage` (feature `fs`)
 //! - [`SecretStore`] for tokens, with [`MemorySecretStore`] as the built-in store
 //! - [`Clock`] for wall-clock time
@@ -95,6 +96,6 @@ pub use storage::{
 #[cfg(feature = "reqwest")]
 pub use transport::ReqwestTransport;
 pub use transport::{
-    Body, HttpUrl, HttpUrlError, MemoryBody, Method, Request, Response, Transport, TransportError,
-    UserAgent, UserAgentError,
+    Body, HttpUrl, HttpUrlError, MemoryBody, Method, PrefixRewriter, Request, Response, Transport,
+    TransportError, UrlRewriter, UrlRewriters, UserAgent, UserAgentError,
 };

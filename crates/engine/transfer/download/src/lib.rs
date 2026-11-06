@@ -8,7 +8,8 @@
 //! verifies, resumes partial files with Range requests, retries with
 //! backoff and switches sources after repeated failures. Requests are
 //! bounded globally and per host. [`UrlRewriter`]s redirect addresses to
-//! mirrors without relaxing verification.
+//! mirrors without relaxing verification; the trait lives in
+//! `coblet-runtime` so metadata requests share it.
 //!
 //! [`Downloader`] implements [`coblet_runtime::DownloadHandler`], so an
 //! [`coblet_runtime::Operations`] executor runs Plan download steps with it.
@@ -53,13 +54,12 @@ mod downloader;
 mod error;
 mod limits;
 mod retry;
-mod rewrite;
 mod task;
 mod verify;
 
+pub use coblet_runtime::{PrefixRewriter, UrlRewriter, UrlRewriters};
 pub use config::DownloaderConfig;
 pub use downloader::{Downloader, ProgressFn};
 pub use error::{DownloadError, FetchError};
-pub use rewrite::UrlRewriter;
 pub use task::{Destination, DownloadOutcome, DownloadTask, Priority};
 pub use verify::{FileIndex, VerifyMode};

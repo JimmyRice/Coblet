@@ -247,3 +247,104 @@ fn platform_profiles_need_distinct_ids() {
         .unwrap_err();
     assert!(matches!(error, Error::Profile(_)), "{error}");
 }
+
+/// Serves the fixtures and records every requested address.
+#[derive(Default)]
+struct Recording(std::sync::Mutex<Vec<String>>);
+
+impl Transport for Recording {
+    fn send(&self, request: Request) -> BoxFuture<'_, Result<Response, TransportError>> {
+        self.0
+            .lock()
+            .unwrap()
+            .push(request.url().as_str().to_owned());
+        Fixtures.send(request)
+    }
+}
+
+#[tokio::test]
+async fn rewriters_reach_metadata_requests() {
+    let dir = tempfile::tempdir().unwrap();
+    let transport = Arc::new(Recording::default());
+    let coblet = Coblet::builder()
+        .data_root(dir.path())
+        .transport(transport.clone())
+        .platform(Platform::new(OsFamily::MacOs, Arch::Aarch64))
+        .url_rewriter(Arc::new(
+            coblet_runtime::PrefixRewriter::new(
+                "https://piston-meta.mojang.com/",
+                "https://mirror.example/piston-meta/",
+            )
+            .unwrap(),
+        ))
+        .build()
+        .unwrap();
+    let version = coblet.version("1.20.1").await.unwrap();
+    coblet.resolve(&version).await.unwrap();
+    let urls = transport.0.lock().unwrap().clone();
+    assert!(urls.len() >= 2, "{urls:?}");
+    assert!(
+        urls.iter()
+            .all(|url| url.starts_with("https://mirror.example/piston-meta/")),
+        "{urls:?}"
+    );
+}
+
+/// Lists one experimental version served from another address.
+struct Experiments(ExtensionId);
+
+impl coblet_runtime::Extension for Experiments {
+    fn id(&self) -> &ExtensionId {
+        &self.0
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Experiments"
+    }
+}
+
+impl coblet_catalog::CatalogSource<coblet_mojang::GameVersion> for Experiments {
+    fn fetch<'a>(
+        &'a self,
+        _cx: &'a coblet_catalog::CatalogContext,
+        _query: &'a coblet_catalog::CatalogQuery,
+    ) -> BoxFuture<
+        'a,
+        Result<
+            coblet_catalog::CatalogPage<coblet_mojang::GameVersion>,
+            coblet_catalog::CatalogError,
+        >,
+    > {
+        Box::pin(async {
+            let version = coblet_mojang::GameVersion::new(
+                coblet_types::GameVersionId::new("1.16_combat-6").unwrap(),
+                coblet_types::VersionType::Experiment,
+                coblet_runtime::HttpUrl::new("https://meta.example/1.16_combat-6.json").unwrap(),
+                coblet_types::Sha1Digest::from_hex("a9993e364706816aba3e25717850c26c9cd0d89d")
+                    .unwrap(),
+                "2020-08-14T12:00:00Z".parse().unwrap(),
+            );
+            Ok(coblet_catalog::CatalogPage::new(vec![version]))
+        })
+    }
+}
+
+#[tokio::test]
+async fn added_version_sources_join_the_catalog() {
+    let dir = tempfile::tempdir().unwrap();
+    let coblet = Coblet::builder()
+        .data_root(dir.path())
+        .transport(Arc::new(Fixtures))
+        .platform(Platform::new(OsFamily::MacOs, Arch::Aarch64))
+        .version_source(Arc::new(Experiments(
+            ExtensionId::new("acme:experiments").unwrap(),
+        )))
+        .build()
+        .unwrap();
+    let experiment = coblet.version("1.16_combat-6").await.unwrap();
+    assert_eq!(
+        experiment.version_type,
+        coblet_types::VersionType::Experiment
+    );
+    assert_eq!(coblet.latest_release().await.unwrap().id.as_str(), "26.3");
+}

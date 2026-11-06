@@ -7,8 +7,9 @@
 //! delivers launch progress, file transfers, game starts, logs and exits. Foreign code can
 //! implement `PlatformProfile` to adapt launches to a platform,
 //! `LaunchCustomizer` and `LaunchStep` to change single launches, and
-//! `SecretStore` to keep tokens in a system keychain, as Rust code does
-//! with the traits of the same names. Async methods run on tokio and
+//! `SecretStore` to keep tokens in a system keychain, and `UrlRewriter` to
+//! point requests at mirrors, as Rust code does with the traits of the same
+//! names. Async methods run on tokio and
 //! appear as `async` in Swift, `suspend` in Kotlin and `asyncio` coroutines
 //! in Python. Errors are a single `CobletError` with a kind and a message.
 
@@ -25,6 +26,7 @@ mod game;
 mod login;
 mod profile;
 mod secrets;
+mod sources;
 
 pub use account::{
     AccountInfo, AccountState, CapeInfo, GameLicense, LoginInteraction, LoginPrompt, PlayerInfo,
@@ -42,3 +44,4 @@ pub use profile::{
     ProfileTarget, RuleOverrides,
 };
 pub use secrets::{SecretStore, generate_secret_key};
+pub use sources::{ArtifactKind, UrlRewriter};

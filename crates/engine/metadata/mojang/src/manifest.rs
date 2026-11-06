@@ -90,6 +90,57 @@ pub struct GameVersion {
     pub traits: VersionTraits,
 }
 
+impl GameVersion {
+    /// Creates a version for a catalog source other than the Mojang manifest.
+    ///
+    /// The version is not the latest release, has compliance level 0 and
+    /// no traits; launching derives traits from its version file anyway.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use coblet_catalog::Timestamp;
+    /// use coblet_mojang::GameVersion;
+    /// use coblet_runtime::HttpUrl;
+    /// use coblet_types::{GameVersionId, Sha1Digest, VersionType};
+    ///
+    /// let version = GameVersion::new(
+    ///     GameVersionId::new("1.16_combat-6")?,
+    ///     VersionType::Experiment,
+    ///     HttpUrl::new("https://meta.example/1.16_combat-6.json")?,
+    ///     Sha1Digest::from_hex("a9993e364706816aba3e25717850c26c9cd0d89d")?,
+    ///     "2020-08-14T12:00:00Z".parse::<Timestamp>()?,
+    /// );
+    /// assert!(!version.latest_release);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn new(
+        id: GameVersionId,
+        version_type: VersionType,
+        url: HttpUrl,
+        sha1: Sha1Digest,
+        released: Timestamp,
+    ) -> Self {
+        Self {
+            id,
+            version_type,
+            url,
+            sha1,
+            released,
+            compliance_level: 0,
+            latest_release: false,
+            traits: VersionTraits::new(),
+        }
+    }
+
+    /// Sets the traits known before the version file is fetched.
+    #[must_use]
+    pub fn with_traits(self, traits: VersionTraits) -> Self {
+        Self { traits, ..self }
+    }
+}
+
 impl CatalogItem for GameVersion {
     fn key(&self) -> &str {
         self.id.as_str()
@@ -169,6 +220,35 @@ impl MojangVersions {
         Self { manifest, ..self }
     }
 
+    /// Creates a second source that reads a manifest in the same format
+    /// from another address, such as a list of experimental versions.
+    ///
+    /// The source has its own ID and its own cache entry, so it can sit in
+    /// a catalog next to the official one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use coblet_mojang::MojangVersions;
+    /// use coblet_runtime::{Extension, HttpUrl};
+    /// use coblet_types::ExtensionId;
+    ///
+    /// let experiments = MojangVersions::other(
+    ///     ExtensionId::new("acme:experiments")?,
+    ///     HttpUrl::new("https://meta.example/experiments.json")?,
+    /// );
+    /// assert_eq!(experiments.id().as_str(), "acme:experiments");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn other(id: ExtensionId, manifest: HttpUrl) -> Self {
+        Self {
+            id,
+            manifest,
+            ..Self::new()
+        }
+    }
+
     /// Uses another trait table.
     #[must_use]
     pub fn with_trait_table(self, table: TraitTable) -> Self {
@@ -201,10 +281,15 @@ impl MojangVersions {
     ///
     /// Returns [`CatalogError`] when the manifest is unavailable or malformed.
     pub async fn manifest(&self, cx: &CatalogContext) -> Result<VersionManifest, CatalogError> {
-        let request = MetaRequest::new(
-            self.manifest.clone(),
-            key("mojang/version_manifest_v2.json".to_owned())?,
-        );
+        let path = if self.id.as_str() == "coblet:mojang" {
+            "mojang/version_manifest_v2.json".to_owned()
+        } else {
+            format!(
+                "sources/{}/manifest.json",
+                self.id.as_str().replace(':', "/")
+            )
+        };
+        let request = MetaRequest::new(self.manifest.clone(), key(path)?);
         let bytes = cx.fetch(&request).await?;
         VersionManifest::from_slice(&bytes)
             .map_err(|error| CatalogError::parse(self.manifest.as_str(), error))

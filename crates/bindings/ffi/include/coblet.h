@@ -32,7 +32,7 @@
 #define COBLET_SECRET_KEY_LEN 32
 
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 9
+#define COBLET_ABI_VERSION 10
 
 // Result of a call.
 typedef enum CobletStatus {
@@ -234,6 +234,9 @@ typedef struct CobletProfileDraft CobletProfileDraft;
 // `customize` callback.
 typedef struct CobletProfileEdit CobletProfileEdit;
 
+// Result of one `rewrite` callback.
+typedef struct CobletRewrite CobletRewrite;
+
 // Rule settings being changed by the `rules` callback.
 typedef struct CobletRules CobletRules;
 
@@ -330,6 +333,26 @@ typedef struct CobletCustomizer {
   // Releases `user_data`; may be NULL.
   void (*free)(void *user_data);
 } CobletCustomizer;
+
+// Callback table of an address rewriter written in C, for mirrors that a
+// rule from `coblet_builder_add_mirror` cannot describe.
+//
+// `rewrite` runs once per request on the library's runtime threads,
+// possibly several at once, and should return quickly. `kind` names what
+// the request fetches in snake case, such as `library`, `asset` or
+// `metadata`. To change the address the callback passes the new one to
+// `coblet_rewrite_set_url` on `out`, which is valid only during the call;
+// otherwise the address stays. The library owns `user_data` from the call
+// that receives the table, even when it fails, and calls `free` once when
+// the `Coblet` is freed.
+typedef struct CobletUrlRewriter {
+  // Passed to every callback.
+  void *user_data;
+  // Looks at one request address.
+  void (*rewrite)(void *user_data, const char *url, const char *kind, struct CobletRewrite *out);
+  // Releases `user_data`; may be NULL.
+  void (*free)(void *user_data);
+} CobletUrlRewriter;
 
 // Callback table of a secret store written in C, such as one backed by a
 // system keychain.
@@ -748,6 +771,61 @@ enum CobletStatus coblet_builder_add_customizer(struct CobletBuilder *builder,
 enum CobletStatus coblet_builder_allow_auth_changes(struct CobletBuilder *builder,
                                                     const char *id,
                                                     struct CobletError **out_err);
+
+// Sends requests whose address starts with `from` to the same path under
+// `to`, for a regional mirror or a proxy.
+//
+// `kinds` is NULL or a JSON array of kind names, such as
+// `["library", "metadata"]`, that limits the rule; NULL or an empty array
+// applies it to every kind. Kind names are `library`, `natives`, `asset`,
+// `client_jar`, `server_jar`, `runtime`, `content`, `pack`, `loader` and
+// `metadata`. Rules apply to game files, libraries, assets, Java runtimes
+// and metadata such as the version manifest, in the order they were
+// added, together with rewriters from `coblet_builder_add_url_rewriter`.
+// Hashes are still checked, so a mirror cannot change content that is
+// listed with a hash. Account and skin requests are not rewritten. A
+// prefix that is not an HTTP or HTTPS address, or malformed `kinds`,
+// fails with `COBLET_STATUS_INVALID_ARGUMENT`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; strings must be NULL or
+// NUL-terminated (`kinds` may be NULL); `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_mirror(struct CobletBuilder *builder,
+                                            const char *from,
+                                            const char *to,
+                                            const char *kinds,
+                                            struct CobletError **out_err);
+
+// Adds a rewriter written in C, run in order with the mirror rules.
+//
+// The library owns the table's `user_data` from this call on, even when
+// it fails. A table without a `rewrite` callback fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; the table's callbacks must stay
+// valid until its `free` runs; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_url_rewriter(struct CobletBuilder *builder,
+                                                  struct CobletUrlRewriter rewriter,
+                                                  struct CobletError **out_err);
+
+// Adds a game version source that reads a manifest in the format of
+// Mojang's `version_manifest_v2.json` from `url`, such as a list of
+// experimental versions. It comes after the official manifest; when both
+// list an ID, the official entry wins. A malformed or already used `id`,
+// or an address that is not HTTP or HTTPS, fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; strings must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_version_manifest(struct CobletBuilder *builder,
+                                                      const char *id,
+                                                      const char *url,
+                                                      struct CobletError **out_err);
 
 // Enables Microsoft login with the launcher's Azure application Client
 // ID, which Minecraft services must have approved. Without one,
@@ -1561,6 +1639,15 @@ enum CobletStatus coblet_secret_call_fail(struct CobletSecretCall *call, const c
 enum CobletStatus coblet_generate_secret_key(uint8_t *out_key,
                                              size_t len,
                                              struct CobletError **out_err);
+
+// Sets the address a running `rewrite` callback wants instead; the
+// library copies it. An address that is not HTTP or HTTPS is ignored.
+//
+// # Safety
+//
+// `out` must be the handle passed to the running `rewrite` callback;
+// `url` must be NULL or NUL-terminated.
+enum CobletStatus coblet_rewrite_set_url(struct CobletRewrite *out, const char *url);
 
 #ifdef __cplusplus
 }  // extern "C"

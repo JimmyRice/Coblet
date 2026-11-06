@@ -162,3 +162,81 @@ async fn prefer_cache_skips_the_network() {
     );
     assert_eq!(transport.count(), 1);
 }
+
+#[tokio::test]
+async fn rewriters_change_the_address_but_not_the_cache_key() {
+    let (dir, transport, cache, request) = setup(vec![
+        Reply::Ok(200, vec![("ETag", "\"v1\"")], "abc"),
+        Reply::Ok(304, Vec::new(), ""),
+        Reply::Ok(200, Vec::new(), "abc"),
+    ]);
+    let mirror = Arc::new(
+        coblet_runtime::PrefixRewriter::new("https://meta.example/", "https://mirror.example/m/")
+            .unwrap()
+            .for_kinds([coblet_runtime::ArtifactKind::Metadata]),
+    );
+    let mirrored = cache.clone().with_rewriter(mirror);
+    assert_eq!(mirrored.rewriters().len(), 1);
+
+    mirrored
+        .fetch(&request, CachePolicy::Revalidate)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read(dir.path().join("cache/meta/example/manifest.json")).unwrap(),
+        b"abc"
+    );
+    let second = mirrored
+        .fetch(&request, CachePolicy::Revalidate)
+        .await
+        .unwrap();
+    assert_eq!(second.origin, Origin::NotModified);
+    assert_eq!(
+        transport.header_of(1, "If-None-Match").as_deref(),
+        Some("\"v1\"")
+    );
+
+    // The validators came from the mirror, so the official address is asked
+    // without them.
+    cache
+        .fetch(&request, CachePolicy::Revalidate)
+        .await
+        .unwrap();
+    assert_eq!(transport.header_of(2, "If-None-Match"), None);
+    let urls: Vec<String> = transport
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.url().as_str().to_owned())
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            "https://mirror.example/m/manifest.json",
+            "https://mirror.example/m/manifest.json",
+            "https://meta.example/manifest.json",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn rewriters_skip_other_kinds() {
+    let (_dir, transport, cache, request) = setup(vec![Reply::Ok(200, Vec::new(), "abc")]);
+    let cache = cache.with_rewriter(Arc::new(
+        coblet_runtime::PrefixRewriter::new("https://meta.example/", "https://mirror.example/")
+            .unwrap()
+            .for_kinds([coblet_runtime::ArtifactKind::Metadata]),
+    ));
+    cache
+        .fetch(
+            &request.with_kind(coblet_runtime::ArtifactKind::Loader),
+            CachePolicy::Revalidate,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        transport.requests.lock().unwrap()[0].url().as_str(),
+        "https://meta.example/manifest.json"
+    );
+}

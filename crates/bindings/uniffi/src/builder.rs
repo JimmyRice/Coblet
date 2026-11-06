@@ -8,8 +8,10 @@ use coblet::types::{ExtensionId, Platform};
 use crate::customize::ForeignCustomizer;
 use crate::profile::ForeignProfile;
 use crate::secrets::{ForeignSecrets, encryption_key};
+use crate::sources::ForeignRewriter;
 use crate::{
-    Coblet, CobletError, ErrorKind, LaunchCustomizer, PlatformInfo, PlatformProfile, SecretStore,
+    ArtifactKind, Coblet, CobletError, ErrorKind, LaunchCustomizer, PlatformInfo, PlatformProfile,
+    SecretStore, UrlRewriter,
 };
 
 /// Where tokens are kept.
@@ -28,6 +30,8 @@ struct Settings {
     platform: Option<Platform>,
     msa_client_id: Option<MsaClientId>,
     secrets: Secrets,
+    rewriters: Vec<Arc<dyn coblet::runtime::UrlRewriter>>,
+    version_sources: Vec<coblet::mojang::MojangVersions>,
 }
 
 /// Settings of a [`Coblet`] before it is built: Platform Profiles, launch
@@ -106,6 +110,8 @@ impl CobletBuilder {
                 platform: None,
                 msa_client_id: None,
                 secrets: Secrets::Memory,
+                rewriters: Vec::new(),
+                version_sources: Vec::new(),
             })),
         }))
     }
@@ -254,6 +260,77 @@ impl CobletBuilder {
         })
     }
 
+    /// Sends requests whose address starts with `from` to the same path
+    /// under `to`, for a regional mirror or a proxy; with `kinds` empty the
+    /// rule applies to every kind.
+    ///
+    /// Rules apply to game files, libraries, assets, Java runtimes and
+    /// metadata such as the version manifest, in the order they were added.
+    /// Hashes are still checked, so a mirror cannot change content that is
+    /// listed with a hash. Account and skin requests are not rewritten.
+    ///
+    /// # Errors
+    ///
+    /// Fails when either prefix is not an HTTP or HTTPS address, and after `build`.
+    pub fn add_mirror(
+        &self,
+        from: String,
+        to: String,
+        kinds: Vec<ArtifactKind>,
+    ) -> Result<(), CobletError> {
+        let mut rule = coblet::runtime::PrefixRewriter::new(from, to)
+            .map_err(|error| invalid(format!("mirror: {error}")))?;
+        if !kinds.is_empty() {
+            rule = rule.for_kinds(kinds.into_iter().map(Into::into));
+        }
+        self.with(|settings| {
+            settings.rewriters.push(Arc::new(rule));
+            Ok(())
+        })
+    }
+
+    /// Adds a rewriter written in this language, run in order with the
+    /// mirror rules, for mirrors a prefix cannot describe.
+    ///
+    /// # Errors
+    ///
+    /// Fails after `build`.
+    pub fn add_url_rewriter(&self, rewriter: Arc<dyn UrlRewriter>) -> Result<(), CobletError> {
+        self.with(|settings| {
+            settings.rewriters.push(Arc::new(ForeignRewriter(rewriter)));
+            Ok(())
+        })
+    }
+
+    /// Adds a game version source that reads a manifest in the format of
+    /// Mojang's `version_manifest_v2.json` from `url`, such as a list of
+    /// experimental versions. It comes after the official manifest; when
+    /// both list an ID, the official entry wins.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed or already used `id`, an address that is not
+    /// HTTP or HTTPS, and after `build`.
+    pub fn add_version_manifest(&self, id: &str, url: String) -> Result<(), CobletError> {
+        let id = ExtensionId::new(id).map_err(|error| invalid(format!("source id: {error}")))?;
+        let url = coblet::runtime::HttpUrl::new(url)
+            .map_err(|error| invalid(format!("manifest address: {error}")))?;
+        self.with(|settings| {
+            let taken = id.as_str() == "coblet:mojang"
+                || settings
+                    .version_sources
+                    .iter()
+                    .any(|source| source.id() == &id);
+            if taken {
+                return Err(invalid(format!("version source `{id}` is already added")));
+            }
+            settings
+                .version_sources
+                .push(coblet::mojang::MojangVersions::other(id, url));
+            Ok(())
+        })
+    }
+
     /// Creates the `Coblet`.
     ///
     /// # Errors
@@ -285,6 +362,12 @@ impl CobletBuilder {
         }
         if let Some(client_id) = settings.msa_client_id {
             builder = builder.msa_client_id(client_id);
+        }
+        for rewriter in settings.rewriters {
+            builder = builder.url_rewriter(rewriter);
+        }
+        for source in settings.version_sources {
+            builder = builder.version_source(Arc::new(source));
         }
         match settings.secrets {
             Secrets::Memory => {}
