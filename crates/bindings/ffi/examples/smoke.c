@@ -2,7 +2,8 @@
  * Smoke test of the coblet C ABI: list versions, launch one with a TOML
  * Platform Profile, a C Platform Profile and a customizer that each add a
  * JVM property, plus an extra step, print their lines of the launch
- * report, stop the game once a log message contains a marker.
+ * report and the launch events (steps, download totals, game start), stop
+ * the game once a log message contains a marker.
  *
  *   cc -I include examples/smoke.c -L <target dir> -lcoblet_ffi -o smoke
  *   ./smoke <data root> <version> <offline|demo> <marker>
@@ -61,6 +62,33 @@ static int fail(const char *what, CobletError *err) {
     return 1;
 }
 
+/* Prints the events of one launch that arrived so far, without waiting. */
+static void print_launch_events(CobletEvents *events, const char *launch_id) {
+    CobletEvent event = {0};
+    CobletError *err = NULL;
+    unsigned transfers = 0;
+    while (coblet_events_next(events, 0, &event, &err) == COBLET_STATUS_OK) {
+        if (event.kind == COBLET_EVENT_KIND_MISSED) {
+            /* Read after the launch, a cold download can outgrow the buffer. */
+            printf("event: missed %llu\n", (unsigned long long)event.missed);
+        } else if (strcmp(event.op, launch_id) == 0) {
+            if (event.kind == COBLET_EVENT_KIND_TRANSFER) {
+                transfers++;
+                if (event.files_done == event.files_total) {
+                    printf("event: transfer %d done, %llu files, %llu bytes\n", event.transfer,
+                           (unsigned long long)event.files_total,
+                           (unsigned long long)event.bytes_done);
+                }
+            } else if (event.kind != COBLET_EVENT_KIND_GAME_LOG && event.json.ptr != NULL) {
+                printf("event %d: %s\n", event.kind, event.json.ptr);
+            }
+        }
+        coblet_event_clear(&event);
+    }
+    coblet_error_free(err);
+    printf("event: %u transfer updates\n", transfers);
+}
+
 int main(int argc, char **argv) {
     if (argc != 5) {
         fprintf(stderr, "usage: %s <data root> <version> <offline|demo> <marker>\n", argv[0]);
@@ -106,12 +134,22 @@ int main(int argc, char **argv) {
 
     CobletLaunchMode mode = strcmp(argv[3], "demo") == 0 ? COBLET_LAUNCH_MODE_DEMO
                                                          : COBLET_LAUNCH_MODE_OFFLINE;
+    /* Subscribing before the launch keeps its events until they are read. */
+    CobletEvents *events = NULL;
+    char launch_id[COBLET_OPERATION_ID_LEN];
+    if (coblet_events_subscribe(coblet, &events, &err) != COBLET_STATUS_OK ||
+        coblet_generate_operation_id(launch_id, &err) != COBLET_STATUS_OK) {
+        return fail("coblet_events_subscribe", err);
+    }
     CobletGame *game = NULL;
     const char *chosen[] = {"coblet-smoke:marker"};
-    if (coblet_launch_customized(coblet, argv[2], "Steve", mode, NULL, chosen, 1, &game, &err) !=
-        COBLET_STATUS_OK) {
+    CobletStatus launched = coblet_launch_customized(coblet, argv[2], "Steve", mode, NULL, chosen,
+                                                     1, launch_id, &game, &err);
+    if (launched != COBLET_STATUS_OK) {
         return fail("coblet_launch_customized", err);
     }
+    print_launch_events(events, launch_id);
+    coblet_events_free(events);
     CobletString report = {0};
     if (coblet_game_report(game, &report, &err) != COBLET_STATUS_OK) {
         return fail("coblet_game_report", err);

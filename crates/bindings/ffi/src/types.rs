@@ -5,7 +5,7 @@ use coblet::platform::ProfileError;
 use coblet::player::PlayerError;
 
 /// Version of the C ABI; it grows with every incompatible change.
-pub const COBLET_ABI_VERSION: u32 = 8;
+pub const COBLET_ABI_VERSION: u32 = 9;
 
 /// Result of a call.
 #[repr(C)]
@@ -21,6 +21,8 @@ pub enum CobletStatus {
     Panic = 3,
     /// A stream has no more items.
     End = 4,
+    /// Nothing arrived before the timeout.
+    Timeout = 5,
 }
 
 /// Category of a [`CobletError`].

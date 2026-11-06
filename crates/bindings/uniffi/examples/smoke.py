@@ -1,7 +1,8 @@
 """Smoke test of the coblet UniFFI bindings: list versions, launch one with a
 TOML Platform Profile, a Python Platform Profile and a customizer that each
 add a JVM property, plus an extra step, print their lines of the launch
-report, stop the game once a log message contains a marker.
+report and the launch events (steps, download totals, game start), stop the
+game once a log message contains a marker.
 
     cargo build -p coblet-uniffi
     cargo run -p coblet-uniffi --features cli --bin uniffi-bindgen -- \
@@ -83,6 +84,29 @@ class Marker(coblet.LaunchCustomizer):
         editor.add_step_after("pre-launch", self.step)
 
 
+async def print_launch_events(stream, launch_id: str) -> None:
+    """Prints the steps, finished transfers and start of one launch."""
+    transfers = 0
+    while (event := await stream.next()) is not None:
+        if isinstance(event, coblet.CobletEvent.MISSED):
+            print(f"event: missed {event.count}")
+            continue
+        if getattr(event, "op", None) != launch_id:
+            continue
+        if isinstance(event, coblet.CobletEvent.LAUNCH_STEP):
+            print(f"event: step {event.index + 1}/{event.count} {event.step}")
+        elif isinstance(event, coblet.CobletEvent.TRANSFER):
+            transfers += 1
+            if event.files_done == event.files_total:
+                print(f"event: transfer {event.kind} done, {event.files_total} files, "
+                      f"{event.bytes_done} bytes")
+        elif isinstance(event, coblet.CobletEvent.GAME_STARTED):
+            print(f"event: game started, pid {event.pid}, {transfers} transfer updates")
+        elif isinstance(event, coblet.CobletEvent.OPERATION_FINISHED):
+            print(f"event: launch finished, {event.outcome}")
+            return
+
+
 async def main(data_root: str, version: str, mode: str, marker: str) -> int:
     marker_customizer = Marker()
     builder = coblet.CobletBuilder(data_root, "coblet-uniffi-smoke/0.1")
@@ -96,10 +120,17 @@ async def main(data_root: str, version: str, mode: str, marker: str) -> int:
     print(f"{len(versions)} versions, latest release {latest.id}")
 
     launch_mode = coblet.LaunchMode.DEMO if mode == "demo" else coblet.LaunchMode.OFFLINE
+    launch_id = coblet.generate_operation_id()
     options = coblet.LaunchOptions(
-        player_name="Steve", mode=launch_mode, customizers=["coblet-smoke:marker"]
+        player_name="Steve",
+        mode=launch_mode,
+        customizers=["coblet-smoke:marker"],
+        operation_id=launch_id,
     )
+    # Subscribing before the launch keeps its events until they are read.
+    events = asyncio.create_task(print_launch_events(launcher.subscribe(), launch_id))
     game = await launcher.launch_with(version, options)
+    await events
     print(f"started pid {game.pid()}")
     for report_line in game.report().splitlines():
         if "coblet-smoke:" in report_line:

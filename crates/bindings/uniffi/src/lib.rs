@@ -3,7 +3,8 @@
 //! `CobletBuilder` adds Platform Profiles, launch customizers, a Microsoft
 //! Client ID and a secret store; `Coblet` lists versions, manages accounts,
 //! skins and capes, and launches games; `LoginFlow` carries a Microsoft
-//! login; `GameHandle` streams the log, kills and waits. Foreign code can
+//! login; `GameHandle` streams the log, kills and waits; `EventStream`
+//! delivers launch progress, file transfers, game starts, logs and exits. Foreign code can
 //! implement `PlatformProfile` to adapt launches to a platform,
 //! `LaunchCustomizer` and `LaunchStep` to change single launches, and
 //! `SecretStore` to keep tokens in a system keychain, as Rust code does
@@ -19,6 +20,7 @@ mod builder;
 mod context;
 mod customize;
 mod error;
+mod events;
 mod game;
 mod login;
 mod profile;
@@ -32,6 +34,7 @@ pub use builder::CobletBuilder;
 pub use context::{Coblet, LaunchMode, LaunchOptions, PlatformInfo, VersionInfo};
 pub use customize::{LaunchCustomizer, LaunchStep, LibrarySpec, ProfileEditor, StepInfo};
 pub use error::{CobletError, ErrorKind};
+pub use events::{CobletEvent, EventStream, Outcome, TransferKind, generate_operation_id};
 pub use game::{GameExitInfo, GameHandle, LogLine};
 pub use login::LoginFlow;
 pub use profile::{

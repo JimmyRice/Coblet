@@ -1,7 +1,10 @@
 use std::ffi::c_char;
 
+use std::str::FromStr as _;
+
 use coblet::launch::{GameSession, LaunchRequest, LogItem, LogStream};
 use coblet::launch_command::LaunchAuth;
+use coblet::runtime::{GameLogLine, OperationId};
 use coblet::types::{ExtensionId, PlayerName};
 
 use crate::context::Coblet;
@@ -36,8 +39,69 @@ pub struct CobletGameExit {
     pub duration_ms: u64,
 }
 
+/// Length of an operation ID buffer: 36 characters and a NUL.
+pub const COBLET_OPERATION_ID_LEN: usize = 37;
+
+/// Writes an operation ID with its NUL into a caller's buffer.
+///
+/// # Safety
+///
+/// `out` must be NULL or point to `COBLET_OPERATION_ID_LEN` writable bytes.
+#[allow(unsafe_code, reason = "writes a caller buffer")]
+pub(crate) unsafe fn write_operation_id(op: OperationId, out: *mut c_char) -> Result<(), Failure> {
+    if out.is_null() {
+        return Err(Failure::argument("out_id", "is NULL"));
+    }
+    let text = op.to_string();
+    let bytes = text.as_bytes();
+    debug_assert_eq!(bytes.len() + 1, COBLET_OPERATION_ID_LEN);
+    // SAFETY: the caller guarantees COBLET_OPERATION_ID_LEN writable bytes;
+    // a UUID has 36 bytes, so the NUL fits.
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), out, bytes.len());
+        out.add(bytes.len()).write(0);
+    }
+    Ok(())
+}
+
+/// Reads an optional operation ID; NULL gives a random one.
+///
+/// # Safety
+///
+/// `id` must be NULL or NUL-terminated.
+#[allow(unsafe_code, reason = "reads a string argument")]
+unsafe fn operation_id(id: *const c_char) -> Result<Option<OperationId>, Failure> {
+    // SAFETY: forwarded from the caller's guarantee.
+    let Some(id) = (unsafe { optional_text(id, "operation_id") })? else {
+        return Ok(None);
+    };
+    OperationId::from_str(id)
+        .map(Some)
+        .map_err(|error| Failure::argument("operation_id", &error.to_string()))
+}
+
+/// Describes a log line as `{"schema":1,"source","level","thread",
+/// "logger","message","time","raw"}`, `time` in Unix milliseconds or null.
+pub(crate) fn log_json(line: &GameLogLine) -> serde_json::Value {
+    let time = line
+        .time
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX));
+    serde_json::json!({
+        "schema": 1,
+        "source": format!("{:?}", line.source).to_lowercase(),
+        "level": line.level.as_str(),
+        "thread": line.thread,
+        "logger": line.logger,
+        "message": line.message,
+        "time": time,
+        "raw": line.raw,
+    })
+}
+
 /// Running game handle.
 pub struct CobletGame {
+    op: OperationId,
     runtime: tokio::runtime::Handle,
     report: String,
     session: Option<GameSession>,
@@ -74,6 +138,7 @@ pub unsafe extern "C" fn coblet_launch(
             game_dir,
             std::ptr::null(),
             0,
+            std::ptr::null(),
             out_game,
             out_err,
         )
@@ -83,10 +148,14 @@ pub unsafe extern "C" fn coblet_launch(
 /// Starts a version like `coblet_launch` and runs the customizers whose
 /// IDs are listed in `customizers`, in order.
 ///
+/// `operation_id`, from `coblet_generate_operation_id`, is the launch ID
+/// its events carry; NULL picks a random one.
+///
 /// # Safety
 ///
 /// As `coblet_launch`; `customizers` must point to `count` NUL-terminated
-/// strings, or be NULL when `count` is 0.
+/// strings, or be NULL when `count` is 0; `operation_id` must be NULL or
+/// NUL-terminated.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn coblet_launch_customized(
@@ -97,6 +166,7 @@ pub unsafe extern "C" fn coblet_launch_customized(
     game_dir: *const c_char,
     customizers: *const *const c_char,
     count: usize,
+    operation_id: *const c_char,
     out_game: *mut *mut CobletGame,
     out_err: *mut *mut CobletError,
 ) -> CobletStatus {
@@ -107,6 +177,7 @@ pub unsafe extern "C" fn coblet_launch_customized(
                 .as_ref()
                 .ok_or_else(|| Failure::argument("coblet", "is NULL"))?;
             let version = text(version_id, "version_id")?;
+            let op = self::operation_id(operation_id)?;
             let name = PlayerName::new(text(player_name, "player_name")?)
                 .map_err(|error| Failure::argument("player_name", &error.to_string()))?;
             if out_game.is_null() {
@@ -120,7 +191,10 @@ pub unsafe extern "C" fn coblet_launch_customized(
                 CobletLaunchMode::Offline => LaunchAuth::offline(name),
                 CobletLaunchMode::Demo => LaunchAuth::demo(name),
             };
-            let request = with_customizers(LaunchRequest::new(auth), customizers, count)?;
+            let mut request = with_customizers(LaunchRequest::new(auth), customizers, count)?;
+            if let Some(op) = op {
+                request = request.with_operation(op);
+            }
             start(handle, version, game_dir, request, out_game)
         })
     }
@@ -172,6 +246,7 @@ unsafe fn start(
         .block_on(handle.inner.launch(version, game_dir, request))?;
     let logs = session.logs();
     let game = Box::into_raw(Box::new(CobletGame {
+        op: session.operation(),
         runtime: handle.runtime.handle().clone(),
         report: session.profile().explain(),
         session: Some(session),
@@ -188,7 +263,8 @@ unsafe fn start(
 /// Starts a version with a saved account, renewing its tokens first when
 /// needed, and runs the customizers listed in `customizers`, in order.
 ///
-/// `game_dir` may be NULL for `<data_root>/games/<version>`. Fails with
+/// `game_dir` may be NULL for `<data_root>/games/<version>`, and
+/// `operation_id` NULL for a random launch ID. Fails with
 /// `COBLET_ERROR_KIND_NO_LICENSE` for an account that does not own the
 /// game and `COBLET_ERROR_KIND_AUTH` when the user has to sign in again.
 ///
@@ -204,6 +280,7 @@ pub unsafe extern "C" fn coblet_launch_account(
     game_dir: *const c_char,
     customizers: *const *const c_char,
     count: usize,
+    operation_id: *const c_char,
     out_game: *mut *mut CobletGame,
     out_err: *mut *mut CobletError,
 ) -> CobletStatus {
@@ -214,6 +291,7 @@ pub unsafe extern "C" fn coblet_launch_account(
                 .as_ref()
                 .ok_or_else(|| Failure::argument("coblet", "is NULL"))?;
             let version = text(version_id, "version_id")?;
+            let op = self::operation_id(operation_id)?;
             let account = crate::accounts::account_id(account_id, "account_id")?;
             if out_game.is_null() {
                 return Err(Failure::argument("out_game", "is NULL"));
@@ -225,7 +303,10 @@ pub unsafe extern "C" fn coblet_launch_account(
             let request = handle
                 .runtime
                 .block_on(handle.inner.launch_request(&account))?;
-            let request = with_customizers(request, customizers, count)?;
+            let mut request = with_customizers(request, customizers, count)?;
+            if let Some(op) = op {
+                request = request.with_operation(op);
+            }
             start(handle, version, game_dir, request, out_game)
         })
     }
@@ -261,8 +342,13 @@ pub unsafe extern "C" fn coblet_game_report(
 
 /// Waits for the next log line and returns it as JSON.
 ///
-/// The document is `{"schema":1,"source","level","thread","logger","message"}`.
+/// The document is `{"schema":1,"source","level","thread","logger",
+/// "message","time","raw"}` with `time` in Unix milliseconds or null.
 /// Returns `COBLET_STATUS_END` once the game ended and every line was read.
+///
+/// The call blocks until a line arrives, so call it from a thread of your
+/// own, never from a coblet callback. `coblet_events_next` delivers the
+/// same lines of every game, with a timeout.
 ///
 /// # Safety
 ///
@@ -286,22 +372,70 @@ pub unsafe extern "C" fn coblet_game_next_log(
             }
             let json = match game.runtime.block_on(game.logs.next()) {
                 None => return Ok(CobletStatus::End),
-                Some(LogItem::Missed(count)) => serde_json::json!({
-                    "schema": 1,
-                    "source": "launcher",
-                    "level": "WARN",
-                    "message": format!("{count} lines were skipped"),
-                }),
-                Some(LogItem::Line(line)) => serde_json::json!({
-                    "schema": 1,
-                    "source": format!("{:?}", line.source).to_lowercase(),
-                    "level": line.level.as_str(),
-                    "thread": line.thread,
-                    "logger": line.logger,
-                    "message": line.message,
-                }),
+                Some(LogItem::Missed(count)) => {
+                    let message = format!("{count} lines were skipped");
+                    serde_json::json!({
+                        "schema": 1,
+                        "source": "launcher",
+                        "level": "WARN",
+                        "message": message,
+                        "time": null,
+                        "raw": message,
+                    })
+                }
+                Some(LogItem::Line(line)) => log_json(&line),
             };
             put(out_line, CobletString::new(&json.to_string()), "out_line")?;
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+/// Writes the launch ID that this game's events carry into `out_id`, a
+/// buffer of `COBLET_OPERATION_ID_LEN` bytes.
+///
+/// # Safety
+///
+/// `game` must be a live handle; `out_id` must point to
+/// `COBLET_OPERATION_ID_LEN` writable bytes; `out_err` must be NULL or
+/// writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_game_operation_id(
+    game: *const CobletGame,
+    out_id: *mut c_char,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let game = game
+                .as_ref()
+                .ok_or_else(|| Failure::argument("game", "is NULL"))?;
+            write_operation_id(game.op, out_id)?;
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+/// Writes a new random operation ID into `out_id`, a buffer of
+/// `COBLET_OPERATION_ID_LEN` bytes. Pass it as a launch's `operation_id`
+/// to match the launch's events before the launch call returns.
+///
+/// # Safety
+///
+/// `out_id` must point to `COBLET_OPERATION_ID_LEN` writable bytes;
+/// `out_err` must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_generate_operation_id(
+    out_id: *mut c_char,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            write_operation_id(OperationId::random(), out_id)?;
             Ok(CobletStatus::Ok)
         })
     }
