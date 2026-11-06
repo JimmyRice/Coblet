@@ -30,8 +30,8 @@ pub use accounts::{
     CobletSkinModel, coblet_account_add_offline, coblet_account_assign, coblet_account_refresh,
     coblet_account_refresh_profile, coblet_account_remove, coblet_account_reset_skin,
     coblet_account_set_cape, coblet_account_set_default, coblet_account_set_skin_model,
-    coblet_account_upload_skin, coblet_account_upload_skin_url, coblet_accounts_json,
-    coblet_bytes_free, coblet_download_texture,
+    coblet_account_upload_skin, coblet_account_upload_skin_url, coblet_account_verify_license,
+    coblet_accounts_json, coblet_any_account_owns_game, coblet_bytes_free, coblet_download_texture,
 };
 pub use builder::{
     CobletBuilder, coblet_builder_add_customizer, coblet_builder_add_platform_profile,

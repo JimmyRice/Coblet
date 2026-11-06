@@ -8,7 +8,8 @@ use coblet_runtime::{
 };
 
 use crate::{
-    Account, AccountSecrets, AccountState, AuthError, AuthFlow, LaunchSession, PlayerProfile,
+    Account, AccountSecrets, AccountState, AuthError, AuthFlow, LaunchSession, LicenseCheck,
+    PlayerProfile,
 };
 
 /// Way of signing in, registered under an [`ExtensionId`](coblet_types::ExtensionId).
@@ -220,6 +221,10 @@ pub enum RefreshMode {
     IfNeeded,
     /// Renew the session and the profile now.
     Force,
+    /// Reuse the current session unless it expires soon, but read the
+    /// license and the profile again. Methods without licenses treat it
+    /// like [`IfNeeded`](Self::IfNeeded).
+    Recheck,
 }
 
 /// Secrets of one account, keyed by a short name such as `refresh_token`.
@@ -278,6 +283,9 @@ pub struct AccountUpdate {
     pub profile: Option<PlayerProfile>,
     /// New state.
     pub state: AccountState,
+    /// License read by this login or refresh. `None` keeps the previous
+    /// check.
+    pub license: Option<LicenseCheck>,
     /// When the game session expires, if known.
     pub session_expires_at: Option<SystemTime>,
     /// Non-sensitive values to keep, replacing the previous ones.
@@ -294,6 +302,7 @@ impl AccountUpdate {
         Self {
             profile: None,
             state,
+            license: None,
             session_expires_at: None,
             data: BTreeMap::new(),
             secrets: Credentials::new(),
@@ -307,13 +316,14 @@ impl AccountUpdate {
         self
     }
 
-    /// Takes the profile, state, data and expiry of an existing account,
+    /// Takes the profile, state, license, data and expiry of an existing account,
     /// without secrets to save.
     #[must_use]
     pub fn from_account(account: &Account) -> Self {
         Self {
             profile: account.profile.clone(),
             state: account.state,
+            license: account.license,
             session_expires_at: account.session_expires_at,
             data: account.data.clone(),
             secrets: Credentials::new(),

@@ -6,7 +6,8 @@ use coblet_types::{ExtensionId, PlayerName};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Account, AccountId, AccountState, AccountUpdate, Cape, PlayerProfile, Skin, SkinModel,
+    Account, AccountId, AccountState, AccountUpdate, Cape, GameLicense, LicenseCheck,
+    PlayerProfile, Skin, SkinModel,
 };
 
 /// Format version written to `accounts.json`.
@@ -115,10 +116,18 @@ struct RawAccount {
     state: String,
     profile: Option<RawProfile>,
     session_expires_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    license: Option<RawLicense>,
     #[serde(default)]
     data: BTreeMap<String, String>,
     #[serde(default)]
     secrets: BTreeSet<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RawLicense {
+    value: String,
+    checked_at: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -203,6 +212,10 @@ impl RawAccount {
                     .collect(),
             }),
             session_expires_at: account.session_expires_at.map(unix_seconds),
+            license: account.license.map(|check| RawLicense {
+                value: check.license.as_str().to_owned(),
+                checked_at: unix_seconds(check.checked_at),
+            }),
             data: account.data.clone(),
             secrets: account.secret_names.clone(),
         }
@@ -240,13 +253,23 @@ impl RawAccount {
         let mut account = Account::new(id, self.method);
         account.state = state;
         account.profile = profile;
-        account.session_expires_at = self
-            .session_expires_at
-            .map(|seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds));
+        account.session_expires_at = self.session_expires_at.map(from_unix_seconds);
+        // A license name from a newer version reads as never checked.
+        account.license = self.license.and_then(|raw| {
+            let license = GameLicense::parse(&raw.value)?;
+            Some(LicenseCheck::new(
+                license,
+                from_unix_seconds(raw.checked_at),
+            ))
+        });
         account.data = self.data;
         account.secret_names = self.secrets;
         Ok(account)
     }
+}
+
+fn from_unix_seconds(seconds: u64) -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)
 }
 
 fn unix_seconds(time: SystemTime) -> u64 {
@@ -261,7 +284,7 @@ mod tests {
     use coblet_types::ExtensionId;
 
     use super::AccountsFile;
-    use crate::{Account, AccountId, AccountState, PlayerProfile};
+    use crate::{Account, AccountId, AccountState, GameLicense, LicenseCheck, PlayerProfile};
 
     fn sample() -> AccountsFile {
         let profile = PlayerProfile::from_services_json(
@@ -276,6 +299,10 @@ mod tests {
         );
         account.profile = Some(profile);
         account.state = AccountState::NoLicense;
+        account.license = Some(LicenseCheck::new(
+            GameLicense::Missing,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(42),
+        ));
         account.session_expires_at = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(99));
         account.data.insert("xuid".to_owned(), "1".to_owned());
         account.secret_names.insert("refresh_token".to_owned());
@@ -293,7 +320,32 @@ mod tests {
         let text = String::from_utf8(json.clone()).unwrap();
         assert!(text.contains(r#""format": 1"#));
         assert!(!text.contains("token\":"));
+        assert!(text.contains(r#""value": "missing""#), "{text}");
         assert_eq!(AccountsFile::parse(&json).unwrap(), file);
+    }
+
+    #[test]
+    fn reads_licenses_leniently() {
+        let file = br#"{"format": 1, "default": null, "accounts": [
+            {"id": "a", "method": "coblet:microsoft", "state": "ready", "profile": null, "session_expires_at": null},
+            {"id": "b", "method": "coblet:microsoft", "state": "ready", "profile": null, "session_expires_at": null,
+             "license": {"value": "purchased", "checked_at": 7}},
+            {"id": "c", "method": "coblet:microsoft", "state": "ready", "profile": null, "session_expires_at": null,
+             "license": {"value": "lifetime", "checked_at": 7}}
+        ]}"#;
+        let file = AccountsFile::parse(file).unwrap();
+        let licenses: Vec<_> = file
+            .accounts
+            .iter()
+            .map(|account| account.license)
+            .collect();
+        let bought = LicenseCheck::new(
+            GameLicense::Purchased,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(7),
+        );
+        assert_eq!(licenses, [None, Some(bought), None]);
+        assert!(file.accounts[1].owns_game());
+        assert!(!file.accounts[0].owns_game());
     }
 
     #[test]

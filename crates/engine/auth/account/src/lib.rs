@@ -50,8 +50,8 @@ mod session;
 mod store;
 
 pub use account::{
-    Account, AccountId, AccountIdError, AccountState, Cape, PlayerProfile, ProfileUuidError, Skin,
-    SkinModel,
+    Account, AccountId, AccountIdError, AccountState, Cape, GameLicense, LicenseCheck,
+    PlayerProfile, ProfileUuidError, Skin, SkinModel,
 };
 #[cfg(feature = "encrypted-secrets")]
 pub use encrypted::{EncryptedFileStore, EncryptionKey};

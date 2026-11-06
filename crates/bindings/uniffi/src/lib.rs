@@ -25,8 +25,8 @@ mod profile;
 mod secrets;
 
 pub use account::{
-    AccountInfo, AccountState, CapeInfo, LoginInteraction, LoginPrompt, PlayerInfo, SkinInfo,
-    SkinModel,
+    AccountInfo, AccountState, CapeInfo, GameLicense, LoginInteraction, LoginPrompt, PlayerInfo,
+    SkinInfo, SkinModel,
 };
 pub use builder::CobletBuilder;
 pub use context::{Coblet, LaunchMode, LaunchOptions, PlatformInfo, VersionInfo};

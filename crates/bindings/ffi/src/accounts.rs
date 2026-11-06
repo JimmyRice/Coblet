@@ -1,5 +1,5 @@
 use std::ffi::c_char;
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use coblet::auth::{Account, AccountId, PlayerProfile, SkinModel};
 use coblet::player::SkinSource;
@@ -66,19 +66,24 @@ fn player_value(profile: &PlayerProfile) -> serde_json::Value {
     })
 }
 
+fn unix_seconds(time: SystemTime) -> Option<u64> {
+    time.duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|elapsed| elapsed.as_secs())
+}
+
 /// Describes an account as `{"id","method","state","player",
-/// "session_expires_at"}`.
+/// "session_expires_at","license","license_checked_at","owns_game"}`.
 pub(crate) fn account_value(account: &Account) -> serde_json::Value {
-    let expires = account
-        .session_expires_at
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|elapsed| elapsed.as_secs());
     serde_json::json!({
         "id": account.id.as_str(),
         "method": account.method.as_str(),
         "state": account.state.as_str(),
         "player": account.profile.as_ref().map(player_value),
-        "session_expires_at": expires,
+        "session_expires_at": account.session_expires_at.and_then(unix_seconds),
+        "license": account.license.map(|check| check.license.as_str()),
+        "license_checked_at": account.license.and_then(|check| unix_seconds(check.checked_at)),
+        "owns_game": account.owns_game(),
     })
 }
 
@@ -132,14 +137,20 @@ unsafe fn optional_account_id(id: *const c_char) -> Result<Option<AccountId>, Fa
 }
 
 /// Lists the saved accounts as JSON: `{"schema":1,"default","accounts":[
-/// {"id","method","state","player","session_expires_at"}]}`.
+/// {"id","method","state","player","session_expires_at","license",
+/// "license_checked_at","owns_game"}]}`.
 ///
 /// `default` is the default account's ID or null. `state` is `ready`,
 /// `needs-refresh`, `needs-reauth`, `no-license` or `no-profile`. `player`
 /// is null or `{"name","uuid","skins":[{"id","url","model","active"}],
 /// "capes":[{"id","alias","url","active"}]}` with `model` `classic` or
-/// `slim`. `session_expires_at` is in Unix seconds or null. On success
-/// `*out_json` receives a string to free with `coblet_string_free`.
+/// `slim`. `session_expires_at` is in Unix seconds or null. `license` is
+/// the last license check, `purchased`, `entitled` (for example through a
+/// subscription) or `missing`, and null for offline or never checked
+/// accounts; `license_checked_at` is its time in Unix seconds or null.
+/// `owns_game` is true when `license` is `purchased`, like Prism
+/// Launcher's "owns Minecraft". On success `*out_json` receives a string
+/// to free with `coblet_string_free`.
 ///
 /// Reading the list needs no network. Each `player` is the snapshot from
 /// the account's last login, token renewal or skin change;
@@ -335,6 +346,81 @@ pub unsafe extern "C" fn coblet_account_refresh(
                 CobletString::new(&with_schema(account_value(&account))),
                 "out_json",
             )?;
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+/// Checks with Minecraft services whether the account still owns the
+/// game, saves the result and returns the account as JSON in the format of
+/// `coblet_accounts_json` with a `schema` field; read its `owns_game` and
+/// `license`.
+///
+/// The current session is reused, so this costs two requests unless the
+/// session needs renewing. An account that bought the game since its last
+/// check becomes `ready`, one that lost it `no-license`. Offline accounts
+/// are returned unchanged with a null `license`. Fails with
+/// `COBLET_ERROR_KIND_AUTH` when the user has to sign in again; the last
+/// license stays saved.
+///
+/// # Safety
+///
+/// `coblet` must be a live handle; `account_id` must be NULL or
+/// NUL-terminated; `out_json` must be writable; `out_err` must be NULL or
+/// writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_account_verify_license(
+    coblet: *const Coblet,
+    account_id: *const c_char,
+    out_json: *mut CobletString,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let (handle, id) = args(coblet, account_id)?;
+            if out_json.is_null() {
+                return Err(Failure::argument("out_json", "is NULL"));
+            }
+            let account = handle
+                .runtime
+                .block_on(handle.inner.accounts().verify_license(&id))?;
+            let json = with_schema(account_value(&account));
+            put(out_json, CobletString::new(&json), "out_json")?;
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+/// Writes to `*out_owns` whether any saved account bought the game as of
+/// its last license check, without network access. Prism Launcher allows
+/// offline accounts only when this holds; the policy is the launcher's.
+///
+/// # Safety
+///
+/// `coblet` must be a live handle; `out_owns` must be writable; `out_err`
+/// must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_any_account_owns_game(
+    coblet: *const Coblet,
+    out_owns: *mut bool,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let handle = coblet
+                .as_ref()
+                .ok_or_else(|| Failure::argument("coblet", "is NULL"))?;
+            if out_owns.is_null() {
+                return Err(Failure::argument("out_owns", "is NULL"));
+            }
+            let owns = handle
+                .runtime
+                .block_on(handle.inner.accounts().any_owns_game())?;
+            put(out_owns, owns, "out_owns")?;
             Ok(CobletStatus::Ok)
         })
     }

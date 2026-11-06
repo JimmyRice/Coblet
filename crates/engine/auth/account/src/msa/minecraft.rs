@@ -7,8 +7,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::http::{bearer_get, json_post, send};
+use super::random;
 use super::xbox::XboxToken;
-use crate::{AuthCtx, AuthError, PlayerProfile};
+use crate::{AuthCtx, AuthError, GameLicense, PlayerProfile};
 
 const SERVICES: &str = "https://api.minecraftservices.com";
 
@@ -56,19 +57,21 @@ pub(crate) async fn login(ctx: &AuthCtx, xsts: &XboxToken) -> Result<MinecraftTo
     })
 }
 
-/// Reports whether the account owns Minecraft: Java Edition, bought or
-/// through Game Pass.
-pub(crate) async fn owns_game(ctx: &AuthCtx, token: &Secret) -> Result<bool, AuthError> {
-    let request = bearer_get(&format!("{SERVICES}/entitlements/mcstore"), token.expose())?;
+/// Reads what the account's entitlements say about the game.
+pub(crate) async fn license(ctx: &AuthCtx, token: &Secret) -> Result<GameLicense, AuthError> {
+    let url = format!(
+        "{SERVICES}/entitlements/license?requestId={}",
+        random::uuid()?
+    );
+    let request = bearer_get(&url, token.expose())?;
     let reply = send(ctx, "entitlements", request).await?;
     if !reply.is_success() {
         return Err(reply.unexpected());
     }
     let raw: RawEntitlements = reply.json()?;
-    Ok(raw
-        .items
-        .iter()
-        .any(|item| item.name == "product_minecraft" || item.name == "game_minecraft"))
+    Ok(GameLicense::from_entitlements(
+        raw.items.iter().map(|item| item.name.as_str()),
+    ))
 }
 
 /// Fetches the player profile; `None` when the account has not created one.

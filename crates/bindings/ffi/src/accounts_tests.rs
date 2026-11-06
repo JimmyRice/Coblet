@@ -8,8 +8,8 @@ use coblet::runtime::{Secret, SecretKey, SecretStore as _};
 
 use super::{
     coblet_account_add_offline, coblet_account_assign, coblet_account_refresh_profile,
-    coblet_account_remove, coblet_account_set_default, coblet_accounts_json, coblet_bytes_free,
-    coblet_download_texture,
+    coblet_account_remove, coblet_account_set_default, coblet_account_verify_license,
+    coblet_accounts_json, coblet_any_account_owns_game, coblet_bytes_free, coblet_download_texture,
 };
 use crate::builder::{
     coblet_builder_build, coblet_builder_new, coblet_builder_set_encrypted_secret_file,
@@ -96,6 +96,8 @@ fn offline_accounts_round_trip_through_json() {
     assert_eq!(account["state"], "ready");
     assert_eq!(account["player"]["name"], "Steve");
     assert!(account["session_expires_at"].is_null());
+    assert!(account["license"].is_null() && account["license_checked_at"].is_null());
+    assert_eq!(account["owns_game"], false);
     let id = CString::new(account["id"].as_str().unwrap()).unwrap();
 
     let pack = CString::new("pack").unwrap();
@@ -125,6 +127,26 @@ fn offline_accounts_round_trip_through_json() {
     let refreshed = json(&mut out);
     assert_eq!(refreshed["id"], account["id"]);
     assert_eq!(refreshed["player"]["name"], "Steve");
+
+    let mut owns = true;
+    // SAFETY: as above.
+    unsafe {
+        assert_eq!(
+            coblet_account_verify_license(coblet, id.as_ptr(), &raw mut out, &raw mut err),
+            CobletStatus::Ok
+        );
+        assert_eq!(
+            coblet_any_account_owns_game(coblet, &raw mut owns, &raw mut err),
+            CobletStatus::Ok
+        );
+        assert_eq!(
+            coblet_any_account_owns_game(coblet, std::ptr::null_mut(), &raw mut err),
+            CobletStatus::InvalidArgument
+        );
+    }
+    take_error(err);
+    assert_eq!(json(&mut out)["license"], serde_json::Value::Null);
+    assert!(!owns);
 
     let mut png = CobletBytes::empty();
     let bad_url = CString::new("not a url").unwrap();

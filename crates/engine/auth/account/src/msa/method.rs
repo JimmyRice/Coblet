@@ -9,8 +9,8 @@ use super::loopback::Loopback;
 use super::{MsaConfig, minecraft, oauth, random, xbox};
 use crate::{
     Account, AccountSecrets, AccountState, AccountUpdate, AuthCtx, AuthError, AuthFlow, AuthMethod,
-    CallbackReceiver, LaunchSession, LoginOptions, PlayerProfile, Redirect, RefreshMode, Refreshed,
-    callback_channel,
+    CallbackReceiver, LaunchSession, LicenseCheck, LoginOptions, PlayerProfile, Redirect,
+    RefreshMode, Refreshed, callback_channel,
 };
 
 /// ID of the built-in Microsoft method.
@@ -162,17 +162,38 @@ impl AuthMethod for MicrosoftMethod {
         mode: RefreshMode,
     ) -> BoxFuture<'a, Result<Refreshed, AuthError>> {
         Box::pin(async move {
-            let fresh = account.state == AccountState::Ready
-                && account
-                    .session_expires_at
-                    .is_some_and(|expires| expires > ctx.now() + EXPIRY_MARGIN);
-            if mode == RefreshMode::IfNeeded
-                && fresh
+            let unexpired = account
+                .session_expires_at
+                .is_some_and(|expires| expires > ctx.now() + EXPIRY_MARGIN);
+            // A session also works for reading the license when the account
+            // could not play at its last check.
+            let usable = match mode {
+                RefreshMode::IfNeeded => account.state == AccountState::Ready,
+                RefreshMode::Recheck => matches!(
+                    account.state,
+                    AccountState::Ready | AccountState::NoLicense | AccountState::NoProfile
+                ),
+                RefreshMode::Force => false,
+            };
+            if unexpired
+                && usable
                 && let Some(token) = secrets.get(MINECRAFT_TOKEN).await?
             {
-                let update = AccountUpdate::from_account(account);
-                if let Some(session) = session_for(&update, &token) {
-                    return Ok(Refreshed::new(update, Some(session)));
+                if mode == RefreshMode::Recheck {
+                    match recheck(ctx, account, &token).await {
+                        Ok(update) => {
+                            let session = session_for(&update, &token);
+                            return Ok(Refreshed::new(update, session));
+                        }
+                        // The token was revoked early; renew it below.
+                        Err(AuthError::Http { status: 401, .. }) => {}
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    let update = AccountUpdate::from_account(account);
+                    if let Some(session) = session_for(&update, &token) {
+                        return Ok(Refreshed::new(update, Some(session)));
+                    }
                 }
             }
             self.renew(ctx, secrets).await
@@ -205,20 +226,43 @@ async fn minecraft_account(
     let user = xbox::user_token(ctx, ms_token).await?;
     let xsts = xbox::xsts_token(ctx, &user).await?;
     let minecraft = minecraft::login(ctx, &xsts).await?;
-    let owns = minecraft::owns_game(ctx, &minecraft.access_token).await?;
-    let profile = minecraft::profile(ctx, &minecraft.access_token).await?;
-    let state = match (owns, &profile) {
-        (true, Some(_)) => AccountState::Ready,
-        (true, None) => AccountState::NoProfile,
-        (false, _) => AccountState::NoLicense,
-    };
-    let mut update = AccountUpdate::new(state);
-    update.profile = profile;
+    let mut update = AccountUpdate::new(AccountState::Ready);
+    read_entitlements(ctx, &minecraft.access_token, &mut update).await?;
     update.session_expires_at = Some(ctx.now() + minecraft.expires_in);
     if let Some(xuid) = minecraft::xuid(&minecraft.access_token) {
         update.data.insert(XUID.to_owned(), xuid);
     }
     Ok((update, minecraft.access_token))
+}
+
+/// Reads the license and profile of an account whose session is still
+/// valid, keeping its expiry and data.
+async fn recheck(
+    ctx: &AuthCtx,
+    account: &Account,
+    token: &Secret,
+) -> Result<AccountUpdate, AuthError> {
+    let mut update = AccountUpdate::from_account(account);
+    read_entitlements(ctx, token, &mut update).await?;
+    Ok(update)
+}
+
+/// Sets the license, profile and state of `update` from the services.
+async fn read_entitlements(
+    ctx: &AuthCtx,
+    token: &Secret,
+    update: &mut AccountUpdate,
+) -> Result<(), AuthError> {
+    let license = minecraft::license(ctx, token).await?;
+    let profile = minecraft::profile(ctx, token).await?;
+    update.state = match (license.may_play(), &profile) {
+        (true, Some(_)) => AccountState::Ready,
+        (true, None) => AccountState::NoProfile,
+        (false, _) => AccountState::NoLicense,
+    };
+    update.license = Some(LicenseCheck::new(license, ctx.now()));
+    update.profile = profile;
+    Ok(())
 }
 
 /// Builds the launch session of a ready account.
