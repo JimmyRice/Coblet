@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 use std::time::SystemTime;
 
-use coblet::launch::{GameSession, LogItem, LogStream};
+use coblet::launch::{GameKiller, GameSession, LogItem, LogStream};
 use coblet::runtime::GameLogLine;
 
 use crate::{CobletError, ErrorKind};
@@ -58,6 +58,7 @@ pub struct GameHandle {
     pid: Option<u32>,
     report: String,
     session: Mutex<Option<GameSession>>,
+    killer: GameKiller,
     logs: tokio::sync::Mutex<LogStream>,
 }
 
@@ -76,6 +77,7 @@ impl GameHandle {
             pid: session.pid(),
             report: session.profile().explain(),
             logs: tokio::sync::Mutex::new(session.logs()),
+            killer: session.killer(),
             session: Mutex::new(Some(session)),
         }
     }
@@ -126,16 +128,10 @@ impl GameHandle {
         }
     }
 
-    /// Kills the game; `wait` still reports the exit.
+    /// Kills the game, also while `wait` is running; `wait` still reports
+    /// the exit. Calling it after the game ended does nothing.
     pub fn kill(&self) {
-        if let Some(session) = self
-            .session
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-        {
-            session.kill();
-        }
+        self.killer.kill();
     }
 
     /// Waits for the game to end; can be called once.
