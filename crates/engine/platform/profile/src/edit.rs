@@ -310,5 +310,5 @@ fn replace_natives(library: &mut EffectiveLibrary, maven: &str, classifier: &str
 }
 
 #[cfg(test)]
-#[path = "edit_tests.rs"]
+#[path = "../tests/edit.rs"]
 mod tests;
