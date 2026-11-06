@@ -220,6 +220,35 @@ impl MojangVersions {
         Self { manifest, ..self }
     }
 
+    /// Creates a second source that reads a manifest in the same format
+    /// from another address, such as a list of experimental versions.
+    ///
+    /// The source has its own ID and its own cache entry, so it can sit in
+    /// a catalog next to the official one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use coblet_mojang::MojangVersions;
+    /// use coblet_runtime::{Extension, HttpUrl};
+    /// use coblet_types::ExtensionId;
+    ///
+    /// let experiments = MojangVersions::other(
+    ///     ExtensionId::new("acme:experiments")?,
+    ///     HttpUrl::new("https://meta.example/experiments.json")?,
+    /// );
+    /// assert_eq!(experiments.id().as_str(), "acme:experiments");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn other(id: ExtensionId, manifest: HttpUrl) -> Self {
+        Self {
+            id,
+            manifest,
+            ..Self::new()
+        }
+    }
+
     /// Uses another trait table.
     #[must_use]
     pub fn with_trait_table(self, table: TraitTable) -> Self {
@@ -252,10 +281,15 @@ impl MojangVersions {
     ///
     /// Returns [`CatalogError`] when the manifest is unavailable or malformed.
     pub async fn manifest(&self, cx: &CatalogContext) -> Result<VersionManifest, CatalogError> {
-        let request = MetaRequest::new(
-            self.manifest.clone(),
-            key("mojang/version_manifest_v2.json".to_owned())?,
-        );
+        let path = if self.id.as_str() == "coblet:mojang" {
+            "mojang/version_manifest_v2.json".to_owned()
+        } else {
+            format!(
+                "sources/{}/manifest.json",
+                self.id.as_str().replace(':', "/")
+            )
+        };
+        let request = MetaRequest::new(self.manifest.clone(), key(path)?);
         let bytes = cx.fetch(&request).await?;
         VersionManifest::from_slice(&bytes)
             .map_err(|error| CatalogError::parse(self.manifest.as_str(), error))

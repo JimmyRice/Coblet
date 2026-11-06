@@ -146,3 +146,33 @@ async fn fetches_and_verifies_version_json_and_asset_index() {
     assert!(!modern.map_to_resources && !modern.is_virtual);
     assert!(modern.total_size() > 0);
 }
+
+#[tokio::test]
+async fn another_manifest_source_has_its_own_cache_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = fixture_bytes("version_manifest_v2.json");
+    let (_files, meta) = meta(
+        Files {
+            routes: vec![
+                ("version_manifest_v2.json", manifest.clone()),
+                ("experiments.json", manifest),
+            ],
+            ..Files::default()
+        },
+        &dir,
+    );
+    let cx = CatalogContext::new(meta, CachePolicy::Revalidate);
+    let official = MojangVersions::new();
+    let other = MojangVersions::other(
+        coblet_types::ExtensionId::new("acme:experiments").unwrap(),
+        coblet_runtime::HttpUrl::new("https://meta.example/experiments.json").unwrap(),
+    );
+    official.manifest(&cx).await.unwrap();
+    other.manifest(&cx).await.unwrap();
+    assert!(dir.path().join("mojang/version_manifest_v2.json").is_file());
+    assert!(
+        dir.path()
+            .join("sources/acme/experiments/manifest.json")
+            .is_file()
+    );
+}
