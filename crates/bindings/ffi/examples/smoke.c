@@ -68,7 +68,10 @@ static void print_launch_events(CobletEvents *events, const char *launch_id) {
     CobletError *err = NULL;
     unsigned transfers = 0;
     while (coblet_events_next(events, 0, &event, &err) == COBLET_STATUS_OK) {
-        if (strcmp(event.op, launch_id) == 0) {
+        if (event.kind == COBLET_EVENT_KIND_MISSED) {
+            /* Read after the launch, a cold download can outgrow the buffer. */
+            printf("event: missed %llu\n", (unsigned long long)event.missed);
+        } else if (strcmp(event.op, launch_id) == 0) {
             if (event.kind == COBLET_EVENT_KIND_TRANSFER) {
                 transfers++;
                 if (event.files_done == event.files_total) {
