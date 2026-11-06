@@ -212,6 +212,11 @@ typedef struct CobletBuilder CobletBuilder;
 typedef struct CobletEvents CobletEvents;
 
 // Running game handle.
+//
+// Several threads may use one handle at once: `coblet_game_kill` stops
+// the game while another thread blocks in `coblet_game_wait` or
+// `coblet_game_next_log`. Only `coblet_game_free` needs the handle to
+// itself.
 typedef struct CobletGame CobletGame;
 
 // Microsoft login in progress, from `coblet_login_begin`.
@@ -1246,9 +1251,9 @@ enum CobletStatus coblet_game_report(const struct CobletGame *game,
 //
 // # Safety
 //
-// `game` must be a live handle not used by another thread; `out_line` must
-// be writable; `out_err` must be NULL or writable.
-enum CobletStatus coblet_game_next_log(struct CobletGame *game,
+// `game` must be a live handle; `out_line` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_game_next_log(const struct CobletGame *game,
                                        struct CobletString *out_line,
                                        struct CobletError **out_err);
 
@@ -1274,7 +1279,9 @@ enum CobletStatus coblet_game_operation_id(const struct CobletGame *game,
 // `out_err` must be NULL or writable.
 enum CobletStatus coblet_generate_operation_id(char *out_id, struct CobletError **out_err);
 
-// Kills the game; `coblet_game_wait` still reports the exit.
+// Kills the game, also while another thread blocks in `coblet_game_wait`;
+// `coblet_game_wait` still reports the exit. Calling it after the game
+// ended does nothing.
 //
 // # Safety
 //
@@ -1285,9 +1292,9 @@ enum CobletStatus coblet_game_kill(const struct CobletGame *game);
 //
 // # Safety
 //
-// `game` must be a live handle not used by another thread; `out_exit` must
-// be writable; `out_err` must be NULL or writable.
-enum CobletStatus coblet_game_wait(struct CobletGame *game,
+// `game` must be a live handle; `out_exit` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_game_wait(const struct CobletGame *game,
                                    struct CobletGameExit *out_exit,
                                    struct CobletError **out_err);
 

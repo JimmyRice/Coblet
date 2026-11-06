@@ -419,3 +419,27 @@ async fn failed_launches_finish_their_operation() {
             .any(|event| matches!(event, Event::GameStarted { .. }))
     );
 }
+
+#[tokio::test]
+async fn a_killer_stops_the_game_while_another_task_waits() {
+    let dir = tempfile::tempdir().unwrap();
+    let cx = context(dir.path(), online());
+    // Answers the version probe like FAKE_JAVA, then runs until killed.
+    write_script(
+        &dir.path().join("jdk/bin/java"),
+        &FAKE_JAVA.replace("printf '%s\\n' \"$@\" > args.txt", "exec sleep 60"),
+    );
+    let session = Launcher::new().launch(cx).await.unwrap();
+    let killer = session.killer();
+    let waiter = tokio::spawn(session.wait());
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    killer.kill();
+    let exit = tokio::time::timeout(std::time::Duration::from_secs(10), waiter)
+        .await
+        .expect("the game should end soon after the kill")
+        .unwrap()
+        .unwrap();
+    assert!(exit.killed);
+    assert!(!exit.suspected_crash);
+    killer.kill();
+}

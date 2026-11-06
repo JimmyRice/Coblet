@@ -31,7 +31,7 @@ pub use launcher::Launcher;
 pub use layout::GameLayout;
 pub use log::{LogParser, Redact};
 pub use request::{LaunchHook, LaunchRequest};
-pub use session::{GameExit, GameSession};
+pub use session::{GameExit, GameKiller, GameSession};
 pub use step::{LaunchContext, LaunchServices, LaunchStep};
 pub use steps::{
     BuildCommand, ClientJar, LegacyFmlLibs, LoggingConfig, PreLaunch, PrepareNatives, SelectJava,
