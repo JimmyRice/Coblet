@@ -36,6 +36,7 @@ pub struct CobletBuilder<State> {
     platform: Option<Platform>,
     events: Option<EventBus>,
     rewriters: UrlRewriters,
+    mirror_fallback: bool,
     #[cfg(feature = "mojang")]
     versions: VersionSettings,
     #[cfg(feature = "launch")]
@@ -90,6 +91,7 @@ impl Coblet {
             platform: None,
             events: None,
             rewriters: UrlRewriters::new(),
+            mirror_fallback: true,
             #[cfg(feature = "mojang")]
             versions: VersionSettings::default(),
             #[cfg(feature = "launch")]
@@ -121,6 +123,7 @@ impl CobletBuilder<NoRoot> {
             platform: self.platform,
             events: self.events,
             rewriters: self.rewriters,
+            mirror_fallback: self.mirror_fallback,
             #[cfg(feature = "mojang")]
             versions: self.versions,
             #[cfg(feature = "launch")]
@@ -209,9 +212,14 @@ impl<State> CobletBuilder<State> {
     /// Rewriters apply to game files, libraries, assets, Java runtimes and
     /// metadata (version manifest, version files, runtime indexes), in the
     /// order they were added. Hashes are still checked, so a mirror cannot
-    /// change content that is listed with a hash. Account and skin requests
-    /// are not rewritten. [`PrefixRewriter`](coblet_runtime::PrefixRewriter)
-    /// describes a mirror without code.
+    /// change content that is listed with a hash. When a mirror fails or
+    /// serves something that does not match, the original address is tried
+    /// next; see [`mirror_fallback`](CobletBuilder::mirror_fallback). A
+    /// mirror that reformats JSON can be allowed with
+    /// [`PrefixRewriter::trusting_metadata`](coblet_runtime::PrefixRewriter::trusting_metadata).
+    /// Account and skin requests are not rewritten.
+    /// [`PrefixRewriter`](coblet_runtime::PrefixRewriter) describes a
+    /// mirror without code.
     ///
     /// # Examples
     ///
@@ -230,6 +238,15 @@ impl<State> CobletBuilder<State> {
     /// ```
     pub fn url_rewriter(mut self, rewriter: Arc<dyn UrlRewriter>) -> Self {
         self.rewriters = self.rewriters.with(rewriter);
+        self
+    }
+
+    /// Sets whether requests fall back to the original address when a
+    /// rewritten one fails or serves something that does not match its
+    /// hash; on by default. Turn it off when the original hosts must never
+    /// be contacted.
+    pub fn mirror_fallback(mut self, enabled: bool) -> Self {
+        self.mirror_fallback = enabled;
         self
     }
 
@@ -490,6 +507,11 @@ impl CobletBuilder<WithRoot> {
             .take()
             .unwrap_or_else(|| EventBus::new(EVENT_CAPACITY));
         let rewriters = std::mem::take(&mut self.rewriters);
+        let rewriters = if self.mirror_fallback {
+            rewriters
+        } else {
+            rewriters.without_fallback()
+        };
         let meta = MetaCache::new(
             Arc::clone(&transport),
             Arc::clone(&storage),
