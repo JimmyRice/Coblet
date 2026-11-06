@@ -57,7 +57,7 @@ mod retry;
 mod task;
 mod verify;
 
-pub use coblet_runtime::{PrefixRewriter, UrlRewriter, UrlRewriters};
+pub use coblet_runtime::{PrefixRewriter, Route, UrlRewriter, UrlRewriters};
 pub use config::DownloaderConfig;
 pub use downloader::{Downloader, ProgressFn};
 pub use error::{DownloadError, FetchError};

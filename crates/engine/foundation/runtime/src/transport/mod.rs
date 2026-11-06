@@ -15,5 +15,5 @@ pub use request::{HttpUrl, HttpUrlError, Method, Request};
 #[cfg(feature = "reqwest")]
 pub use reqwest_client::ReqwestTransport;
 pub use response::{Body, MemoryBody, Response};
-pub use rewrite::{PrefixRewriter, UrlRewriter, UrlRewriters};
+pub use rewrite::{PrefixRewriter, Route, UrlRewriter, UrlRewriters};
 pub use user_agent::{UserAgent, UserAgentError};
