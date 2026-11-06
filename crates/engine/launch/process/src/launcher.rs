@@ -321,5 +321,5 @@ fn publish(events: Option<&EventBus>, event: impl FnOnce() -> Event) {
 mod tests;
 
 #[cfg(test)]
-#[path = "../tests/launcher/customize_tests.rs"]
+#[path = "../tests/launcher/customize.rs"]
 mod customize_tests;
