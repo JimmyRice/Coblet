@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use coblet_download::VerifyMode;
 use coblet_launch_command::{LaunchAuth, Memory, QuickPlay, Resolution};
-use coblet_runtime::ProcessSpec;
+use coblet_runtime::{OperationId, ProcessSpec};
 use coblet_types::ExtensionId;
 
 use crate::DEFAULT_LOG_CAPACITY;
@@ -72,6 +72,9 @@ pub struct LaunchRequest {
     pub launcher: Option<(String, String)>,
     /// Launch customizers to run, in order; none by default.
     pub customizers: Vec<ExtensionId>,
+    /// ID of the launch in events, random unless chosen with
+    /// [`with_operation`](Self::with_operation).
+    pub operation: OperationId,
 }
 
 impl LaunchRequest {
@@ -93,7 +96,15 @@ impl LaunchRequest {
             log_capacity: DEFAULT_LOG_CAPACITY,
             launcher: None,
             customizers: Vec::new(),
+            operation: OperationId::random(),
         }
+    }
+
+    /// Uses a chosen launch ID, so a UI can match the launch's events
+    /// before [`Launcher::launch`](crate::Launcher::launch) returns.
+    #[must_use]
+    pub fn with_operation(self, operation: OperationId) -> Self {
+        Self { operation, ..self }
     }
 
     /// Uses this Java executable instead of searching.

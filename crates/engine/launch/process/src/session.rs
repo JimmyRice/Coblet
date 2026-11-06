@@ -7,8 +7,8 @@ use bytes::BytesMut;
 use coblet_launch_command::LaunchCommand;
 use coblet_platform::EffectiveLaunchProfile;
 use coblet_runtime::{
-    EntryKind, Event, EventBus, GameLogLine, KillHandle, LogLevel, LogSource, OutputStream,
-    ProcessExit, ProcessSpawner, SpawnedProcess, Storage,
+    EntryKind, Event, EventBus, GameLogLine, KillHandle, LogLevel, LogSource, OperationId,
+    OutputStream, ProcessExit, ProcessSpawner, SpawnedProcess, Storage,
 };
 use tokio::task::JoinHandle;
 
@@ -37,6 +37,7 @@ pub struct GameExit {
 
 /// Running game started by a [`Launcher`](crate::Launcher).
 pub struct GameSession {
+    op: OperationId,
     pid: Option<u32>,
     command: LaunchCommand,
     profile: EffectiveLaunchProfile,
@@ -64,14 +65,37 @@ pub(crate) struct Monitor {
     pub(crate) spawner: Arc<dyn ProcessSpawner>,
     pub(crate) game_directory: PathBuf,
     pub(crate) post_exit: Option<LaunchHook>,
+    pub(crate) op: OperationId,
 }
 
 impl Monitor {
+    /// Publishes to the event stream only while someone listens; copying
+    /// every line for nobody is the costliest part of a busy log.
+    fn listening(&self) -> Option<&EventBus> {
+        self.events
+            .as_ref()
+            .filter(|events| events.has_subscribers())
+    }
+
     fn emit(&self, line: GameLogLine) {
-        if let Some(events) = &self.events {
-            events.publish(Event::GameLog(line.clone()));
+        if let Some(events) = self.listening() {
+            events.publish(Event::GameLog {
+                op: self.op,
+                line: line.clone(),
+            });
         }
         self.logs.push(line);
+    }
+
+    fn exited(&self, exit: Option<ProcessExit>, killed: bool, suspected_crash: bool) {
+        if let Some(events) = self.listening() {
+            events.publish(Event::GameExited {
+                op: self.op,
+                exit,
+                killed,
+                suspected_crash,
+            });
+        }
     }
 
     fn launcher_line(&self, level: LogLevel, message: &str) {
@@ -191,6 +215,7 @@ impl Monitor {
                     &format!("waiting for the game failed: {error}"),
                 );
                 self.logs.close();
+                self.exited(None, killed.load(Ordering::Acquire), true);
                 return Err(error.into());
             }
         };
@@ -214,6 +239,7 @@ impl Monitor {
         }
         self.run_post_exit().await;
         self.logs.close();
+        self.exited(Some(exit), killed, suspected_crash);
         Ok(GameExit {
             exit,
             duration,
@@ -232,11 +258,13 @@ impl GameSession {
         monitor: Monitor,
     ) -> Self {
         let pid = process.id();
+        let op = monitor.op;
         let kill = process.kill_handle();
         let killed = Arc::new(AtomicBool::new(false));
         let logs = Arc::clone(&monitor.logs);
         let task = tokio::spawn(monitor.run(process, Arc::clone(&killed)));
         Self {
+            op,
             pid,
             command,
             profile,
@@ -245,6 +273,12 @@ impl GameSession {
             killed,
             monitor: task,
         }
+    }
+
+    /// Returns the launch ID its events carry.
+    #[must_use]
+    pub fn operation(&self) -> OperationId {
+        self.op
     }
 
     /// Returns the operating system process ID, when known.

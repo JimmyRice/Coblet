@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use coblet_runtime::{Registry, RegistryError};
+use coblet_runtime::{Event, EventBus, OperationOutcome, Registry, RegistryError};
 use coblet_types::ExtensionId;
 
 use crate::customize::Placement;
@@ -247,15 +247,47 @@ impl Launcher {
     /// authentication argument, the failure of the first customizer or
     /// step that fails, or [`LaunchError::Cancelled`].
     pub async fn run(&self, cx: &mut LaunchContext) -> Result<(), LaunchError> {
+        let events = cx.services.events.clone();
+        let op = cx.request.operation;
+        publish(events.as_ref(), || Event::OperationStarted {
+            op,
+            kind: "launch",
+        });
+        let result = self.run_steps(cx, events.as_ref()).await;
+        publish(events.as_ref(), || Event::OperationFinished {
+            op,
+            outcome: match &result {
+                Ok(()) => OperationOutcome::Succeeded,
+                Err(LaunchError::Cancelled) => OperationOutcome::Cancelled,
+                Err(error) => OperationOutcome::Failed {
+                    message: error.to_string(),
+                },
+            },
+        });
+        result
+    }
+
+    async fn run_steps(
+        &self,
+        cx: &mut LaunchContext,
+        events: Option<&EventBus>,
+    ) -> Result<(), LaunchError> {
         if cx.cancel.is_cancelled() {
             return Err(LaunchError::Cancelled);
         }
         let steps = self.customize(cx)?;
-        for step in &steps {
+        let count = u32::try_from(steps.len()).unwrap_or(u32::MAX);
+        for (index, step) in (0_u32..).zip(&steps) {
             if cx.cancel.is_cancelled() {
                 return Err(LaunchError::Cancelled);
             }
             tracing::debug!(step = step.name(), "running launch step");
+            publish(events, || Event::LaunchStep {
+                op: cx.request.operation,
+                step: step.name().to_owned(),
+                index,
+                count,
+            });
             step.run(cx).await?;
         }
         Ok(())
@@ -273,6 +305,13 @@ impl Launcher {
             step: "launch",
             needs: "a session started by spawn",
         })
+    }
+}
+
+/// Publishes an event built only when someone listens.
+fn publish(events: Option<&EventBus>, event: impl FnOnce() -> Event) {
+    if let Some(events) = events.filter(|events| events.has_subscribers()) {
+        events.publish(event());
     }
 }
 

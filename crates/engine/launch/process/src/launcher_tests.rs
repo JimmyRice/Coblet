@@ -322,3 +322,100 @@ async fn customizer_changes_reach_the_game_command() {
     assert!(agent.is_some() && agent < main, "{args:?}");
     assert_eq!(args.last(), Some(&"--marked"));
 }
+
+/// Collects the events published so far, waiting briefly for stragglers.
+async fn drain(events: &mut coblet_runtime::EventSubscription) -> Vec<coblet_runtime::Event> {
+    let mut seen = Vec::new();
+    let wait = std::time::Duration::from_millis(200);
+    while let Ok(Some(item)) = tokio::time::timeout(wait, events.recv()).await {
+        match item {
+            coblet_runtime::Received::Event(event) => seen.push(event),
+            coblet_runtime::Received::Missed(count) => panic!("missed {count} events"),
+        }
+    }
+    seen
+}
+
+#[tokio::test]
+async fn launches_report_steps_and_the_game_by_launch_id() {
+    use coblet_runtime::{Event, EventBus, OperationId, OperationOutcome};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut cx = context(dir.path(), online());
+    let bus = EventBus::new(1024);
+    let mut events = bus.subscribe();
+    cx.services.events = Some(bus);
+    let op = OperationId::random();
+    cx.request = cx.request.with_operation(op);
+    let session = Launcher::new().launch(cx).await.unwrap();
+    assert_eq!(session.operation(), op);
+    let pid = session.pid();
+    session.wait().await.unwrap();
+    let seen = drain(&mut events).await;
+
+    assert!(seen.iter().all(|event| event.op() == Some(op)), "{seen:?}");
+    assert_eq!(seen[0], Event::OperationStarted { op, kind: "launch" });
+    let steps: Vec<_> = seen
+        .iter()
+        .filter_map(|event| match event {
+            Event::LaunchStep {
+                step, index, count, ..
+            } => Some((step.as_str(), *index, *count)),
+            _ => None,
+        })
+        .collect();
+    let launcher = Launcher::new();
+    let names = launcher.names();
+    assert_eq!(steps.len(), names.len());
+    assert_eq!(
+        steps[0],
+        ("select-java", 0, u32::try_from(names.len()).unwrap())
+    );
+    assert_eq!(steps.last().unwrap().0, "spawn");
+    assert!(seen.contains(&Event::GameStarted { op, pid }));
+    assert!(seen.contains(&Event::OperationFinished {
+        op,
+        outcome: OperationOutcome::Succeeded
+    }));
+    assert!(seen.iter().any(|event| matches!(
+        event,
+        Event::GameLog { line, .. } if line.message == "stderr line"
+    )));
+    let Some(Event::GameExited {
+        exit,
+        killed: false,
+        suspected_crash: true,
+        ..
+    }) = seen.last()
+    else {
+        panic!("the game exit comes last: {seen:?}");
+    };
+    assert_eq!(exit.unwrap().code, Some(3));
+}
+
+#[tokio::test]
+async fn failed_launches_finish_their_operation() {
+    use coblet_runtime::{Event, EventBus, OperationOutcome};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut cx = context(dir.path(), online());
+    cx.request.java = Some(dir.path().join("no-java"));
+    let bus = EventBus::new(64);
+    let mut events = bus.subscribe();
+    cx.services.events = Some(bus);
+    let op = cx.request.operation;
+    assert!(Launcher::new().launch(cx).await.is_err());
+    let seen = drain(&mut events).await;
+    assert!(matches!(
+        seen.last(),
+        Some(Event::OperationFinished {
+            op: finished,
+            outcome: OperationOutcome::Failed { .. },
+        }) if *finished == op
+    ));
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, Event::GameStarted { .. }))
+    );
+}
