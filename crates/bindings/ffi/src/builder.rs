@@ -11,6 +11,7 @@ use crate::customize::{CobletCustomizer, ForeignCustomizer};
 use crate::guard::{guard, put};
 use crate::profile::{CobletPlatformProfile, ForeignProfile};
 use crate::secrets::{CobletSecretStore, ForeignSecrets, encryption_key};
+use crate::sources::{CobletUrlRewriter, ForeignRewriter, parse_kinds};
 use crate::types::{CobletError, CobletErrorKind, CobletStatus, Failure, text};
 
 /// Settings of a `Coblet` handle before it is built.
@@ -26,6 +27,8 @@ pub struct CobletBuilder {
     platform: Option<Platform>,
     msa_client_id: Option<MsaClientId>,
     secrets: Secrets,
+    rewriters: Vec<Arc<dyn coblet::runtime::UrlRewriter>>,
+    version_sources: Vec<coblet::mojang::MojangVersions>,
 }
 
 /// Where tokens are kept.
@@ -109,6 +112,8 @@ pub unsafe extern "C" fn coblet_builder_new(
                 platform: None,
                 msa_client_id: None,
                 secrets: Secrets::Memory,
+                rewriters: Vec::new(),
+                version_sources: Vec::new(),
             });
             put(out_builder, Box::into_raw(builder), "out_builder")?;
             Ok(CobletStatus::Ok)
@@ -329,6 +334,130 @@ pub unsafe extern "C" fn coblet_builder_allow_auth_changes(
     }
 }
 
+/// Sends requests whose address starts with `from` to the same path under
+/// `to`, for a regional mirror or a proxy.
+///
+/// `kinds` is NULL or a JSON array of kind names, such as
+/// `["library", "metadata"]`, that limits the rule; NULL or an empty array
+/// applies it to every kind. Kind names are `library`, `natives`, `asset`,
+/// `client_jar`, `server_jar`, `runtime`, `content`, `pack`, `loader` and
+/// `metadata`. Rules apply to game files, libraries, assets, Java runtimes
+/// and metadata such as the version manifest, in the order they were
+/// added, together with rewriters from `coblet_builder_add_url_rewriter`.
+/// Hashes are still checked, so a mirror cannot change content that is
+/// listed with a hash. Account and skin requests are not rewritten. A
+/// prefix that is not an HTTP or HTTPS address, or malformed `kinds`,
+/// fails with `COBLET_STATUS_INVALID_ARGUMENT`.
+///
+/// # Safety
+///
+/// `builder` must be a live builder handle; strings must be NULL or
+/// NUL-terminated (`kinds` may be NULL); `out_err` must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_builder_add_mirror(
+    builder: *mut CobletBuilder,
+    from: *const c_char,
+    to: *const c_char,
+    kinds: *const c_char,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let builder = builder_mut(builder)?;
+            let kinds = if kinds.is_null() {
+                None
+            } else {
+                Some(text(kinds, "kinds")?)
+            };
+            let mut rule =
+                coblet::runtime::PrefixRewriter::new(text(from, "from")?, text(to, "to")?)
+                    .map_err(|error| Failure::argument("mirror", &error.to_string()))?;
+            if let Some(kinds) = parse_kinds(kinds)? {
+                rule = rule.for_kinds(kinds);
+            }
+            builder.rewriters.push(Arc::new(rule));
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+/// Adds a rewriter written in C, run in order with the mirror rules.
+///
+/// The library owns the table's `user_data` from this call on, even when
+/// it fails. A table without a `rewrite` callback fails with
+/// `COBLET_STATUS_INVALID_ARGUMENT`.
+///
+/// # Safety
+///
+/// `builder` must be a live builder handle; the table's callbacks must stay
+/// valid until its `free` runs; `out_err` must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_builder_add_url_rewriter(
+    builder: *mut CobletBuilder,
+    rewriter: CobletUrlRewriter,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // The adapter owns the user data from here on.
+    let adapter = ForeignRewriter::new(&rewriter);
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, move || {
+            let builder = builder_mut(builder)?;
+            builder.rewriters.push(Arc::new(adapter?));
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+/// Adds a game version source that reads a manifest in the format of
+/// Mojang's `version_manifest_v2.json` from `url`, such as a list of
+/// experimental versions. It comes after the official manifest; when both
+/// list an ID, the official entry wins. A malformed or already used `id`,
+/// or an address that is not HTTP or HTTPS, fails with
+/// `COBLET_STATUS_INVALID_ARGUMENT`.
+///
+/// # Safety
+///
+/// `builder` must be a live builder handle; strings must be NULL or
+/// NUL-terminated; `out_err` must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_builder_add_version_manifest(
+    builder: *mut CobletBuilder,
+    id: *const c_char,
+    url: *const c_char,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let builder = builder_mut(builder)?;
+            let id = ExtensionId::new(text(id, "source id")?)
+                .map_err(|error| Failure::argument("source id", &error.to_string()))?;
+            let url = coblet::runtime::HttpUrl::new(text(url, "url")?)
+                .map_err(|error| Failure::argument("url", &error.to_string()))?;
+            let taken = id.as_str() == "coblet:mojang"
+                || builder
+                    .version_sources
+                    .iter()
+                    .any(|source| source.id() == &id);
+            if taken {
+                return Err(Failure::argument(
+                    "source id",
+                    &format!("`{id}` is already added"),
+                ));
+            }
+            builder
+                .version_sources
+                .push(coblet::mojang::MojangVersions::other(id, url));
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
 /// Enables Microsoft login with the launcher's Azure application Client
 /// ID, which Minecraft services must have approved. Without one,
 /// `coblet_login_begin` fails with `COBLET_ERROR_KIND_UNSUPPORTED`.
@@ -455,6 +584,8 @@ pub unsafe extern "C" fn coblet_builder_build(
                 platform,
                 msa_client_id,
                 secrets,
+                rewriters,
+                version_sources,
             } = *builder;
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -478,6 +609,12 @@ pub unsafe extern "C" fn coblet_builder_build(
             }
             if let Some(client_id) = msa_client_id {
                 options = options.msa_client_id(client_id);
+            }
+            for rewriter in rewriters {
+                options = options.url_rewriter(rewriter);
+            }
+            for source in version_sources {
+                options = options.version_source(Arc::new(source));
             }
             match secrets {
                 Secrets::Memory => {}
