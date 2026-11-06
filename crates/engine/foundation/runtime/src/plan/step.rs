@@ -166,6 +166,8 @@ pub enum ArtifactKind {
     Pack,
     /// Loader metadata or an installer.
     Loader,
+    /// A version manifest, version file or runtime index.
+    Metadata,
     /// Anything else, named by the extension that created it.
     Other(String),
 }

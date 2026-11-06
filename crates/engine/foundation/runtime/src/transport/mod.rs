@@ -6,6 +6,7 @@ mod request;
 #[cfg(feature = "reqwest")]
 mod reqwest_client;
 mod response;
+mod rewrite;
 mod user_agent;
 
 pub use client::Transport;
@@ -14,4 +15,5 @@ pub use request::{HttpUrl, HttpUrlError, Method, Request};
 #[cfg(feature = "reqwest")]
 pub use reqwest_client::ReqwestTransport;
 pub use response::{Body, MemoryBody, Response};
+pub use rewrite::{PrefixRewriter, UrlRewriter, UrlRewriters};
 pub use user_agent::{UserAgent, UserAgentError};
