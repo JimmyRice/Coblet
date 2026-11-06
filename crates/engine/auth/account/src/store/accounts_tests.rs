@@ -12,8 +12,13 @@ use coblet_types::{ExtensionId, PlayerName};
 use super::AccountStore;
 use crate::{
     Account, AccountId, AccountSecrets, AccountState, AccountUpdate, AuthCtx, AuthError, AuthFlow,
-    AuthMethod, LaunchSession, LoginOptions, PlayerProfile, RefreshMode, Refreshed,
+    AuthMethod, GameLicense, LaunchSession, LicenseCheck, LoginOptions, PlayerProfile, RefreshMode,
+    Refreshed,
 };
+
+fn checked(license: GameLicense) -> LicenseCheck {
+    LicenseCheck::new(license, SystemTime::UNIX_EPOCH)
+}
 
 struct NoNetwork;
 
@@ -83,6 +88,7 @@ impl AuthMethod for Scripted {
         Box::pin(async {
             let mut update = AccountUpdate::new(AccountState::Ready).with_profile(profile());
             update.secrets.insert("refresh_token", Secret::new("r0"));
+            update.license = Some(checked(GameLicense::Purchased));
             update.session_expires_at = Some(SystemTime::now() - Duration::from_secs(1));
             Ok(AuthFlow::new(
                 AuthPrompt::Nothing,
@@ -114,10 +120,11 @@ impl AuthMethod for Scripted {
                 .await?;
             match self.outcome {
                 Outcome::Revoked => Err(AuthError::InvalidGrant),
-                Outcome::NoLicense => Ok(Refreshed::new(
-                    AccountUpdate::new(AccountState::NoLicense),
-                    None,
-                )),
+                Outcome::NoLicense => {
+                    let mut update = AccountUpdate::new(AccountState::NoLicense);
+                    update.license = Some(checked(GameLicense::Missing));
+                    Ok(Refreshed::new(update, None))
+                }
                 Outcome::Ready => {
                     let mut update =
                         AccountUpdate::new(AccountState::Ready).with_profile(profile());
@@ -334,6 +341,55 @@ async fn saves_what_a_failed_refresh_says_about_the_account() {
     let refreshed = store.refresh(&account.id).await.unwrap();
     assert_eq!(refreshed.state, AccountState::NoLicense);
     assert!(refreshed.profile.is_none());
+}
+
+#[tokio::test]
+async fn verifies_licenses_and_keeps_the_last_check() {
+    let fixture = Fixture::new();
+    let store = fixture.store_with(Scripted::new(Outcome::Revoked));
+    let offline = store
+        .add_offline(PlayerName::new("Steve").unwrap())
+        .await
+        .unwrap();
+    assert!(!store.any_owns_game().await.unwrap());
+    let account = log_in(&store).await;
+    assert!(account.owns_game());
+    assert!(store.any_owns_game().await.unwrap());
+    // A failed check keeps the last license; only the state changes.
+    assert!(matches!(
+        store.verify_license(&account.id).await,
+        Err(AuthError::InvalidGrant)
+    ));
+    let saved = store.get(&account.id).await.unwrap();
+    assert_eq!(saved.state, AccountState::NeedsReauth);
+    assert_eq!(saved.license, Some(checked(GameLicense::Purchased)));
+    let unchanged = store.verify_license(&offline.id).await.unwrap();
+    assert_eq!(unchanged.license, None);
+    assert!(!unchanged.owns_game());
+
+    let fixture = Fixture::new();
+    let store = fixture.store_with(Scripted::new(Outcome::NoLicense));
+    let account = log_in(&store).await;
+    let checked_again = store.verify_license(&account.id).await.unwrap();
+    assert_eq!(checked_again.license, Some(checked(GameLicense::Missing)));
+    assert!(!store.any_owns_game().await.unwrap());
+}
+
+#[tokio::test]
+async fn rechecks_are_not_merged_into_other_refreshes() {
+    let fixture = Fixture::new();
+    let method = Scripted::new(Outcome::Ready);
+    let store = Arc::new(fixture.store_with(method.clone()));
+    let account = log_in(&store).await;
+    let forced = tokio::spawn({
+        let store = Arc::clone(&store);
+        let id = account.id.clone();
+        async move { store.refresh(&id).await }
+    });
+    tokio::task::yield_now().await;
+    store.verify_license(&account.id).await.unwrap();
+    forced.await.unwrap().unwrap();
+    assert_eq!(method.renewals.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]

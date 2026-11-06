@@ -135,6 +135,100 @@ impl fmt::Display for AccountState {
     }
 }
 
+/// What an account's entitlements say about Minecraft: Java Edition.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GameLicense {
+    /// The account bought the game (entitlement `product_minecraft`).
+    Purchased,
+    /// The account may play without a purchase on record, for example
+    /// through a subscription (entitlement `game_minecraft` only).
+    Entitled,
+    /// The account may not play the full game.
+    Missing,
+}
+
+impl GameLicense {
+    /// Reads the entitlement names Minecraft services return.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use coblet_auth::GameLicense;
+    ///
+    /// let names = ["game_minecraft", "product_minecraft"];
+    /// assert_eq!(GameLicense::from_entitlements(names), GameLicense::Purchased);
+    /// assert_eq!(GameLicense::from_entitlements(["game_minecraft"]), GameLicense::Entitled);
+    /// assert_eq!(GameLicense::from_entitlements([]), GameLicense::Missing);
+    /// ```
+    #[must_use]
+    pub fn from_entitlements<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut license = Self::Missing;
+        for name in names {
+            match name {
+                "product_minecraft" => return Self::Purchased,
+                "game_minecraft" => license = Self::Entitled,
+                _ => {}
+            }
+        }
+        license
+    }
+
+    /// Returns whether the account may play the full game.
+    #[must_use]
+    pub const fn may_play(self) -> bool {
+        matches!(self, Self::Purchased | Self::Entitled)
+    }
+
+    /// Returns the stable name used in files, such as `purchased`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Purchased => "purchased",
+            Self::Entitled => "entitled",
+            Self::Missing => "missing",
+        }
+    }
+
+    /// Parses a name returned by [`as_str`](Self::as_str).
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "purchased" => Self::Purchased,
+            "entitled" => Self::Entitled,
+            "missing" => Self::Missing,
+            _ => return None,
+        })
+    }
+}
+
+impl fmt::Display for GameLicense {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Result of reading an account's entitlements, with the time it was read.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LicenseCheck {
+    /// What the entitlements said.
+    pub license: GameLicense,
+    /// When they were read.
+    pub checked_at: SystemTime,
+}
+
+impl LicenseCheck {
+    /// Creates a check result.
+    #[must_use]
+    pub const fn new(license: GameLicense, checked_at: SystemTime) -> Self {
+        Self {
+            license,
+            checked_at,
+        }
+    }
+}
+
 /// Arm model a skin is drawn for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SkinModel {
@@ -299,6 +393,9 @@ pub struct Account {
     pub profile: Option<PlayerProfile>,
     /// State as of the last login or refresh.
     pub state: AccountState,
+    /// Last license check. `None` for offline accounts and for accounts
+    /// never checked, such as ones imported from another launcher.
+    pub license: Option<LicenseCheck>,
     /// When the current game session expires, if the method tracks it.
     pub session_expires_at: Option<SystemTime>,
     /// Non-sensitive values the auth method keeps between refreshes.
@@ -316,6 +413,7 @@ impl Account {
             method,
             profile: None,
             state: AccountState::Ready,
+            license: None,
             session_expires_at: None,
             data: BTreeMap::new(),
             secret_names: BTreeSet::new(),
@@ -326,6 +424,22 @@ impl Account {
     #[must_use]
     pub fn player_name(&self) -> Option<&PlayerName> {
         self.profile.as_ref().map(|profile| &profile.name)
+    }
+
+    /// Returns whether the last license check found that the account
+    /// bought the game, like Prism Launcher's "owns Minecraft". Accounts
+    /// that play through a subscription return `false`; see
+    /// [`GameLicense::may_play`].
+    ///
+    /// [`AccountStore::verify_license`](crate::AccountStore::verify_license)
+    /// checks again, and
+    /// [`AccountStore::any_owns_game`](crate::AccountStore::any_owns_game)
+    /// asks this of every account, for example to allow offline accounts
+    /// only next to a bought one.
+    #[must_use]
+    pub fn owns_game(&self) -> bool {
+        self.license
+            .is_some_and(|check| check.license == GameLicense::Purchased)
     }
 
     /// Returns the state at `now`: a ready account whose session expired is

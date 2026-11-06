@@ -13,7 +13,7 @@ pub(crate) const TOKEN: &str = "https://login.microsoftonline.com/consumers/oaut
 pub(crate) const USER_AUTH: &str = "https://user.auth.xboxlive.com/user/authenticate";
 pub(crate) const XSTS: &str = "https://xsts.auth.xboxlive.com/xsts/authorize";
 pub(crate) const LOGIN: &str = "https://api.minecraftservices.com/authentication/login_with_xbox";
-pub(crate) const ENTITLEMENTS: &str = "https://api.minecraftservices.com/entitlements/mcstore";
+pub(crate) const ENTITLEMENTS: &str = "https://api.minecraftservices.com/entitlements/license";
 pub(crate) const PROFILE: &str = "https://api.minecraftservices.com/minecraft/profile";
 
 pub(crate) const PROFILE_JSON: &str = r#"{

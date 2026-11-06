@@ -412,6 +412,38 @@ impl AccountStore {
         Ok(self.run_refresh(id, RefreshMode::Force).await?.0)
     }
 
+    /// Reads the account's license and profile from the services again,
+    /// saves them and returns the updated account.
+    ///
+    /// The current session is reused while it is valid, so this costs two
+    /// requests; an expiring session is renewed first. A Microsoft account
+    /// that bought the game since its last check becomes ready, and one
+    /// that lost it becomes [`AccountState::NoLicense`]. Accounts of methods
+    /// without licenses, such as offline ones, are returned with
+    /// [`Account::license`] still `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the refresh, for example
+    /// [`AuthError::InvalidGrant`] when the user has to sign in again.
+    pub async fn verify_license(&self, id: &AccountId) -> Result<Account, AuthError> {
+        Ok(self.run_refresh(id, RefreshMode::Recheck).await?.0)
+    }
+
+    /// Returns whether any saved account bought the game as of its last
+    /// license check, without network access.
+    ///
+    /// Prism Launcher uses the same test to allow offline accounts only on
+    /// installs that also hold a bought account; coblet leaves that policy
+    /// to the launcher.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `accounts.json` cannot be read.
+    pub async fn any_owns_game(&self) -> Result<bool, AuthError> {
+        Ok(self.list().await?.iter().any(Account::owns_game))
+    }
+
     /// Imports the accounts of a Prism Launcher `accounts.json` without
     /// their tokens.
     ///
@@ -471,11 +503,14 @@ impl AccountStore {
         let slot = self.slot(id);
         let seen = slot.generation.load(Ordering::Acquire);
         let _guard = slot.lock.lock().await;
-        // A refresh finished while this call waited: reuse it instead of forcing another.
-        let mode = if slot.generation.load(Ordering::Acquire) == seen {
-            mode
-        } else {
+        // A refresh finished while this call waited: reuse it instead of
+        // forcing another. A recheck still runs; the other refresh may have
+        // reused the session without reading the license.
+        let mode = if mode == RefreshMode::Force && slot.generation.load(Ordering::Acquire) != seen
+        {
             RefreshMode::IfNeeded
+        } else {
+            mode
         };
         let account = self.raw(id).await?;
         let method = Arc::clone(self.require(&account.method)?);
@@ -614,6 +649,9 @@ fn merge(account: &mut Account, update: AccountUpdate, secrets: &AccountSecrets)
         .extend(update.secrets.iter().map(|(name, _)| name.to_owned()));
     account.profile = update.profile;
     account.state = update.state;
+    if update.license.is_some() {
+        account.license = update.license;
+    }
     account.session_expires_at = update.session_expires_at;
     account.data = update.data;
 }

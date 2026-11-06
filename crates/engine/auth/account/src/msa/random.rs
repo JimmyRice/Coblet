@@ -12,6 +12,30 @@ pub(crate) fn token(bytes: usize) -> Result<String, AuthError> {
     Ok(URL_SAFE_NO_PAD.encode(&buffer))
 }
 
+/// Returns a random version 4 UUID in hyphenated form.
+pub(crate) fn uuid() -> Result<String, AuthError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| AuthError::Failed(format!("no secure random source: {error}")))?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex = bytes
+        .iter()
+        .fold(String::with_capacity(32), |mut hex, byte| {
+            hex.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
+            hex.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
+            hex
+        });
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
+}
+
 /// PKCE verifier and its S256 challenge.
 pub(crate) struct Pkce {
     pub(crate) verifier: String,
@@ -36,7 +60,7 @@ pub(crate) fn challenge(verifier: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Pkce, challenge, token};
+    use super::{Pkce, challenge, token, uuid};
 
     #[test]
     fn matches_the_rfc_7636_example() {
@@ -53,5 +77,16 @@ mod tests {
         assert_eq!(a.verifier.len(), 43);
         assert_ne!(a.verifier, b.verifier);
         assert_eq!(token(16).unwrap().len(), 22);
+    }
+
+    #[test]
+    fn generates_version_4_uuids() {
+        let id = uuid().unwrap();
+        assert_eq!(id.len(), 36);
+        let parts: Vec<_> = id.split('-').map(str::len).collect();
+        assert_eq!(parts, [8, 4, 4, 4, 12]);
+        assert_eq!(&id[14..15], "4");
+        assert!(matches!(&id[19..20], "8" | "9" | "a" | "b"), "{id}");
+        assert_ne!(id, uuid().unwrap());
     }
 }

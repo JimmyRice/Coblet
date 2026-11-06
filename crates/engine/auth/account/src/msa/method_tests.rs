@@ -15,7 +15,7 @@ use super::super::{MsaClientId, MsaConfig};
 use super::{MICROSOFT_METHOD, MicrosoftMethod};
 use crate::{
     Account, AccountId, AccountSecrets, AccountState, AccountUpdate, AuthCtx, AuthError,
-    AuthMethod, Interaction, LoginOptions, Redirect, RefreshMode,
+    AuthMethod, GameLicense, Interaction, LicenseCheck, LoginOptions, Redirect, RefreshMode,
 };
 
 const NOW: Duration = Duration::from_hours(500_000);
@@ -244,6 +244,34 @@ async fn recognizes_an_unapproved_client_id() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn login_records_how_the_account_holds_the_game() {
+    let mock = ready_mock();
+    let update = device_login(&mock).await.unwrap();
+    assert_eq!(
+        update.license,
+        Some(LicenseCheck::new(GameLicense::Purchased, now()))
+    );
+    let url = &mock.seen_at(ENTITLEMENTS)[0].url;
+    let request_id = url
+        .strip_prefix(&format!("{ENTITLEMENTS}?requestId="))
+        .unwrap();
+    assert_eq!(request_id.len(), 36, "{url}");
+
+    let mock = MockServices::new();
+    device_code(&mock, 1, 900);
+    mock.on(Method::Post, TOKEN, 200, MS_TOKENS).on(
+        Method::Get,
+        ENTITLEMENTS,
+        200,
+        r#"{"items": [{"name": "game_minecraft"}]}"#,
+    );
+    mock.xbox_and_minecraft();
+    let update = device_login(&mock).await.unwrap();
+    assert_eq!(update.state, AccountState::Ready);
+    assert_eq!(update.license.unwrap().license, GameLicense::Entitled);
+}
+
+#[tokio::test(start_paused = true)]
 async fn marks_accounts_without_license_or_profile() {
     let mock = MockServices::new();
     device_code(&mock, 1, 900);
@@ -253,6 +281,10 @@ async fn marks_accounts_without_license_or_profile() {
     mock.xbox_and_minecraft();
     let update = device_login(&mock).await.unwrap();
     assert_eq!(update.state, AccountState::NoLicense);
+    assert_eq!(
+        update.license,
+        Some(LicenseCheck::new(GameLicense::Missing, now()))
+    );
     assert!(update.profile.is_none());
     assert!(update.secrets.get("refresh_token").is_some());
 
@@ -518,6 +550,93 @@ async fn refresh_rechecks_accounts_that_could_not_play() {
         .unwrap();
     assert_eq!(refreshed.update.state, AccountState::Ready);
     assert!(refreshed.session.is_some());
+}
+
+#[tokio::test]
+async fn recheck_reads_the_license_with_the_current_session() {
+    let mock = MockServices::new();
+    mock.xbox_and_minecraft();
+    let account = account(AccountState::NoLicense, Duration::from_secs(3600));
+    let secrets = secrets_for(&account, Some("old-refresh")).await;
+    let refreshed = method()
+        .refresh(&ctx(&mock), &account, &secrets, RefreshMode::Recheck)
+        .await
+        .unwrap();
+    let urls: Vec<_> = mock.seen().into_iter().map(|seen| seen.url).collect();
+    assert_eq!(urls.len(), 2, "{urls:?}");
+    assert!(
+        urls[0].starts_with(ENTITLEMENTS) && urls[1] == PROFILE,
+        "{urls:?}"
+    );
+    let update = &refreshed.update;
+    assert_eq!(update.state, AccountState::Ready);
+    assert_eq!(
+        update.license,
+        Some(LicenseCheck::new(GameLicense::Purchased, now()))
+    );
+    assert_eq!(update.session_expires_at, account.session_expires_at);
+    assert_eq!(update.data, account.data);
+    let session = refreshed.session.unwrap();
+    assert_eq!(session.access_token().unwrap().expose(), "cached-mc");
+}
+
+#[tokio::test]
+async fn recheck_notices_a_lost_license() {
+    let mock = MockServices::new();
+    mock.on(Method::Get, ENTITLEMENTS, 200, r#"{"items": []}"#)
+        .on(Method::Get, PROFILE, 200, super::super::mock::PROFILE_JSON);
+    let account = account(AccountState::Ready, Duration::from_secs(3600));
+    let secrets = secrets_for(&account, Some("old-refresh")).await;
+    let refreshed = method()
+        .refresh(&ctx(&mock), &account, &secrets, RefreshMode::Recheck)
+        .await
+        .unwrap();
+    assert_eq!(refreshed.update.state, AccountState::NoLicense);
+    assert_eq!(
+        refreshed.update.license.unwrap().license,
+        GameLicense::Missing
+    );
+    assert!(refreshed.session.is_none());
+}
+
+#[tokio::test]
+async fn recheck_renews_a_rejected_or_expiring_session() {
+    let mock = MockServices::new();
+    mock.on(Method::Post, TOKEN, 200, MS_TOKENS)
+        .on(Method::Get, ENTITLEMENTS, 401, "");
+    mock.xbox_and_minecraft();
+    let rejected = account(AccountState::Ready, Duration::from_secs(3600));
+    let secrets = secrets_for(&rejected, Some("old-refresh")).await;
+    let refreshed = method()
+        .refresh(&ctx(&mock), &rejected, &secrets, RefreshMode::Recheck)
+        .await
+        .unwrap();
+    assert_eq!(mock.seen_at(TOKEN).len(), 1);
+    assert_eq!(mock.seen_at(ENTITLEMENTS).len(), 2);
+    assert_eq!(
+        refreshed.update.license.unwrap().license,
+        GameLicense::Purchased
+    );
+    let session = refreshed.session.unwrap();
+    assert_eq!(session.access_token().unwrap().expose(), minecraft_token());
+
+    let mock = MockServices::new();
+    mock.on(Method::Post, TOKEN, 200, MS_TOKENS);
+    mock.xbox_and_minecraft();
+    for state in [AccountState::NeedsRefresh, AccountState::Ready] {
+        let expires_in = if state == AccountState::Ready {
+            Duration::ZERO
+        } else {
+            Duration::from_secs(3600)
+        };
+        let stale = account(state, expires_in);
+        let secrets = secrets_for(&stale, Some("old-refresh")).await;
+        method()
+            .refresh(&ctx(&mock), &stale, &secrets, RefreshMode::Recheck)
+            .await
+            .unwrap();
+    }
+    assert_eq!(mock.seen_at(TOKEN).len(), 2);
 }
 
 #[cfg(feature = "loopback")]
