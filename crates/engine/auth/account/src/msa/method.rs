@@ -330,5 +330,5 @@ async fn wait_for_redirect(
 }
 
 #[cfg(test)]
-#[path = "method_tests.rs"]
+#[path = "../../tests/msa/method.rs"]
 mod tests;

@@ -11,6 +11,7 @@ mod loopback;
 mod method;
 mod minecraft;
 #[cfg(test)]
+#[path = "../../tests/msa/mock.rs"]
 mod mock;
 mod oauth;
 mod random;
