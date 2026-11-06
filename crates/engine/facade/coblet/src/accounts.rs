@@ -150,5 +150,5 @@ pub(crate) fn auth_error(error: AuthError) -> Error {
 }
 
 #[cfg(test)]
-#[path = "accounts_tests.rs"]
+#[path = "../tests/accounts.rs"]
 mod tests;
