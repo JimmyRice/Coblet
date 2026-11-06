@@ -11,7 +11,9 @@
 //! through a `CobletProfileEdit` handle. Accounts, Microsoft logins
 //! (`CobletLogin`), skins and capes are managed with `coblet_account_*`
 //! and `coblet_login_*`; a secret store written in C is a callback table
-//! (`CobletSecretStore`). The header `include/coblet.h` is generated with
+//! (`CobletSecretStore`). Events (launch steps, file transfers, game
+//! starts, logs and exits) are read with `coblet_events_next` as fixed
+//! layout `CobletEvent` structs. The header `include/coblet.h` is generated with
 //! `cargo xtask gen-header`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -19,6 +21,7 @@ mod accounts;
 mod builder;
 mod context;
 mod customize;
+mod events;
 mod game;
 mod guard;
 mod login;
@@ -51,10 +54,15 @@ pub use customize::{
     coblet_edit_remove_library, coblet_edit_set_env, coblet_edit_set_java_major,
     coblet_edit_set_main_class, coblet_step_fail,
 };
+pub use events::{
+    CobletEvent, CobletEventKind, CobletEvents, CobletTransferKind, coblet_event_clear,
+    coblet_events_free, coblet_events_next, coblet_events_subscribe,
+};
 pub use game::{
-    CobletGame, CobletGameExit, CobletLaunchMode, coblet_game_free, coblet_game_kill,
-    coblet_game_next_log, coblet_game_report, coblet_game_wait, coblet_launch,
-    coblet_launch_account, coblet_launch_customized,
+    COBLET_OPERATION_ID_LEN, CobletGame, CobletGameExit, CobletLaunchMode, coblet_game_free,
+    coblet_game_kill, coblet_game_next_log, coblet_game_operation_id, coblet_game_report,
+    coblet_game_wait, coblet_generate_operation_id, coblet_launch, coblet_launch_account,
+    coblet_launch_customized,
 };
 pub use login::{
     CobletLogin, CobletLoginInteraction, coblet_login_begin, coblet_login_cancel,

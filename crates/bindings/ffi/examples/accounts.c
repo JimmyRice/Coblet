@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
     coblet_string_free(account);
 
     CobletGame *game = NULL;
-    if (coblet_launch_account(coblet, argv[2], id, NULL, NULL, 0, &game, &err) !=
+    if (coblet_launch_account(coblet, argv[2], id, NULL, NULL, 0, NULL, &game, &err) !=
         COBLET_STATUS_OK) {
         return fail("coblet_launch_account", err);
     }

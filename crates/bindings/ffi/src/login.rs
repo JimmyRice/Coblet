@@ -154,31 +154,36 @@ pub unsafe extern "C" fn coblet_login_prompt_json(
     unsafe {
         guard(out_err, || {
             let login = login_ref(login)?;
-            let json = match &login.prompt {
-                AuthPrompt::DeviceCode {
-                    user_code,
-                    verification_uri,
-                    expires_at,
-                    message,
-                } => serde_json::json!({
-                    "schema": 1,
-                    "type": "device_code",
-                    "user_code": user_code,
-                    "verification_uri": verification_uri.as_str(),
-                    "expires_at": unix_seconds(*expires_at),
-                    "message": message,
-                }),
-                AuthPrompt::OpenUrl { url, redirect_uri } => serde_json::json!({
-                    "schema": 1,
-                    "type": "open_url",
-                    "url": url.as_str(),
-                    "redirect_uri": redirect_uri,
-                }),
-                _ => serde_json::json!({ "schema": 1, "type": "nothing" }),
-            };
+            let json = prompt_json(&login.prompt);
             put(out_json, CobletString::new(&json.to_string()), "out_json")?;
             Ok(CobletStatus::Ok)
         })
+    }
+}
+
+/// Describes a login prompt as `{"schema":1,"type",...}`.
+pub(crate) fn prompt_json(prompt: &AuthPrompt) -> serde_json::Value {
+    match prompt {
+        AuthPrompt::DeviceCode {
+            user_code,
+            verification_uri,
+            expires_at,
+            message,
+        } => serde_json::json!({
+            "schema": 1,
+            "type": "device_code",
+            "user_code": user_code,
+            "verification_uri": verification_uri.as_str(),
+            "expires_at": unix_seconds(*expires_at),
+            "message": message,
+        }),
+        AuthPrompt::OpenUrl { url, redirect_uri } => serde_json::json!({
+            "schema": 1,
+            "type": "open_url",
+            "url": url.as_str(),
+            "redirect_uri": redirect_uri,
+        }),
+        _ => serde_json::json!({ "schema": 1, "type": "nothing" }),
     }
 }
 

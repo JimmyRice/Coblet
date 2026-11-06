@@ -25,11 +25,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Length of an operation ID buffer: 36 characters and a NUL.
+#define COBLET_OPERATION_ID_LEN 37
+
 // Size in bytes of a key for `coblet_builder_set_encrypted_secret_file`.
 #define COBLET_SECRET_KEY_LEN 32
 
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 8
+#define COBLET_ABI_VERSION 9
 
 // Result of a call.
 typedef enum CobletStatus {
@@ -43,6 +46,8 @@ typedef enum CobletStatus {
   COBLET_STATUS_PANIC = 3,
   // A stream has no more items.
   COBLET_STATUS_END = 4,
+  // Nothing arrived before the timeout.
+  COBLET_STATUS_TIMEOUT = 5,
 } CobletStatus;
 
 // Category of a [`CobletError`].
@@ -88,6 +93,56 @@ typedef enum CobletArgKind {
   // Game arguments.
   COBLET_ARG_KIND_GAME = 1,
 } CobletArgKind;
+
+// Kind of a [`CobletEvent`].
+typedef enum CobletEventKind {
+  // An Operation or a launch started; `json` is `{"schema":1,
+  // "operation_kind"}` with `operation_kind` such as `launch`.
+  COBLET_EVENT_KIND_OPERATION_STARTED = 0,
+  // An Operation or a launch ended (a launch ends once the game runs);
+  // `json` is `{"schema":1,"outcome","message"}` with `outcome`
+  // `succeeded`, `failed` or `cancelled`.
+  COBLET_EVENT_KIND_OPERATION_FINISHED = 1,
+  // A launch began a step; `json` is `{"schema":1,"step","index","count"}`.
+  COBLET_EVENT_KIND_LAUNCH_STEP = 2,
+  // A batch of files made progress; read `transfer`, `files_*` and
+  // `bytes_*`. No `json`.
+  COBLET_EVENT_KIND_TRANSFER = 3,
+  // A step of an Operation made progress; read `step`, `bytes_done` and
+  // `bytes_total`. No `json`.
+  COBLET_EVENT_KIND_STEP_PROGRESS = 4,
+  // A step of an Operation ended; `step` is set and `json` is
+  // `{"schema":1,"outcome","message"}` with `outcome` `succeeded`,
+  // `skipped`, `failed` or `cancelled`.
+  COBLET_EVENT_KIND_STEP_FINISHED = 5,
+  // The game started; `json` is `{"schema":1,"pid"}`.
+  COBLET_EVENT_KIND_GAME_STARTED = 6,
+  // A game log line; `json` is the document of `coblet_game_next_log`.
+  COBLET_EVENT_KIND_GAME_LOG = 7,
+  // The game ended; `json` is `{"schema":1,"code","signal","killed",
+  // "suspected_crash"}`.
+  COBLET_EVENT_KIND_GAME_EXITED = 8,
+  // Something went wrong without stopping the work; `json` is
+  // `{"schema":1,"code","message"}`.
+  COBLET_EVENT_KIND_WARNING = 9,
+  // A login waits for the user; `json` is the document of
+  // `coblet_login_prompt_json`.
+  COBLET_EVENT_KIND_LOGIN_PROMPT = 10,
+  // The reader fell behind; `missed` events were dropped. No `json`.
+  COBLET_EVENT_KIND_MISSED = 11,
+} CobletEventKind;
+
+// Group of files a transfer fetches.
+typedef enum CobletTransferKind {
+  // Anything else, or not a transfer.
+  COBLET_TRANSFER_KIND_OTHER = 0,
+  // Libraries, the client jar, the asset index and the log configuration.
+  COBLET_TRANSFER_KIND_GAME_FILES = 1,
+  // Asset objects: sounds, languages and textures.
+  COBLET_TRANSFER_KIND_ASSETS = 2,
+  // Files of a Java runtime.
+  COBLET_TRANSFER_KIND_JAVA_RUNTIME = 3,
+} CobletTransferKind;
 
 // How the game identifies the player.
 typedef enum CobletLaunchMode {
@@ -152,6 +207,9 @@ typedef struct Coblet Coblet;
 // Created with `coblet_builder_new`; `coblet_builder_build` turns it into
 // a `Coblet` and frees it, and `coblet_builder_free` drops it unused.
 typedef struct CobletBuilder CobletBuilder;
+
+// Event subscription handle.
+typedef struct CobletEvents CobletEvents;
 
 // Running game handle.
 typedef struct CobletGame CobletGame;
@@ -314,6 +372,36 @@ typedef struct CobletStep {
   // Releases `user_data`; may be NULL.
   void (*free)(void *user_data);
 } CobletStep;
+
+// One event, in a fixed layout so frequent progress events need no
+// allocation.
+//
+// Fields a kind does not use are zero. Free `json` with
+// `coblet_event_clear` before the struct is reused or dropped.
+typedef struct CobletEvent {
+  // What happened.
+  enum CobletEventKind kind;
+  // Operation or launch ID with its NUL, or an empty string.
+  char op[COBLET_OPERATION_ID_LEN];
+  // Files of a `COBLET_EVENT_KIND_TRANSFER` event.
+  enum CobletTransferKind transfer;
+  // Files finished.
+  uint64_t files_done;
+  // Files in the batch.
+  uint64_t files_total;
+  // Bytes received or found present; units done for step progress.
+  uint64_t bytes_done;
+  // Bytes in the batch, when `has_bytes_total`.
+  uint64_t bytes_total;
+  // Whether `bytes_total` is known.
+  bool has_bytes_total;
+  // Step index of `STEP_PROGRESS` and `STEP_FINISHED` events.
+  uint32_t step;
+  // Dropped events of a `MISSED` event.
+  uint64_t missed;
+  // Details as JSON, or an empty string for the kinds without any.
+  struct CobletString json;
+} CobletEvent;
 
 // How a game ended.
 typedef struct CobletGameExit {
@@ -945,6 +1033,56 @@ enum CobletStatus coblet_edit_fail(struct CobletProfileEdit *edit, const char *m
 // `message` must be NULL or NUL-terminated.
 enum CobletStatus coblet_step_fail(struct CobletStepFailure *failure, const char *message);
 
+// Starts receiving events published from now on: launch steps and file
+// transfers, game starts, log lines and exits, warnings and login
+// prompts. On success `*out_events` receives a handle to free with
+// `coblet_events_free`.
+//
+// Events are built only while a subscription exists, and progress is
+// throttled to 30 events per second per batch. A reader that falls behind
+// gets a `COBLET_EVENT_KIND_MISSED` event instead of slowing coblet down.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `out_events` must be writable;
+// `out_err` must be NULL or writable.
+enum CobletStatus coblet_events_subscribe(const struct Coblet *coblet,
+                                          struct CobletEvents **out_events,
+                                          struct CobletError **out_err);
+
+// Waits for the next event and writes it to `*out_event`.
+//
+// `timeout_ms` is how long to wait: 0 only checks, a negative value waits
+// without limit. Returns `COBLET_STATUS_TIMEOUT` when nothing arrived in
+// time and `COBLET_STATUS_END` once the `Coblet` is gone. The call blocks,
+// so run it on a thread of your own, never from a coblet callback; one
+// thread at a time may read a subscription.
+//
+// # Safety
+//
+// `events` must be a live handle used by one thread at a time;
+// `out_event` must be writable and hold no `json` that still needs
+// freeing; `out_err` must be NULL or writable.
+enum CobletStatus coblet_events_next(struct CobletEvents *events,
+                                     int64_t timeout_ms,
+                                     struct CobletEvent *out_event,
+                                     struct CobletError **out_err);
+
+// Frees an event's `json` and zeroes the event, so it can be reused.
+//
+// # Safety
+//
+// `event` must be NULL or point to an event written by
+// `coblet_events_next` or zeroed by this function.
+void coblet_event_clear(struct CobletEvent *event);
+
+// Ends a subscription.
+//
+// # Safety
+//
+// `events` must be NULL or a live handle not used afterwards.
+void coblet_events_free(struct CobletEvents *events);
+
 // Starts a version offline or in Demo mode.
 //
 // `game_dir` may be NULL for `<data_root>/games/<version>`. On success
@@ -965,10 +1103,14 @@ enum CobletStatus coblet_launch(const struct Coblet *coblet,
 // Starts a version like `coblet_launch` and runs the customizers whose
 // IDs are listed in `customizers`, in order.
 //
+// `operation_id`, from `coblet_generate_operation_id`, is the launch ID
+// its events carry; NULL picks a random one.
+//
 // # Safety
 //
 // As `coblet_launch`; `customizers` must point to `count` NUL-terminated
-// strings, or be NULL when `count` is 0.
+// strings, or be NULL when `count` is 0; `operation_id` must be NULL or
+// NUL-terminated.
 enum CobletStatus coblet_launch_customized(const struct Coblet *coblet,
                                            const char *version_id,
                                            const char *player_name,
@@ -976,13 +1118,15 @@ enum CobletStatus coblet_launch_customized(const struct Coblet *coblet,
                                            const char *game_dir,
                                            const char *const *customizers,
                                            size_t count,
+                                           const char *operation_id,
                                            struct CobletGame **out_game,
                                            struct CobletError **out_err);
 
 // Starts a version with a saved account, renewing its tokens first when
 // needed, and runs the customizers listed in `customizers`, in order.
 //
-// `game_dir` may be NULL for `<data_root>/games/<version>`. Fails with
+// `game_dir` may be NULL for `<data_root>/games/<version>`, and
+// `operation_id` NULL for a random launch ID. Fails with
 // `COBLET_ERROR_KIND_NO_LICENSE` for an account that does not own the
 // game and `COBLET_ERROR_KIND_AUTH` when the user has to sign in again.
 //
@@ -995,6 +1139,7 @@ enum CobletStatus coblet_launch_account(const struct Coblet *coblet,
                                         const char *game_dir,
                                         const char *const *customizers,
                                         size_t count,
+                                        const char *operation_id,
                                         struct CobletGame **out_game,
                                         struct CobletError **out_err);
 
@@ -1013,8 +1158,13 @@ enum CobletStatus coblet_game_report(const struct CobletGame *game,
 
 // Waits for the next log line and returns it as JSON.
 //
-// The document is `{"schema":1,"source","level","thread","logger","message"}`.
+// The document is `{"schema":1,"source","level","thread","logger",
+// "message","time","raw"}` with `time` in Unix milliseconds or null.
 // Returns `COBLET_STATUS_END` once the game ended and every line was read.
+//
+// The call blocks until a line arrives, so call it from a thread of your
+// own, never from a coblet callback. `coblet_events_next` delivers the
+// same lines of every game, with a timeout.
 //
 // # Safety
 //
@@ -1023,6 +1173,28 @@ enum CobletStatus coblet_game_report(const struct CobletGame *game,
 enum CobletStatus coblet_game_next_log(struct CobletGame *game,
                                        struct CobletString *out_line,
                                        struct CobletError **out_err);
+
+// Writes the launch ID that this game's events carry into `out_id`, a
+// buffer of `COBLET_OPERATION_ID_LEN` bytes.
+//
+// # Safety
+//
+// `game` must be a live handle; `out_id` must point to
+// `COBLET_OPERATION_ID_LEN` writable bytes; `out_err` must be NULL or
+// writable.
+enum CobletStatus coblet_game_operation_id(const struct CobletGame *game,
+                                           char *out_id,
+                                           struct CobletError **out_err);
+
+// Writes a new random operation ID into `out_id`, a buffer of
+// `COBLET_OPERATION_ID_LEN` bytes. Pass it as a launch's `operation_id`
+// to match the launch's events before the launch call returns.
+//
+// # Safety
+//
+// `out_id` must point to `COBLET_OPERATION_ID_LEN` writable bytes;
+// `out_err` must be NULL or writable.
+enum CobletStatus coblet_generate_operation_id(char *out_id, struct CobletError **out_err);
 
 // Kills the game; `coblet_game_wait` still reports the exit.
 //
