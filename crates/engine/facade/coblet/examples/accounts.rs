@@ -24,6 +24,9 @@
 //! `DIR/secrets.key`. Keeping the key next to the file only suits a demo; a
 //! real launcher keeps it in a system keychain.
 //!
+//! `launch` stops the game once a log line contains `--until` or after
+//! `--run-for` seconds; without either it waits until the game exits.
+//!
 //! `login` uses the device code flow by default. `--browser` opens a
 //! loopback listener and prints the sign-in URL; `--redirect URI` prints
 //! the URL and reads the redirected URI from standard input.
@@ -233,13 +236,19 @@ async fn launch(coblet: &Coblet, account: &AccountId, args: &[String]) -> Result
     let session = coblet.launch(version_id, game, request).await?;
     println!("== started pid {:?}: {}", session.pid(), session.command());
     let mut logs = session.logs();
-    let deadline = tokio::time::Instant::now() + run_for.unwrap_or(Duration::from_mins(10));
+    let deadline = run_for.map(|run_for| tokio::time::Instant::now() + run_for);
     let mut reached = false;
     loop {
-        let Ok(item) = tokio::time::timeout_at(deadline, logs.next()).await else {
-            reached = run_for.is_some();
-            session.kill();
-            break;
+        let item = match deadline {
+            Some(deadline) => {
+                let Ok(item) = tokio::time::timeout_at(deadline, logs.next()).await else {
+                    reached = true;
+                    session.kill();
+                    break;
+                };
+                item
+            }
+            None => logs.next().await,
         };
         match item {
             Some(LogItem::Line(line)) => {
