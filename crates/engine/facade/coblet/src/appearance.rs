@@ -1,8 +1,9 @@
 use std::future::Future;
 
-use coblet_auth::{AccountId, PlayerProfile, RefreshMode, SkinModel};
+use coblet_auth::{Account, AccountId, PlayerProfile, RefreshMode, SkinModel};
 use coblet_launch_command::Credential;
 use coblet_player::{Player, PlayerError, SkinLibrary, SkinSource};
+use coblet_runtime::HttpUrl;
 
 use crate::accounts::auth_error;
 use crate::{Coblet, Error};
@@ -14,17 +15,46 @@ impl Coblet {
         &self.inner.skins
     }
 
-    /// Returns the account's current skins and capes from Minecraft services.
+    /// Fetches the account's player profile (name, UUID, skins and capes)
+    /// from Minecraft services now, saves it and returns the updated
+    /// account.
+    ///
+    /// The profiles in [`accounts`](Self::accounts) are a snapshot saved at
+    /// login, token renewal and skin or cape changes, so a change made on
+    /// minecraft.net or in another launcher shows up only after this call.
+    /// A launcher can show the snapshot at once and call this in the
+    /// background. It sends one request with the current token; use
+    /// [`AccountStore::refresh`](coblet_auth::AccountStore::refresh) to renew
+    /// the tokens themselves. Offline accounts are returned unchanged.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Player`] with [`PlayerError::Offline`] for offline
-    /// accounts, and the error of the request otherwise.
-    pub async fn appearance(&self, account: &AccountId) -> Result<PlayerProfile, Error> {
-        self.with_token(account, |player, token| async move {
-            player.appearance(&token).await
-        })
-        .await
+    /// Returns [`Error::Auth`] when the account has to sign in again or has
+    /// no profile, and [`Error::Player`] when the request fails.
+    pub async fn refresh_profile(&self, account: &AccountId) -> Result<Account, Error> {
+        let fetched = self
+            .with_token(account, |player, token| async move {
+                player.appearance(&token).await
+            })
+            .await;
+        match fetched {
+            Ok(_) | Err(Error::Player(PlayerError::Offline)) => {
+                self.inner.accounts.get(account).await.map_err(auth_error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Downloads a skin or cape texture, such as the `url` of a [`Skin`](coblet_auth::Skin),
+    /// as PNG bytes, for example to draw the player's head.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Player`] when the download fails or is larger than
+    /// 256 KiB.
+    pub async fn download_texture(&self, url: &HttpUrl) -> Result<Vec<u8>, Error> {
+        let player = Player::new(std::sync::Arc::clone(&self.inner.transport));
+        Ok(player.download(url).await?)
     }
 
     /// Uploads a skin for the account and makes it active.

@@ -8,7 +8,9 @@ use coblet::types::PlayerName;
 
 use crate::context::Coblet;
 use crate::guard::{guard, put};
-use crate::types::{CobletError, CobletStatus, CobletString, Failure, optional_text, text};
+use crate::types::{
+    CobletBytes, CobletError, CobletStatus, CobletString, Failure, optional_text, text,
+};
 
 /// Arm width of a skin.
 #[repr(C)]
@@ -138,6 +140,10 @@ unsafe fn optional_account_id(id: *const c_char) -> Result<Option<AccountId>, Fa
 /// "capes":[{"id","alias","url","active"}]}` with `model` `classic` or
 /// `slim`. `session_expires_at` is in Unix seconds or null. On success
 /// `*out_json` receives a string to free with `coblet_string_free`.
+///
+/// Reading the list needs no network. Each `player` is the snapshot from
+/// the account's last login, token renewal or skin change;
+/// `coblet_account_refresh_profile` fetches the current one.
 ///
 /// # Safety
 ///
@@ -336,20 +342,19 @@ pub unsafe extern "C" fn coblet_account_refresh(
 
 /// Change to an account's skin or cape.
 enum Change {
-    Read,
     Upload(SkinSource, SkinModel),
     Model(SkinModel),
     Reset,
     Cape(Option<String>),
 }
 
-/// Runs an appearance call and writes the player as JSON.
+/// Runs a skin or cape change and writes the player as JSON.
 ///
 /// # Safety
 ///
-/// As for the exported appearance functions.
+/// As for the exported skin and cape functions.
 #[allow(unsafe_code, reason = "reads handle and string arguments")]
-unsafe fn appearance(
+unsafe fn change_appearance(
     coblet: *const Coblet,
     account_id: *const c_char,
     change: Change,
@@ -363,7 +368,6 @@ unsafe fn appearance(
     let inner = &handle.inner;
     let profile = handle.runtime.block_on(async {
         match change {
-            Change::Read => inner.appearance(&id).await,
             Change::Upload(source, model) => inner.upload_skin(&id, source, model).await,
             Change::Model(model) => inner.set_skin_model(&id, model).await,
             Change::Reset => inner.reset_skin(&id).await,
@@ -382,9 +386,17 @@ unsafe fn appearance(
     Ok(CobletStatus::Ok)
 }
 
-/// Reads the account's skins and capes from Minecraft services as JSON:
-/// the `player` object of `coblet_accounts_json` with a `schema` field.
-/// Fails with `COBLET_ERROR_KIND_UNSUPPORTED` for offline accounts.
+/// Fetches the account's player profile (name, UUID, skins and capes)
+/// from Minecraft services now, saves it and returns the updated account
+/// as JSON, in the account format of `coblet_accounts_json` with a
+/// `schema` field.
+///
+/// It sends one request with the current token, so a launcher can show the
+/// snapshot from `coblet_accounts_json` at once and call this in the
+/// background; `coblet_account_refresh` renews the tokens themselves.
+/// Offline accounts are returned unchanged. Fails with
+/// `COBLET_ERROR_KIND_AUTH` when the user has to sign in again and
+/// `COBLET_ERROR_KIND_NO_PROFILE` for an account without a profile.
 ///
 /// # Safety
 ///
@@ -393,7 +405,7 @@ unsafe fn appearance(
 /// writable.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn coblet_account_appearance_json(
+pub unsafe extern "C" fn coblet_account_refresh_profile(
     coblet: *const Coblet,
     account_id: *const c_char,
     out_json: *mut CobletString,
@@ -402,17 +414,74 @@ pub unsafe extern "C" fn coblet_account_appearance_json(
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
         guard(out_err, || {
-            appearance(coblet, account_id, Change::Read, out_json)
+            let (handle, id) = args(coblet, account_id)?;
+            if out_json.is_null() {
+                return Err(Failure::argument("out_json", "is NULL"));
+            }
+            let account = handle.runtime.block_on(handle.inner.refresh_profile(&id))?;
+            let json = with_schema(account_value(&account));
+            put(out_json, CobletString::new(&json), "out_json")?;
+            Ok(CobletStatus::Ok)
         })
     }
 }
 
-/// Uploads a PNG skin of 64x64 or 64x32 pixels, wears it and returns the
-/// player as in `coblet_account_appearance_json`.
+/// Downloads a skin or cape texture, such as a skin `url` from
+/// `coblet_accounts_json`, as PNG bytes, for example to draw the player's
+/// head. On success `*out_png` receives bytes to free with
+/// `coblet_bytes_free`.
 ///
 /// # Safety
 ///
-/// As `coblet_account_appearance_json`; `png` must point to `len` readable bytes.
+/// `coblet` must be a live handle; `url` must be NULL or NUL-terminated;
+/// `out_png` must be writable; `out_err` must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_download_texture(
+    coblet: *const Coblet,
+    url: *const c_char,
+    out_png: *mut CobletBytes,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let handle = coblet
+                .as_ref()
+                .ok_or_else(|| Failure::argument("coblet", "is NULL"))?;
+            let url = HttpUrl::new(text(url, "url")?)
+                .map_err(|error| Failure::argument("url", &error.to_string()))?;
+            if out_png.is_null() {
+                return Err(Failure::argument("out_png", "is NULL"));
+            }
+            let png = handle
+                .runtime
+                .block_on(handle.inner.download_texture(&url))?;
+            put(out_png, CobletBytes::new(png), "out_png")?;
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+/// Frees bytes returned by the library; an empty value is ignored.
+///
+/// # Safety
+///
+/// `value` must come from this library and must not be freed twice.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_bytes_free(value: CobletBytes) {
+    // SAFETY: forwarded from the caller's guarantee.
+    unsafe { value.free() }
+}
+
+/// Uploads a PNG skin of 64x64 or 64x32 pixels, wears it and returns the
+/// player as the `player` object of `coblet_accounts_json`
+/// with a `schema` field.
+///
+/// # Safety
+///
+/// As `coblet_account_refresh_profile`; `png` must point to `len` readable bytes.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn coblet_account_upload_skin(
@@ -431,7 +500,7 @@ pub unsafe extern "C" fn coblet_account_upload_skin(
                 return Err(Failure::argument("png", "is NULL"));
             }
             let bytes = std::slice::from_raw_parts(png, len).to_vec();
-            appearance(
+            change_appearance(
                 coblet,
                 account_id,
                 Change::Upload(SkinSource::Png(bytes), model.into()),
@@ -442,11 +511,12 @@ pub unsafe extern "C" fn coblet_account_upload_skin(
 }
 
 /// Wears the skin at a public URL, which Minecraft services download, and
-/// returns the player as in `coblet_account_appearance_json`.
+/// returns the player as the `player` object of `coblet_accounts_json`
+/// with a `schema` field.
 ///
 /// # Safety
 ///
-/// As `coblet_account_appearance_json`; `url` must be NULL or NUL-terminated.
+/// As `coblet_account_refresh_profile`; `url` must be NULL or NUL-terminated.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn coblet_account_upload_skin_url(
@@ -462,7 +532,7 @@ pub unsafe extern "C" fn coblet_account_upload_skin_url(
         guard(out_err, || {
             let url = HttpUrl::new(text(url, "url")?)
                 .map_err(|error| Failure::argument("url", &error.to_string()))?;
-            appearance(
+            change_appearance(
                 coblet,
                 account_id,
                 Change::Upload(SkinSource::Url(url), model.into()),
@@ -472,12 +542,12 @@ pub unsafe extern "C" fn coblet_account_upload_skin_url(
     }
 }
 
-/// Switches the arm width of the worn skin and returns the player as in
-/// `coblet_account_appearance_json`.
+/// Switches the arm width of the worn skin and returns the player as
+/// the `player` object of `coblet_accounts_json` with a `schema` field.
 ///
 /// # Safety
 ///
-/// As `coblet_account_appearance_json`.
+/// As `coblet_account_refresh_profile`.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn coblet_account_set_skin_model(
@@ -490,17 +560,17 @@ pub unsafe extern "C" fn coblet_account_set_skin_model(
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
         guard(out_err, || {
-            appearance(coblet, account_id, Change::Model(model.into()), out_json)
+            change_appearance(coblet, account_id, Change::Model(model.into()), out_json)
         })
     }
 }
 
-/// Goes back to the default skin and returns the player as in
-/// `coblet_account_appearance_json`.
+/// Goes back to the default skin and returns the player as
+/// the `player` object of `coblet_accounts_json` with a `schema` field.
 ///
 /// # Safety
 ///
-/// As `coblet_account_appearance_json`.
+/// As `coblet_account_refresh_profile`.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn coblet_account_reset_skin(
@@ -512,17 +582,18 @@ pub unsafe extern "C" fn coblet_account_reset_skin(
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
         guard(out_err, || {
-            appearance(coblet, account_id, Change::Reset, out_json)
+            change_appearance(coblet, account_id, Change::Reset, out_json)
         })
     }
 }
 
 /// Shows an owned cape by ID, or hides the cape when `cape_id` is NULL,
-/// and returns the player as in `coblet_account_appearance_json`.
+/// and returns the player as the `player` object of `coblet_accounts_json`
+/// with a `schema` field.
 ///
 /// # Safety
 ///
-/// As `coblet_account_appearance_json`; `cape_id` must be NULL or
+/// As `coblet_account_refresh_profile`; `cape_id` must be NULL or
 /// NUL-terminated.
 #[allow(unsafe_code, reason = "exported C symbol")]
 #[unsafe(no_mangle)]
@@ -537,7 +608,7 @@ pub unsafe extern "C" fn coblet_account_set_cape(
     unsafe {
         guard(out_err, || {
             let cape = optional_text(cape_id, "cape_id")?.map(str::to_owned);
-            appearance(coblet, account_id, Change::Cape(cape), out_json)
+            change_appearance(coblet, account_id, Change::Cape(cape), out_json)
         })
     }
 }

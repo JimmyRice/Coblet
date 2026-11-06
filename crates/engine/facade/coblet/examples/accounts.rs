@@ -11,7 +11,7 @@
 //!   default ACCOUNT
 //!   remove ACCOUNT
 //!   refresh ACCOUNT
-//!   appearance ACCOUNT
+//!   profile ACCOUNT
 //!   skin ACCOUNT upload FILE [--slim] | url URL [--slim] | model classic|slim | reset
 //!   cape ACCOUNT CAPE-ID|none
 //!   launch ACCOUNT VERSION [--run-for SECONDS] [--until TEXT]
@@ -55,7 +55,7 @@ use coblet::{Coblet, Error};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn usage() -> String {
-    "usage: accounts [--data DIR] login|offline|list|default|remove|refresh|appearance|skin|cape|launch ...; see the file header".to_owned()
+    "usage: accounts [--data DIR] login|offline|list|default|remove|refresh|profile|skin|cape|launch ...; see the file header".to_owned()
 }
 
 fn secret_key(data: &Path) -> Result<EncryptionKey> {
@@ -317,7 +317,13 @@ async fn run(args: Vec<String>) -> Result<bool> {
             let account = coblet.accounts().refresh(&account().await?).await?;
             println!("refreshed: {}", describe(&account));
         }
-        "appearance" => show(&coblet.appearance(&account().await?).await?),
+        "profile" => {
+            let account = coblet.refresh_profile(&account().await?).await?;
+            println!("{}", describe(&account));
+            if let Some(profile) = &account.profile {
+                show(profile);
+            }
+        }
         "skin" => skin(&coblet, &account().await?, &rest[1..]).await?,
         "cape" => {
             let cape = rest.get(1).ok_or_else(usage)?;

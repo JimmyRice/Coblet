@@ -5,7 +5,7 @@ use coblet::platform::ProfileError;
 use coblet::player::PlayerError;
 
 /// Version of the C ABI; it grows with every incompatible change.
-pub const COBLET_ABI_VERSION: u32 = 7;
+pub const COBLET_ABI_VERSION: u32 = 8;
 
 /// Result of a call.
 #[repr(C)]
@@ -99,6 +99,57 @@ impl CobletString {
         let slice = std::ptr::slice_from_raw_parts_mut(self.ptr.cast::<u8>(), self.len + 1);
         // SAFETY: the pointer and length come from a boxed slice of `len + 1`
         // bytes created in `new`, and the caller frees it only once.
+        drop(unsafe { Box::from_raw(slice) });
+    }
+}
+
+/// Bytes owned by the library, such as a PNG image. Free them with
+/// `coblet_bytes_free`.
+#[repr(C)]
+#[derive(Debug)]
+pub struct CobletBytes {
+    /// The bytes, or NULL when there are none.
+    pub ptr: *mut u8,
+    /// Number of bytes.
+    pub len: usize,
+}
+
+impl CobletBytes {
+    /// Returns an empty value that needs no freeing.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        }
+    }
+
+    /// Hands `bytes` over to C.
+    pub(crate) fn new(bytes: Vec<u8>) -> Self {
+        if bytes.is_empty() {
+            return Self::empty();
+        }
+        let boxed = bytes.into_boxed_slice();
+        let len = boxed.len();
+        Self {
+            ptr: Box::into_raw(boxed).cast::<u8>(),
+            len,
+        }
+    }
+
+    /// Frees the bytes.
+    ///
+    /// # Safety
+    ///
+    /// The value must come from [`CobletBytes::new`] and must not be freed twice.
+    #[allow(unsafe_code, reason = "reclaims memory handed to C")]
+    pub(crate) unsafe fn free(self) {
+        if self.ptr.is_null() {
+            return;
+        }
+        let slice = std::ptr::slice_from_raw_parts_mut(self.ptr, self.len);
+        // SAFETY: the pointer and length come from a boxed slice created in
+        // `new`, and the caller frees it only once.
         drop(unsafe { Box::from_raw(slice) });
     }
 }

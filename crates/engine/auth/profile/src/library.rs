@@ -440,7 +440,7 @@ mod tests {
         )
         .on(
             Method::Get,
-            "http://textures.minecraft.net/texture/s",
+            "https://textures.minecraft.net/texture/s",
             200,
             sample(64, 64),
         );

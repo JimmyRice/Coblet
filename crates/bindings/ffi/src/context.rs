@@ -201,7 +201,7 @@ mod tests {
     #[test]
     #[allow(unsafe_code, reason = "calls the C ABI")]
     fn creates_and_frees_an_sdk_and_reports_bad_arguments() {
-        assert_eq!(coblet_abi_version(), 7);
+        assert_eq!(coblet_abi_version(), 8);
         let dir = tempfile::tempdir().unwrap();
         let root = CString::new(dir.path().to_str().unwrap()).unwrap();
         let agent = CString::new("coblet-ffi-test/1.0").unwrap();
@@ -237,6 +237,19 @@ mod tests {
         assert_eq!(message.to_str().unwrap(), "data_root is NULL");
         // SAFETY: freed once.
         unsafe { coblet_error_free(err) };
+    }
+
+    #[test]
+    #[allow(unsafe_code, reason = "frees library bytes")]
+    fn bytes_round_trip() {
+        let value = crate::types::CobletBytes::new(vec![1, 2, 3]);
+        assert_eq!(value.len, 3);
+        // SAFETY: the pointer covers the 3 bytes created above.
+        let bytes = unsafe { std::slice::from_raw_parts(value.ptr, value.len) };
+        assert_eq!(bytes, [1, 2, 3]);
+        // SAFETY: created above and freed once.
+        unsafe { value.free() };
+        assert!(crate::types::CobletBytes::new(Vec::new()).ptr.is_null());
     }
 
     #[test]
