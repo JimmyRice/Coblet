@@ -305,6 +305,52 @@ async fn rewrites_addresses_and_runs_batches() {
     );
 }
 
+#[tokio::test]
+async fn a_corrupt_mirror_falls_back_to_the_original_address() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("a.jar");
+    // The mirror serves wrong bytes twice, then the original address answers.
+    let transport = Scripted::new(vec![ok("abcdeX"), ok("abcdeX"), ok("abcdef")]);
+    let downloader = downloader(Arc::clone(&transport)).with_rewriter(Arc::new(Mirror));
+    run(&downloader, &task(&dest, Sources::single(url("a"))))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), b"abcdef");
+    let urls: Vec<String> = transport.seen().into_iter().map(|(url, _)| url).collect();
+    assert_eq!(
+        urls,
+        [
+            "https://mirror.example/a",
+            "https://mirror.example/a",
+            "https://example.com/a"
+        ]
+    );
+
+    let strict = Downloader::new(
+        Arc::clone(&transport) as Arc<dyn Transport>,
+        Arc::new(TokioStorage::new()),
+        config(),
+    )
+    .with_rewriters(
+        coblet_runtime::UrlRewriters::new()
+            .with(Arc::new(Mirror))
+            .without_fallback(),
+    );
+    transport
+        .replies
+        .lock()
+        .unwrap()
+        .extend([ok("abcdeX"), ok("abcdeX")]);
+    let other = dir.path().join("b.jar");
+    let error = run(&strict, &task(&other, Sources::single(url("b"))))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, DownloadError::AllSourcesFailed { sources: 1, .. }),
+        "{error}"
+    );
+}
+
 /// Transport that answers by path, handing out each path's replies in order.
 struct ByPath(Mutex<std::collections::HashMap<&'static str, VecDeque<&'static str>>>);
 

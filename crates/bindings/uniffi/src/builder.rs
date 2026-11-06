@@ -31,6 +31,7 @@ struct Settings {
     msa_client_id: Option<MsaClientId>,
     secrets: Secrets,
     rewriters: Vec<Arc<dyn coblet::runtime::UrlRewriter>>,
+    mirror_fallback: bool,
     version_sources: Vec<coblet::mojang::MojangVersions>,
 }
 
@@ -111,6 +112,7 @@ impl CobletBuilder {
                 msa_client_id: None,
                 secrets: Secrets::Memory,
                 rewriters: Vec::new(),
+                mirror_fallback: true,
                 version_sources: Vec::new(),
             })),
         }))
@@ -267,7 +269,15 @@ impl CobletBuilder {
     /// Rules apply to game files, libraries, assets, Java runtimes and
     /// metadata such as the version manifest, in the order they were added.
     /// Hashes are still checked, so a mirror cannot change content that is
-    /// listed with a hash. Account and skin requests are not rewritten.
+    /// listed with a hash; when the mirror fails or serves something that
+    /// does not match, the original address is tried next (see
+    /// `set_mirror_fallback`). Account and skin requests are not rewritten.
+    ///
+    /// With `trust_metadata`, metadata documents from this mirror (version
+    /// files, runtime manifests, Loader indexes) that do not match their
+    /// hash are used when the original address fails too or fallback is
+    /// off, with a `catalog.unverified-mirror` warning event. This suits
+    /// mirrors that reformat JSON. Downloaded files are always checked.
     ///
     /// # Errors
     ///
@@ -277,11 +287,15 @@ impl CobletBuilder {
         from: String,
         to: String,
         kinds: Vec<ArtifactKind>,
+        trust_metadata: bool,
     ) -> Result<(), CobletError> {
         let mut rule = coblet::runtime::PrefixRewriter::new(from, to)
             .map_err(|error| invalid(format!("mirror: {error}")))?;
         if !kinds.is_empty() {
             rule = rule.for_kinds(kinds.into_iter().map(Into::into));
+        }
+        if trust_metadata {
+            rule = rule.trusting_metadata();
         }
         self.with(|settings| {
             settings.rewriters.push(Arc::new(rule));
@@ -289,8 +303,23 @@ impl CobletBuilder {
         })
     }
 
+    /// Sets whether requests fall back to the original address when a
+    /// mirror fails or serves something that does not match its hash; on by
+    /// default. Turn it off when the original hosts must never be contacted.
+    ///
+    /// # Errors
+    ///
+    /// Fails after `build`.
+    pub fn set_mirror_fallback(&self, enabled: bool) -> Result<(), CobletError> {
+        self.with(|settings| {
+            settings.mirror_fallback = enabled;
+            Ok(())
+        })
+    }
+
     /// Adds a rewriter written in this language, run in order with the
-    /// mirror rules, for mirrors a prefix cannot describe.
+    /// mirror rules, for mirrors a prefix cannot describe. Its metadata is
+    /// never used unverified.
     ///
     /// # Errors
     ///
@@ -366,6 +395,7 @@ impl CobletBuilder {
         for rewriter in settings.rewriters {
             builder = builder.url_rewriter(rewriter);
         }
+        builder = builder.mirror_fallback(settings.mirror_fallback);
         for source in settings.version_sources {
             builder = builder.version_source(Arc::new(source));
         }

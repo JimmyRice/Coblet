@@ -25,6 +25,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Flag of `coblet_builder_add_mirror`: metadata documents from the mirror
+// that do not match their hash are used when nothing else worked.
+#define COBLET_MIRROR_TRUST_METADATA 1
+
 // Length of an operation ID buffer: 36 characters and a NUL.
 #define COBLET_OPERATION_ID_LEN 37
 
@@ -32,7 +36,7 @@
 #define COBLET_SECRET_KEY_LEN 32
 
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 10
+#define COBLET_ABI_VERSION 11
 
 // Result of a call.
 typedef enum CobletStatus {
@@ -788,9 +792,19 @@ enum CobletStatus coblet_builder_allow_auth_changes(struct CobletBuilder *builde
 // and metadata such as the version manifest, in the order they were
 // added, together with rewriters from `coblet_builder_add_url_rewriter`.
 // Hashes are still checked, so a mirror cannot change content that is
-// listed with a hash. Account and skin requests are not rewritten. A
-// prefix that is not an HTTP or HTTPS address, or malformed `kinds`,
-// fails with `COBLET_STATUS_INVALID_ARGUMENT`.
+// listed with a hash; when the mirror fails or serves something that does
+// not match, the original address is tried next (see
+// `coblet_builder_set_mirror_fallback`). Account and skin requests are not
+// rewritten.
+//
+// `flags` is 0 or `COBLET_MIRROR_TRUST_METADATA`: then metadata documents
+// from this mirror (version files, runtime manifests, Loader indexes)
+// that do not match their hash are used when the original address fails
+// too or fallback is off, with a `catalog.unverified-mirror` warning
+// event. This suits mirrors that reformat JSON; downloaded files are
+// always checked. A prefix that is not an HTTP or HTTPS address,
+// malformed `kinds` or an unknown flag fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`.
 //
 // # Safety
 //
@@ -800,9 +814,22 @@ enum CobletStatus coblet_builder_add_mirror(struct CobletBuilder *builder,
                                             const char *from,
                                             const char *to,
                                             const char *kinds,
+                                            uint32_t flags,
                                             struct CobletError **out_err);
 
-// Adds a rewriter written in C, run in order with the mirror rules.
+// Sets whether requests fall back to the original address when a mirror
+// fails or serves something that does not match its hash; on by default.
+// Turn it off when the original hosts must never be contacted.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_set_mirror_fallback(struct CobletBuilder *builder,
+                                                     bool enabled,
+                                                     struct CobletError **out_err);
+
+// Adds a rewriter written in C, run in order with the mirror rules. Its
+// metadata is never used unverified.
 //
 // The library owns the table's `user_data` from this call on, even when
 // it fails. A table without a `rewrite` callback fails with

@@ -10,8 +10,9 @@ use super::{
     parse_kinds,
 };
 use crate::builder::{
-    coblet_builder_add_mirror, coblet_builder_add_url_rewriter,
+    COBLET_MIRROR_TRUST_METADATA, coblet_builder_add_mirror, coblet_builder_add_url_rewriter,
     coblet_builder_add_version_manifest, coblet_builder_build, coblet_builder_new,
+    coblet_builder_set_mirror_fallback,
 };
 use crate::context::{coblet_error_free, coblet_free};
 use crate::types::CobletStatus;
@@ -108,23 +109,15 @@ fn c_rewriters_and_mirrors_reach_the_coblet() {
                 from.as_ptr(),
                 to.as_ptr(),
                 kinds.as_ptr(),
+                COBLET_MIRROR_TRUST_METADATA,
                 &raw mut err
             ),
             CobletStatus::Ok
         );
-        let bad = CString::new("file:///x").unwrap();
         assert_eq!(
-            coblet_builder_add_mirror(
-                builder,
-                bad.as_ptr(),
-                to.as_ptr(),
-                std::ptr::null(),
-                &raw mut err
-            ),
-            CobletStatus::InvalidArgument
+            coblet_builder_set_mirror_fallback(builder, false, &raw mut err),
+            CobletStatus::Ok
         );
-        coblet_error_free(err);
-        err = std::ptr::null_mut();
         assert_eq!(
             coblet_builder_add_url_rewriter(builder, table(), &raw mut err),
             CobletStatus::Ok
@@ -160,6 +153,12 @@ fn c_rewriters_and_mirrors_reach_the_coblet() {
         let library = HttpUrl::new("https://libraries.minecraft.net/a.jar").unwrap();
         let inner = &(*coblet).inner;
         for rewriters in [inner.meta().rewriters(), inner.downloader().rewriters()] {
+            assert!(!rewriters.falls_back());
+            assert!(
+                rewriters
+                    .route(&library, &ArtifactKind::Library)
+                    .trust_metadata
+            );
             assert_eq!(
                 rewriters.apply(&library, &ArtifactKind::Library).as_str(),
                 "https://proxy.example/a.jar"
@@ -172,5 +171,47 @@ fn c_rewriters_and_mirrors_reach_the_coblet() {
         let before = FREED.load(Ordering::SeqCst);
         coblet_free(coblet);
         assert_eq!(FREED.load(Ordering::SeqCst), before + 1);
+    }
+}
+
+#[test]
+fn bad_mirror_arguments_are_rejected() {
+    let root = CString::new("/tmp/coblet-ffi-sources").unwrap();
+    let agent = CString::new("coblet-ffi-test/1.0").unwrap();
+    let good = CString::new("https://libraries.minecraft.net/").unwrap();
+    let bad = CString::new("file:///x").unwrap();
+    let mut builder = std::ptr::null_mut();
+    // SAFETY: valid strings and out-pointers; the builder is built and freed once.
+    unsafe {
+        let mut err = std::ptr::null_mut();
+        assert_eq!(
+            coblet_builder_new(
+                root.as_ptr(),
+                agent.as_ptr(),
+                &raw mut builder,
+                &raw mut err
+            ),
+            CobletStatus::Ok
+        );
+        for (from, flags) in [(&bad, 0), (&good, 4)] {
+            let status = coblet_builder_add_mirror(
+                builder,
+                from.as_ptr(),
+                good.as_ptr(),
+                std::ptr::null(),
+                flags,
+                &raw mut err,
+            );
+            assert_eq!(status, CobletStatus::InvalidArgument);
+            coblet_error_free(err);
+            err = std::ptr::null_mut();
+        }
+        let mut coblet = std::ptr::null_mut();
+        assert_eq!(
+            coblet_builder_build(builder, &raw mut coblet, &raw mut err),
+            CobletStatus::Ok
+        );
+        assert!((*coblet).inner.meta().rewriters().is_empty());
+        coblet_free(coblet);
     }
 }

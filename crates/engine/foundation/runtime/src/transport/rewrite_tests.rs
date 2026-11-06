@@ -66,3 +66,46 @@ fn kind_filter_limits_the_rewriter() {
     assert!(mirror.rewrite(&target, &ArtifactKind::Loader).is_some());
     assert!(mirror.rewrite(&target, &ArtifactKind::Asset).is_none());
 }
+
+#[test]
+fn routes_fall_back_to_the_original_address() {
+    let mirror = Arc::new(
+        PrefixRewriter::new("https://a.example/", "https://b.example/")
+            .unwrap()
+            .trusting_metadata(),
+    );
+    let chain = UrlRewriters::new().with(mirror);
+    assert!(chain.falls_back());
+    let route = chain.route(&url("https://a.example/f"), &ArtifactKind::Metadata);
+    assert_eq!(route.url.as_str(), "https://b.example/f");
+    assert_eq!(
+        route.fallback.as_ref().map(HttpUrl::as_str),
+        Some("https://a.example/f")
+    );
+    assert!(route.trust_metadata);
+
+    let kept = chain.route(&url("https://c.example/f"), &ArtifactKind::Metadata);
+    assert_eq!(kept.url.as_str(), "https://c.example/f");
+    assert_eq!(kept.fallback, None);
+    assert!(!kept.trust_metadata);
+
+    let strict = chain.clone().without_fallback();
+    assert!(!strict.falls_back());
+    let route = strict.route(&url("https://a.example/f"), &ArtifactKind::Metadata);
+    assert_eq!(route.fallback, None);
+    assert!(route.trust_metadata);
+}
+
+#[test]
+fn only_a_rewriter_that_changed_the_address_grants_trust() {
+    let trusting = Arc::new(
+        PrefixRewriter::new("https://x.example/", "https://y.example/")
+            .unwrap()
+            .trusting_metadata(),
+    );
+    let plain = Arc::new(PrefixRewriter::new("https://a.example/", "https://b.example/").unwrap());
+    let chain = UrlRewriters::new().with(trusting).with(plain);
+    let route = chain.route(&url("https://a.example/f"), &ArtifactKind::Metadata);
+    assert_eq!(route.url.as_str(), "https://b.example/f");
+    assert!(!route.trust_metadata);
+}

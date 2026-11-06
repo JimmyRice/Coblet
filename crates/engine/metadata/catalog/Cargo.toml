@@ -15,12 +15,13 @@ httpdate.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
 
 [dev-dependencies]
 coblet-runtime = { workspace = true, features = ["fs"] }
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
 
 [lints]
 workspace = true

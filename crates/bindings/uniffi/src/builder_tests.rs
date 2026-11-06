@@ -169,8 +169,10 @@ fn mirrors_and_rewriters_reach_downloads_and_metadata() {
             "https://libraries.minecraft.net/".to_owned(),
             "https://mirror.example/libraries/".to_owned(),
             vec![crate::ArtifactKind::Library],
+            true,
         )
         .unwrap();
+    builder.set_mirror_fallback(false).unwrap();
     builder
         .add_url_rewriter(std::sync::Arc::new(Proxy))
         .unwrap();
@@ -179,6 +181,7 @@ fn mirrors_and_rewriters_reach_downloads_and_metadata() {
             "file:///x".to_owned(),
             "https://a.example/".to_owned(),
             Vec::new(),
+            false,
         )
         .unwrap_err();
     assert_eq!(kind(&error), ErrorKind::InvalidArgument);
@@ -189,6 +192,12 @@ fn mirrors_and_rewriters_reach_downloads_and_metadata() {
         coblet.inner.meta().rewriters(),
         coblet.inner.downloader().rewriters(),
     ] {
+        assert!(!rewriters.falls_back());
+        assert!(
+            rewriters
+                .route(&library, &ArtifactKind::Library)
+                .trust_metadata
+        );
         assert_eq!(
             rewriters.apply(&library, &ArtifactKind::Library).as_str(),
             "https://proxy.example/libraries/a/b.jar"

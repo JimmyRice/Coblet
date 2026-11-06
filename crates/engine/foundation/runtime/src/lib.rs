@@ -96,6 +96,6 @@ pub use storage::{
 #[cfg(feature = "reqwest")]
 pub use transport::ReqwestTransport;
 pub use transport::{
-    Body, HttpUrl, HttpUrlError, MemoryBody, Method, PrefixRewriter, Request, Response, Transport,
-    TransportError, UrlRewriter, UrlRewriters, UserAgent, UserAgentError,
+    Body, HttpUrl, HttpUrlError, MemoryBody, Method, PrefixRewriter, Request, Response, Route,
+    Transport, TransportError, UrlRewriter, UrlRewriters, UserAgent, UserAgentError,
 };

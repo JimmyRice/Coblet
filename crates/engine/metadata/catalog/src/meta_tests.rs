@@ -77,7 +77,7 @@ async fn revalidates_with_etag_and_last_modified() {
     assert_eq!(transport.header_of(2, "If-None-Match"), None);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn falls_back_to_the_cache_with_a_warning() {
     let (_dir, transport, cache, request) =
         setup(vec![Reply::Ok(200, Vec::new(), "abc"), Reply::Fail]);
@@ -96,7 +96,8 @@ async fn falls_back_to_the_cache_with_a_warning() {
     transport.push(Reply::Ok(503, Vec::new(), ""));
     let unavailable = cache.fetch(&request, CachePolicy::Refresh).await.unwrap();
     assert_eq!(unavailable.origin, Origin::OfflineCache);
-    assert_eq!(transport.count(), 3);
+    // One success, then three tries for each failing fetch.
+    assert_eq!(transport.count(), 7);
 }
 
 #[tokio::test]
@@ -239,4 +240,154 @@ async fn rewriters_skip_other_kinds() {
         transport.requests.lock().unwrap()[0].url().as_str(),
         "https://meta.example/manifest.json"
     );
+}
+
+fn hashed(request: MetaRequest) -> MetaRequest {
+    request.with_hash(FileHash::new("sha1", ABC_SHA1).unwrap())
+}
+
+fn mirror(trust: bool) -> Arc<coblet_runtime::PrefixRewriter> {
+    let rule =
+        coblet_runtime::PrefixRewriter::new("https://meta.example/", "https://mirror.example/")
+            .unwrap();
+    Arc::new(if trust {
+        rule.trusting_metadata()
+    } else {
+        rule
+    })
+}
+
+fn urls(transport: &Scripted) -> Vec<String> {
+    transport
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.url().as_str().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_mismatching_mirror_falls_back_to_the_original_address() {
+    let (_dir, transport, cache, request) = setup(vec![
+        Reply::Ok(200, Vec::new(), "abd"),
+        Reply::Ok(200, Vec::new(), "abc"),
+    ]);
+    let cache = cache.with_rewriter(mirror(true));
+    let fetched = cache
+        .fetch(&hashed(request), CachePolicy::Revalidate)
+        .await
+        .unwrap();
+    assert_eq!(&fetched.body[..], b"abc");
+    assert_eq!(fetched.warning, None);
+    assert_eq!(
+        urls(&transport),
+        [
+            "https://mirror.example/manifest.json",
+            "https://meta.example/manifest.json"
+        ]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_trusted_mirror_copy_is_used_when_the_original_fails_and_kept() {
+    let (_dir, transport, cache, request) =
+        setup(vec![Reply::Ok(200, Vec::new(), "abd"), Reply::Fail]);
+    let cache = cache.with_rewriter(mirror(true));
+    let request = hashed(request);
+    let fetched = cache
+        .fetch(&request, CachePolicy::Revalidate)
+        .await
+        .unwrap();
+    assert_eq!(&fetched.body[..], b"abd");
+    let warning = fetched.warning.unwrap();
+    assert_eq!(warning.code, super::UNVERIFIED_MIRROR);
+    assert!(
+        warning.message.contains("mirror.example"),
+        "{}",
+        warning.message
+    );
+
+    // The accepted copy serves later fetches without the network, still with a warning.
+    let again = cache
+        .fetch(&request, CachePolicy::Revalidate)
+        .await
+        .unwrap();
+    assert_eq!(
+        (again.origin, &again.body[..]),
+        (Origin::Cache, &b"abd"[..])
+    );
+    assert_eq!(again.warning.unwrap().code, super::UNVERIFIED_MIRROR);
+    // The mirror once, the original three times.
+    assert_eq!(transport.count(), 4);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_untrusted_mirror_copy_is_rejected() {
+    let (dir, transport, cache, request) =
+        setup(vec![Reply::Ok(200, Vec::new(), "abd"), Reply::Fail]);
+    let cache = cache.with_rewriter(mirror(false));
+    let error = cache
+        .fetch(&hashed(request), CachePolicy::Revalidate)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CatalogError::Transport { .. }), "{error}");
+    assert_eq!(transport.count(), 4);
+    assert!(!dir.path().join("cache/meta/example/manifest.json").exists());
+}
+
+#[tokio::test]
+async fn without_fallback_only_the_mirror_is_asked() {
+    let (_dir, transport, cache, request) = setup(vec![Reply::Ok(200, Vec::new(), "abd")]);
+    let cache = cache.with_rewriters(
+        coblet_runtime::UrlRewriters::new()
+            .with(mirror(true))
+            .without_fallback(),
+    );
+    let fetched = cache
+        .fetch(&hashed(request.clone()), CachePolicy::Revalidate)
+        .await
+        .unwrap();
+    assert_eq!(&fetched.body[..], b"abd");
+    assert_eq!(urls(&transport), ["https://mirror.example/manifest.json"]);
+
+    // Other kinds than metadata are never accepted unverified.
+    let (_dir, _transport, cache, request) = setup(vec![Reply::Ok(200, Vec::new(), "abd")]);
+    let cache = cache.with_rewriters(
+        coblet_runtime::UrlRewriters::new()
+            .with(mirror(true))
+            .without_fallback(),
+    );
+    let error = cache
+        .fetch(
+            &hashed(request).with_kind(coblet_runtime::ArtifactKind::Library),
+            CachePolicy::Revalidate,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CatalogError::Verify { .. }), "{error}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn transient_failures_are_retried_on_the_same_address() {
+    let (_dir, transport, cache, request) = setup(vec![
+        Reply::Fail,
+        Reply::Ok(503, Vec::new(), ""),
+        Reply::Ok(200, Vec::new(), "abc"),
+    ]);
+    let fetched = cache
+        .fetch(&request, CachePolicy::Revalidate)
+        .await
+        .unwrap();
+    assert_eq!(&fetched.body[..], b"abc");
+    assert_eq!(transport.count(), 3);
+
+    let (_dir, transport, cache, request) = setup(vec![Reply::Ok(404, Vec::new(), "")]);
+    assert!(
+        cache
+            .fetch(&request, CachePolicy::Revalidate)
+            .await
+            .is_err()
+    );
+    assert_eq!(transport.count(), 1, "a 404 is not retried");
 }

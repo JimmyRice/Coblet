@@ -14,6 +14,16 @@ use crate::CatalogError;
 /// Warning code published when cached metadata is used because the network failed.
 pub const OFFLINE_CACHE: WarningCode = WarningCode::from_static("catalog.offline-cache");
 
+/// Warning code published when a trusted mirror's metadata document is
+/// used although it does not match its expected hash.
+pub const UNVERIFIED_MIRROR: WarningCode = WarningCode::from_static("catalog.unverified-mirror");
+
+/// Requests to one address before moving on, when the failures are transient.
+const ATTEMPTS_PER_ADDRESS: u32 = 3;
+
+/// Wait before the second request to an address; doubled for each later one.
+const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// Largest metadata document read into memory by default (64 MiB).
 pub const DEFAULT_MAX_SIZE: u64 = 64 * 1024 * 1024;
 
@@ -124,6 +134,58 @@ struct Validators {
     etag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_modified: Option<String>,
+    /// Set when the document was accepted from a trusted mirror although it
+    /// did not match the expected hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    accepted: Option<Accepted>,
+}
+
+impl Validators {
+    fn is_empty(&self) -> bool {
+        self.etag.is_none() && self.last_modified.is_none() && self.accepted.is_none()
+    }
+}
+
+/// Hashes of a document accepted without matching its expected hash.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Accepted {
+    expected: String,
+    actual: String,
+}
+
+/// Why one address did not give a usable document.
+struct Failed {
+    error: CatalogError,
+    /// The document, when the only problem was its hash.
+    mismatch: Option<Box<Mismatch>>,
+}
+
+struct Mismatch {
+    body: Bytes,
+    validators: Validators,
+    expected: FileHash,
+    actual: FileHash,
+}
+
+impl Failed {
+    /// Reports whether another request to the same address can succeed:
+    /// connection failures, timeouts and server errors, but not a 429.
+    fn is_transient(&self) -> bool {
+        match &self.error {
+            CatalogError::Transport { source, .. } => source.is_retryable(),
+            CatalogError::Status { status, .. } => matches!(status, 500 | 502 | 503 | 504),
+            _ => false,
+        }
+    }
+}
+
+impl From<CatalogError> for Failed {
+    fn from(error: CatalogError) -> Self {
+        Self {
+            error,
+            mismatch: None,
+        }
+    }
 }
 
 /// HTTP cache for metadata documents, usually rooted at `data_root/cache/meta`.
@@ -224,6 +286,14 @@ impl MetaCache {
 
     /// Returns a document, from the network or the cache as `policy` allows.
     ///
+    /// The request goes to the address the rewriter chain chooses. When a
+    /// rewritten address fails or serves a document that does not match
+    /// the expected hash, the original address is tried, unless the chain
+    /// has no fallback. A mismatching document from a rewriter that
+    /// [trusts its metadata](coblet_runtime::UrlRewriter::trusts_metadata)
+    /// is used when nothing else worked, with an [`UNVERIFIED_MIRROR`]
+    /// warning, and kept for later offline use.
+    ///
     /// # Errors
     ///
     /// Returns [`CatalogError`] when the network fails and nothing usable is
@@ -235,34 +305,143 @@ impl MetaCache {
         policy: CachePolicy,
     ) -> Result<Fetched, CatalogError> {
         let path = self.path_of(&request.key);
-        let cached = self.read_optional(&path).await?.filter(|body| {
-            request
-                .expect
-                .as_ref()
-                .is_none_or(|hash| check(body, hash).is_ok())
-        });
-        let cache_hit = |body: Bytes, origin| Fetched {
-            body,
-            origin,
-            warning: None,
+        let route = self.rewriters.route(&request.url, &request.kind);
+        let trust = route.trust_metadata
+            && matches!(request.kind, ArtifactKind::Metadata | ArtifactKind::Loader);
+        let sidecar = self
+            .read_optional(&self.validators_path(&request.key))
+            .await?
+            .and_then(|bytes| serde_json::from_slice::<Validators>(&bytes).ok());
+        let mut unverified = None;
+        let cached = match (self.read_optional(&path).await?, &request.expect) {
+            (Some(body), Some(expect)) => match check(&body, expect) {
+                Ok(()) => Some(body),
+                Err(VerifyError::Hash { actual, .. })
+                    if trust
+                        && sidecar.as_ref().and_then(|v| v.accepted.as_ref())
+                            == Some(&Accepted {
+                                expected: expect.to_string(),
+                                actual: actual.to_string(),
+                            }) =>
+                {
+                    unverified = Some(unverified_warning(&route.url, expect, &actual));
+                    Some(body)
+                }
+                Err(_) => None,
+            },
+            (body, _) => body,
         };
         if let Some(body) = &cached
             && (request.expect.is_some() || policy == CachePolicy::PreferCache)
         {
-            return Ok(cache_hit(body.clone(), Origin::Cache));
+            return Ok(Fetched {
+                body: body.clone(),
+                origin: Origin::Cache,
+                warning: unverified,
+            });
         }
 
-        let url = self.rewriters.apply(&request.url, &request.kind);
         let validators = match (&cached, policy) {
-            (Some(_), CachePolicy::Revalidate) => self
-                .read_optional(&self.validators_path(&request.key))
-                .await?
-                .and_then(|bytes| serde_json::from_slice::<Validators>(&bytes).ok())
-                .filter(|validators| validators.url == url.as_str()),
+            (Some(_), CachePolicy::Revalidate) => sidecar.as_ref(),
             _ => None,
         };
+        let first = match self
+            .attempt(request, &route.url, &path, cached.as_ref(), validators)
+            .await
+        {
+            Ok(fetched) => return Ok(fetched),
+            Err(failed) => failed,
+        };
+        let mut failure = first.error;
+        if let Some(original) = &route.fallback {
+            tracing::info!(mirror = %route.url, %original, error = %failure, "trying the original address");
+            match self
+                .attempt(request, original, &path, cached.as_ref(), validators)
+                .await
+            {
+                Ok(fetched) => return Ok(fetched),
+                Err(failed) => failure = failed.error,
+            }
+        }
+        if trust && let Some(mismatch) = first.mismatch {
+            let warning = unverified_warning(&route.url, &mismatch.expected, &mismatch.actual);
+            tracing::warn!(url = %route.url, "{}", warning.message);
+            let Mismatch {
+                body,
+                validators,
+                expected,
+                actual,
+            } = *mismatch;
+            let validators = Validators {
+                accepted: Some(Accepted {
+                    expected: expected.to_string(),
+                    actual: actual.to_string(),
+                }),
+                ..validators
+            };
+            self.store(&request.key, &path, body.clone(), &validators)
+                .await?;
+            return Ok(Fetched {
+                body,
+                origin: Origin::Network,
+                warning: Some(warning),
+            });
+        }
+
+        let Some(body) = cached else {
+            return Err(failure);
+        };
+        tracing::warn!(url = %route.url, error = %failure, "using cached metadata");
+        Ok(Fetched {
+            body,
+            origin: Origin::OfflineCache,
+            warning: Some(Warning {
+                op: None,
+                code: OFFLINE_CACHE,
+                message: format!("using the cached copy of {}: {failure}", request.url),
+            }),
+        })
+    }
+
+    /// Requests the document from one address, repeating transient failures.
+    async fn attempt(
+        &self,
+        request: &MetaRequest,
+        url: &HttpUrl,
+        path: &Path,
+        cached: Option<&Bytes>,
+        validators: Option<&Validators>,
+    ) -> Result<Fetched, Failed> {
+        let mut delay = RETRY_DELAY;
+        let mut tries = 1;
+        loop {
+            match self
+                .attempt_once(request, url, path, cached, validators)
+                .await
+            {
+                Err(failed) if failed.is_transient() && tries < ATTEMPTS_PER_ADDRESS => {
+                    tracing::debug!(%url, error = %failed.error, tries, "retrying metadata request");
+                    tokio::time::sleep(delay).await;
+                    delay *= 2;
+                    tries += 1;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    /// Requests the document from one address once.
+    async fn attempt_once(
+        &self,
+        request: &MetaRequest,
+        url: &HttpUrl,
+        path: &Path,
+        cached: Option<&Bytes>,
+        validators: Option<&Validators>,
+    ) -> Result<Fetched, Failed> {
+        let validators = validators.filter(|validators| validators.url == url.as_str());
         let mut http = Request::get(url.clone());
-        if let Some(validators) = &validators {
+        if let Some(validators) = validators {
             if let Some(etag) = &validators.etag {
                 http = http.header("If-None-Match", etag.clone());
             }
@@ -270,92 +449,106 @@ impl MetaCache {
                 http = http.header("If-Modified-Since", date.clone());
             }
         }
-
-        let failure = match self.transport.send(http).await {
-            Ok(response) if response.status() == 304 && validators.is_some() => {
-                if let Some(body) = cached {
-                    return Ok(cache_hit(body, Origin::NotModified));
-                }
-                CatalogError::Status {
+        let transport = |source| CatalogError::Transport {
+            url: url.clone(),
+            source,
+        };
+        let response = self.transport.send(http).await.map_err(transport)?;
+        match response.status() {
+            304 if validators.is_some() => {
+                return cached
+                    .map(|body| Fetched {
+                        body: body.clone(),
+                        origin: Origin::NotModified,
+                        warning: None,
+                    })
+                    .ok_or_else(|| {
+                        CatalogError::Status {
+                            url: url.clone(),
+                            status: 304,
+                        }
+                        .into()
+                    });
+            }
+            200 => {}
+            status => {
+                return Err(CatalogError::Status {
                     url: url.clone(),
-                    status: 304,
+                    status,
                 }
+                .into());
             }
-            Ok(response) if response.status() == 200 => {
-                let fresh = Validators {
-                    url: url.as_str().to_owned(),
-                    etag: response.header("ETag").map(str::to_owned),
-                    last_modified: response.header("Last-Modified").map(str::to_owned),
-                };
-                match response.bytes(request.max_size).await {
-                    Ok(body) => return self.store(request, &url, &path, body, &fresh).await,
-                    Err(source) => CatalogError::Transport {
-                        url: url.clone(),
-                        source,
-                    },
-                }
-            }
-            Ok(response) => CatalogError::Status {
-                url: url.clone(),
-                status: response.status(),
-            },
-            Err(source) => CatalogError::Transport {
-                url: url.clone(),
-                source,
-            },
+        }
+        let fresh = Validators {
+            url: url.as_str().to_owned(),
+            etag: response.header("ETag").map(str::to_owned),
+            last_modified: response.header("Last-Modified").map(str::to_owned),
+            accepted: None,
         };
-
-        let Some(body) = cached else {
-            return Err(failure);
-        };
-        tracing::warn!(url = %url, error = %failure, "using cached metadata");
-        Ok(Fetched {
-            body,
-            origin: Origin::OfflineCache,
-            warning: Some(Warning {
-                op: None,
-                code: OFFLINE_CACHE,
-                message: format!("using the cached copy of {url}: {failure}"),
-            }),
-        })
-    }
-
-    async fn store(
-        &self,
-        request: &MetaRequest,
-        url: &HttpUrl,
-        path: &Path,
-        body: Bytes,
-        validators: &Validators,
-    ) -> Result<Fetched, CatalogError> {
+        let body = response.bytes(request.max_size).await.map_err(transport)?;
         if let Some(expect) = &request.expect
             && let Err(source) = check(&body, expect)
         {
-            return Err(CatalogError::Verify {
-                url: url.clone(),
-                source,
+            let mismatch = match &source {
+                VerifyError::Hash { actual, .. } => Some(Box::new(Mismatch {
+                    body,
+                    validators: fresh,
+                    expected: expect.clone(),
+                    actual: (**actual).clone(),
+                })),
+                _ => None,
+            };
+            return Err(Failed {
+                error: CatalogError::Verify {
+                    url: url.clone(),
+                    source,
+                },
+                mismatch,
             });
         }
-        if let Some(parent) = path.parent() {
-            self.storage.create_dir_all(parent).await?;
-        }
-        self.storage.write_atomic(path, body.clone()).await?;
-        let sidecar = self.validators_path(&request.key);
-        if validators.etag.is_some() || validators.last_modified.is_some() {
-            let json = serde_json::to_vec(validators).unwrap_or_default();
-            self.storage
-                .write_atomic(&sidecar, Bytes::from(json))
-                .await?;
-        } else if let Err(error) = self.storage.remove_file(&sidecar).await
-            && !error.is_not_found()
-        {
-            return Err(error.into());
-        }
+        self.store(&request.key, path, body.clone(), &fresh).await?;
         Ok(Fetched {
             body,
             origin: Origin::Network,
             warning: None,
         })
+    }
+
+    async fn store(
+        &self,
+        key: &RelPath,
+        path: &Path,
+        body: Bytes,
+        validators: &Validators,
+    ) -> Result<(), CatalogError> {
+        if let Some(parent) = path.parent() {
+            self.storage.create_dir_all(parent).await?;
+        }
+        self.storage.write_atomic(path, body).await?;
+        let sidecar = self.validators_path(key);
+        if validators.is_empty() {
+            if let Err(error) = self.storage.remove_file(&sidecar).await
+                && !error.is_not_found()
+            {
+                return Err(error.into());
+            }
+        } else {
+            let json = serde_json::to_vec(validators).unwrap_or_default();
+            self.storage
+                .write_atomic(&sidecar, Bytes::from(json))
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+fn unverified_warning(url: &HttpUrl, expected: &FileHash, actual: &FileHash) -> Warning {
+    Warning {
+        op: None,
+        code: UNVERIFIED_MIRROR,
+        message: format!(
+            "using {url} from a trusted mirror although it does not match {expected} (got {actual})"
+        ),
     }
 }
 

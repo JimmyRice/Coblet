@@ -40,11 +40,12 @@ pub use accounts::{
     coblet_accounts_json, coblet_any_account_owns_game, coblet_bytes_free, coblet_download_texture,
 };
 pub use builder::{
-    CobletBuilder, coblet_builder_add_customizer, coblet_builder_add_mirror,
-    coblet_builder_add_platform_profile, coblet_builder_add_platform_profile_toml,
-    coblet_builder_add_url_rewriter, coblet_builder_add_version_manifest,
-    coblet_builder_allow_auth_changes, coblet_builder_build, coblet_builder_free,
-    coblet_builder_new, coblet_builder_set_encrypted_secret_file, coblet_builder_set_msa_client_id,
+    COBLET_MIRROR_TRUST_METADATA, CobletBuilder, coblet_builder_add_customizer,
+    coblet_builder_add_mirror, coblet_builder_add_platform_profile,
+    coblet_builder_add_platform_profile_toml, coblet_builder_add_url_rewriter,
+    coblet_builder_add_version_manifest, coblet_builder_allow_auth_changes, coblet_builder_build,
+    coblet_builder_free, coblet_builder_new, coblet_builder_set_encrypted_secret_file,
+    coblet_builder_set_mirror_fallback, coblet_builder_set_msa_client_id,
     coblet_builder_set_platform, coblet_builder_set_secret_store,
 };
 pub use context::{

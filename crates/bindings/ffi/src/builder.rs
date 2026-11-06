@@ -28,8 +28,13 @@ pub struct CobletBuilder {
     msa_client_id: Option<MsaClientId>,
     secrets: Secrets,
     rewriters: Vec<Arc<dyn coblet::runtime::UrlRewriter>>,
+    mirror_fallback: bool,
     version_sources: Vec<coblet::mojang::MojangVersions>,
 }
+
+/// Flag of `coblet_builder_add_mirror`: metadata documents from the mirror
+/// that do not match their hash are used when nothing else worked.
+pub const COBLET_MIRROR_TRUST_METADATA: u32 = 1;
 
 /// Where tokens are kept.
 enum Secrets {
@@ -113,6 +118,7 @@ pub unsafe extern "C" fn coblet_builder_new(
                 msa_client_id: None,
                 secrets: Secrets::Memory,
                 rewriters: Vec::new(),
+                mirror_fallback: true,
                 version_sources: Vec::new(),
             });
             put(out_builder, Box::into_raw(builder), "out_builder")?;
@@ -345,9 +351,19 @@ pub unsafe extern "C" fn coblet_builder_allow_auth_changes(
 /// and metadata such as the version manifest, in the order they were
 /// added, together with rewriters from `coblet_builder_add_url_rewriter`.
 /// Hashes are still checked, so a mirror cannot change content that is
-/// listed with a hash. Account and skin requests are not rewritten. A
-/// prefix that is not an HTTP or HTTPS address, or malformed `kinds`,
-/// fails with `COBLET_STATUS_INVALID_ARGUMENT`.
+/// listed with a hash; when the mirror fails or serves something that does
+/// not match, the original address is tried next (see
+/// `coblet_builder_set_mirror_fallback`). Account and skin requests are not
+/// rewritten.
+///
+/// `flags` is 0 or `COBLET_MIRROR_TRUST_METADATA`: then metadata documents
+/// from this mirror (version files, runtime manifests, Loader indexes)
+/// that do not match their hash are used when the original address fails
+/// too or fallback is off, with a `catalog.unverified-mirror` warning
+/// event. This suits mirrors that reformat JSON; downloaded files are
+/// always checked. A prefix that is not an HTTP or HTTPS address,
+/// malformed `kinds` or an unknown flag fails with
+/// `COBLET_STATUS_INVALID_ARGUMENT`.
 ///
 /// # Safety
 ///
@@ -360,12 +376,19 @@ pub unsafe extern "C" fn coblet_builder_add_mirror(
     from: *const c_char,
     to: *const c_char,
     kinds: *const c_char,
+    flags: u32,
     out_err: *mut *mut CobletError,
 ) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
         guard(out_err, || {
             let builder = builder_mut(builder)?;
+            if flags & !COBLET_MIRROR_TRUST_METADATA != 0 {
+                return Err(Failure::argument(
+                    "flags",
+                    &format!("unknown flags {flags:#x}"),
+                ));
+            }
             let kinds = if kinds.is_null() {
                 None
             } else {
@@ -377,13 +400,40 @@ pub unsafe extern "C" fn coblet_builder_add_mirror(
             if let Some(kinds) = parse_kinds(kinds)? {
                 rule = rule.for_kinds(kinds);
             }
+            if flags & COBLET_MIRROR_TRUST_METADATA != 0 {
+                rule = rule.trusting_metadata();
+            }
             builder.rewriters.push(Arc::new(rule));
             Ok(CobletStatus::Ok)
         })
     }
 }
 
-/// Adds a rewriter written in C, run in order with the mirror rules.
+/// Sets whether requests fall back to the original address when a mirror
+/// fails or serves something that does not match its hash; on by default.
+/// Turn it off when the original hosts must never be contacted.
+///
+/// # Safety
+///
+/// `builder` must be a live builder handle; `out_err` must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_builder_set_mirror_fallback(
+    builder: *mut CobletBuilder,
+    enabled: bool,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            builder_mut(builder)?.mirror_fallback = enabled;
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+/// Adds a rewriter written in C, run in order with the mirror rules. Its
+/// metadata is never used unverified.
 ///
 /// The library owns the table's `user_data` from this call on, even when
 /// it fails. A table without a `rewrite` callback fails with
@@ -585,6 +635,7 @@ pub unsafe extern "C" fn coblet_builder_build(
                 msa_client_id,
                 secrets,
                 rewriters,
+                mirror_fallback,
                 version_sources,
             } = *builder;
             let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -613,6 +664,7 @@ pub unsafe extern "C" fn coblet_builder_build(
             for rewriter in rewriters {
                 options = options.url_rewriter(rewriter);
             }
+            options = options.mirror_fallback(mirror_fallback);
             for source in version_sources {
                 options = options.version_source(Arc::new(source));
             }

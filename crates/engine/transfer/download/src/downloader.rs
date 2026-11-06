@@ -320,11 +320,22 @@ impl Downloader {
         Ok(())
     }
 
+    /// Lists the addresses to try: the rewritten ones in source order, then
+    /// the original addresses of those a rewriter changed.
     fn sources(&self, task: &DownloadTask) -> Vec<HttpUrl> {
-        task.sources
+        let routes: Vec<_> = task
+            .sources
             .iter()
-            .map(|url| self.rewriters.apply(url, &task.kind))
-            .collect()
+            .map(|url| self.rewriters.route(url, &task.kind))
+            .collect();
+        let mut sources: Vec<HttpUrl> = Vec::with_capacity(routes.len());
+        let fallbacks = routes.iter().filter_map(|route| route.fallback.as_ref());
+        for url in routes.iter().map(|route| &route.url).chain(fallbacks) {
+            if !sources.contains(url) {
+                sources.push(url.clone());
+            }
+        }
+        sources
     }
 
     async fn fetch(

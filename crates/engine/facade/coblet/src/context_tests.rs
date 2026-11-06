@@ -348,3 +348,22 @@ async fn added_version_sources_join_the_catalog() {
     );
     assert_eq!(coblet.latest_release().await.unwrap().id.as_str(), "26.3");
 }
+
+#[test]
+fn mirror_fallback_can_be_turned_off() {
+    let build = |fallback: bool| {
+        Coblet::builder()
+            .data_root("/tmp/coblet-fallback")
+            .transport(Arc::new(Fixtures))
+            .platform(Platform::new(OsFamily::MacOs, Arch::Aarch64))
+            .mirror_fallback(fallback)
+            .build()
+            .unwrap()
+    };
+    let on = build(true);
+    let off = build(false);
+    assert!(on.meta().rewriters().falls_back());
+    assert!(on.downloader().rewriters().falls_back());
+    assert!(!off.meta().rewriters().falls_back());
+    assert!(!off.downloader().rewriters().falls_back());
+}
