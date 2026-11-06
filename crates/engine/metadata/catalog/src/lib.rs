@@ -46,6 +46,7 @@ pub use error::CatalogError;
 pub use item::{CatalogItem, CatalogPage, CatalogQuery, Filter};
 pub use meta::{
     CachePolicy, DEFAULT_MAX_SIZE, Fetched, MetaCache, MetaRequest, OFFLINE_CACHE, Origin,
+    UNVERIFIED_MIRROR,
 };
 pub use source::{CatalogContext, CatalogSource};
 pub use timestamp::{Timestamp, TimestampError};
