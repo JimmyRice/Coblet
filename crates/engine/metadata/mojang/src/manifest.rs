@@ -390,5 +390,5 @@ pub async fn fetch_asset_index(
 }
 
 #[cfg(test)]
-#[path = "manifest_tests.rs"]
+#[path = "../tests/manifest.rs"]
 mod tests;

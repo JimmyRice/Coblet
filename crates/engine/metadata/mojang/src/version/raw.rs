@@ -352,5 +352,5 @@ pub struct LoggingFile {
 }
 
 #[cfg(test)]
-#[path = "raw_tests.rs"]
+#[path = "../../tests/version/raw.rs"]
 pub(crate) mod tests;

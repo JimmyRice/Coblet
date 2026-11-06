@@ -553,5 +553,5 @@ fn unverified_warning(url: &HttpUrl, expected: &FileHash, actual: &FileHash) -> 
 }
 
 #[cfg(test)]
-#[path = "meta_tests.rs"]
+#[path = "../tests/meta.rs"]
 mod tests;
