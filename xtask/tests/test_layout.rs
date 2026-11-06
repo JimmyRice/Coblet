@@ -23,6 +23,12 @@ mod outer {
 
 #[cfg(not(test))]
 mod release;
+
+#[cfg(all(test, unix))]
+mod unix_only {}
+
+#[cfg(all(unix, not(test)))]
+mod unix_release;
 "#;
     let found = test_modules(source).unwrap();
     let shape: Vec<_> = found
@@ -42,6 +48,7 @@ mod release;
             ("tests", Some("../tests/meta.rs"), false, false),
             ("mock", None, true, false),
             ("deep", None, false, true),
+            ("unix_only", None, true, false),
         ]
     );
     assert_eq!(

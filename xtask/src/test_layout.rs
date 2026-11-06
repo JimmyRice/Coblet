@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
+use proc_macro2::{TokenStream, TokenTree};
 use syn::spanned::Spanned;
 use syn::{Attribute, Expr, ExprLit, Item, ItemMod, Lit, Meta};
 
@@ -96,13 +97,31 @@ fn collect(items: &[Item], nested: bool, found: &mut Vec<TestModule>) {
     }
 }
 
+/// Reports whether a `#[cfg]` attribute requires `test`, such as `cfg(test)`
+/// or `cfg(all(test, unix))`; `test` under `not(..)` does not count.
 fn is_cfg_test(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        attr.path().is_ident("cfg")
-            && attr
-                .parse_args::<syn::Ident>()
-                .is_ok_and(|ident| ident == "test")
+    attrs.iter().any(|attr| match &attr.meta {
+        Meta::List(list) if list.path.is_ident("cfg") => mentions_test(list.tokens.clone()),
+        _ => false,
     })
+}
+
+fn mentions_test(tokens: TokenStream) -> bool {
+    let mut negated = false;
+    for token in tokens {
+        match token {
+            TokenTree::Ident(ident) if ident == "test" => return true,
+            TokenTree::Ident(ident) => negated = ident == "not",
+            TokenTree::Group(group) => {
+                if !negated && mentions_test(group.stream()) {
+                    return true;
+                }
+                negated = false;
+            }
+            TokenTree::Punct(_) | TokenTree::Literal(_) => negated = false,
+        }
+    }
+    false
 }
 
 fn path_attr(attrs: &[Attribute]) -> Option<String> {
