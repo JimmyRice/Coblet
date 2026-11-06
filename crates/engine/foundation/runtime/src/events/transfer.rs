@@ -140,7 +140,8 @@ impl TransferProgress {
 
     /// Runs `work` while publishing [`Event::Transfer`] for these counters,
     /// at most 30 times per second, and once more with the final totals
-    /// when the transfer had any files.
+    /// when the transfer had any files and the last event did not show
+    /// them already.
     ///
     /// Without `events`, or while nobody subscribes, it only runs `work`.
     pub async fn track<F: Future>(
@@ -153,12 +154,13 @@ impl TransferProgress {
         let Some(events) = events else {
             return work.await;
         };
+        let mut published = TransferSnapshot::default();
         let output = tokio::select! {
             output = work => output,
-            never = self.sample(events, op, kind) => match never {},
+            never = self.sample(events, op, kind, &mut published) => match never {},
         };
         let last = self.snapshot();
-        if last.files_total > 0 && events.has_subscribers() {
+        if last != published && last.files_total > 0 && events.has_subscribers() {
             events.publish(Event::Transfer {
                 op,
                 kind,
@@ -168,20 +170,25 @@ impl TransferProgress {
         output
     }
 
-    async fn sample(&self, events: &EventBus, op: OperationId, kind: TransferKind) -> Infallible {
+    async fn sample(
+        &self,
+        events: &EventBus,
+        op: OperationId,
+        kind: TransferKind,
+        published: &mut TransferSnapshot,
+    ) -> Infallible {
         let mut ticks = tokio::time::interval(DEFAULT_PROGRESS_INTERVAL);
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut published = TransferSnapshot::default();
         loop {
             ticks.tick().await;
             let now = self.snapshot();
-            if now != published && now.files_total > 0 && events.has_subscribers() {
+            if now != *published && now.files_total > 0 && events.has_subscribers() {
                 events.publish(Event::Transfer {
                     op,
                     kind,
                     progress: now,
                 });
-                published = now;
+                *published = now;
             }
         }
     }
