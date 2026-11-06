@@ -26,7 +26,7 @@ pub struct GameExit {
     pub exit: ProcessExit,
     /// Time from start to exit.
     pub duration: Duration,
-    /// Whether [`GameSession::kill`] ended the game.
+    /// Whether [`GameSession::kill`] or a [`GameKiller`] ended the game.
     pub killed: bool,
     /// Whether the game probably crashed: it was not killed and exited
     /// with an error or wrote a crash report.
@@ -42,9 +42,28 @@ pub struct GameSession {
     command: LaunchCommand,
     profile: EffectiveLaunchProfile,
     logs: Arc<LogBuffer>,
+    killer: GameKiller,
+    monitor: JoinHandle<Result<GameExit, LaunchError>>,
+}
+
+/// Kills a running game; cloning gives another handle to the same game.
+///
+/// [`GameSession::wait`] consumes the session, so a launcher that waits for
+/// the exit on one task takes a killer first to stop the game from another,
+/// such as a UI button.
+#[derive(Clone, Debug)]
+pub struct GameKiller {
     kill: KillHandle,
     killed: Arc<AtomicBool>,
-    monitor: JoinHandle<Result<GameExit, LaunchError>>,
+}
+
+impl GameKiller {
+    /// Kills the game and marks the exit as [`GameExit::killed`]. Calling it
+    /// after the game ended does nothing.
+    pub fn kill(&self) {
+        self.killed.store(true, Ordering::Release);
+        self.kill.kill();
+    }
 }
 
 impl std::fmt::Debug for GameSession {
@@ -269,8 +288,7 @@ impl GameSession {
             command,
             profile,
             logs,
-            kill,
-            killed,
+            killer: GameKiller { kill, killed },
             monitor: task,
         }
     }
@@ -315,8 +333,13 @@ impl GameSession {
 
     /// Kills the game. [`GameSession::wait`] still reports the exit.
     pub fn kill(&self) {
-        self.killed.store(true, Ordering::Release);
-        self.kill.kill();
+        self.killer.kill();
+    }
+
+    /// Returns a handle that kills the game, also while another task waits for it.
+    #[must_use]
+    pub fn killer(&self) -> GameKiller {
+        self.killer.clone()
     }
 
     /// Waits for the game to end and the post-exit command to finish.
