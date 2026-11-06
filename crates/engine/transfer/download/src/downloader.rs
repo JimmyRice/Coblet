@@ -573,5 +573,5 @@ impl std::fmt::Debug for Downloader {
 }
 
 #[cfg(test)]
-#[path = "downloader_tests.rs"]
+#[path = "../tests/downloader.rs"]
 mod tests;
