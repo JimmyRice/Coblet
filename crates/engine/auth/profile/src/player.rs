@@ -360,7 +360,6 @@ fn public_player(reply: &Reply) -> Result<PublicPlayer, PlayerError> {
     })
 }
 
-
 /// Moves texture URLs of `textures.minecraft.net` from HTTP to HTTPS.
 fn secure_texture(url: &HttpUrl) -> HttpUrl {
     url.as_str()

@@ -63,15 +63,19 @@ async fn offline_accounts_round_trip() {
 }
 
 #[tokio::test]
-async fn offline_accounts_have_no_online_appearance() {
+async fn offline_accounts_refresh_to_themselves() {
     let dir = tempfile::tempdir().unwrap();
     let coblet = builder(&dir).build().unwrap();
     let steve = coblet
         .add_offline_account("Steve".to_owned())
         .await
         .unwrap();
-    let error = coblet.appearance(steve.id).await.unwrap_err();
+    let error = coblet.reset_skin(steve.id.clone()).await.unwrap_err();
     assert_eq!(kind(&error), ErrorKind::Unsupported);
+    let unchanged = coblet.refresh_profile(steve.id.clone()).await.unwrap();
+    assert_eq!(unchanged, steve);
+    let bad = coblet.download_texture("not a url".to_owned()).await;
+    assert_eq!(kind(&bad.unwrap_err()), ErrorKind::InvalidArgument);
 }
 
 #[tokio::test]

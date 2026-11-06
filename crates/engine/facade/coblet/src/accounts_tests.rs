@@ -99,6 +99,7 @@ mod msa {
     #[derive(Default)]
     struct Services {
         tokens: Mutex<Vec<String>>,
+        urls: Mutex<Vec<String>>,
     }
 
     impl Transport for Services {
@@ -110,6 +111,10 @@ mod msa {
                 .map(|(_, value)| value.clone())
                 .unwrap_or_default();
             self.tokens.lock().unwrap().push(auth.clone());
+            self.urls
+                .lock()
+                .unwrap()
+                .push(request.url().as_str().to_owned());
             let ok = request.url().as_str() == PROFILE_URL && auth == "Bearer fresh";
             Box::pin(async move {
                 Ok(if ok {
@@ -205,7 +210,8 @@ mod msa {
         let account = coblet.finish_login(&id, flow).await.unwrap();
         assert_eq!(account.profile.as_ref().unwrap().capes.len(), 0);
 
-        let profile = coblet.appearance(&account.id).await.unwrap();
+        let refreshed = coblet.refresh_profile(&account.id).await.unwrap();
+        let profile = refreshed.profile.unwrap();
         assert_eq!(
             profile.active_cape().unwrap().alias.as_deref(),
             Some("Migrator")
@@ -242,5 +248,25 @@ mod msa {
             coblet.reset_skin(&steve.id).await,
             Err(Error::Player(PlayerError::Offline))
         ));
+        let unchanged = coblet.refresh_profile(&steve.id).await.unwrap();
+        assert_eq!(unchanged, steve);
+    }
+
+    #[tokio::test]
+    async fn textures_download_over_https() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = Arc::new(Services::default());
+        let coblet = builder(dir.path())
+            .transport(services.clone())
+            .build()
+            .unwrap();
+        let url =
+            coblet_runtime::HttpUrl::new("http://textures.minecraft.net/texture/abc").unwrap();
+        let error = coblet.download_texture(&url).await.unwrap_err();
+        assert!(matches!(error, Error::Player(_)), "{error}");
+        assert_eq!(
+            *services.urls.lock().unwrap(),
+            ["https://textures.minecraft.net/texture/abc"]
+        );
     }
 }

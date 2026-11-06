@@ -21,7 +21,8 @@ fn auth(error: coblet::auth::AuthError) -> CobletError {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl Coblet {
-    /// Lists the saved accounts.
+    /// Lists the saved accounts without network access. Player profiles
+    /// are snapshots; `refresh_profile` fetches the current one.
     ///
     /// # Errors
     ///
@@ -31,7 +32,7 @@ impl Coblet {
         Ok(accounts.iter().map(AccountInfo::from).collect())
     }
 
-    /// Returns one account.
+    /// Returns one account without network access; see `accounts`.
     ///
     /// # Errors
     ///
@@ -187,18 +188,41 @@ impl Coblet {
         Ok(Arc::new(LoginFlow::new(self.inner.clone(), method, flow)))
     }
 
-    /// Reads the account's skins and capes from Minecraft services and
-    /// saves them on the account.
+    /// Fetches the account's player profile (name, UUID, skins and capes)
+    /// from Minecraft services now, saves it and returns the updated
+    /// account.
+    ///
+    /// `accounts()` and `account()` return the snapshot saved at login,
+    /// token renewal and skin or cape changes, so a change made on
+    /// minecraft.net or in another launcher shows up only after this call.
+    /// Show the snapshot at once and call this in the background. It sends
+    /// one request with the current token; `refresh_account` renews the
+    /// tokens themselves. Offline accounts are returned unchanged.
     ///
     /// # Errors
     ///
-    /// Fails with `Unsupported` for offline accounts.
-    pub async fn appearance(&self, id: String) -> Result<PlayerInfo, CobletError> {
-        let profile = self.inner.appearance(&account_id(&id)?).await?;
-        Ok(PlayerInfo::from(&profile))
+    /// Fails with `Auth` when the user has to sign in again, `NoProfile`
+    /// for an account without a profile, and `Network` when the request
+    /// fails.
+    pub async fn refresh_profile(&self, id: String) -> Result<AccountInfo, CobletError> {
+        let account = self.inner.refresh_profile(&account_id(&id)?).await?;
+        Ok(AccountInfo::from(&account))
     }
 
-    /// Uploads a PNG skin, 64x64 or 64x32, and wears it.
+    /// Downloads a skin or cape texture, such as `SkinInfo.url`, as PNG
+    /// bytes, for example to draw the player's head.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `InvalidArgument` for a malformed URL and `Network` when
+    /// the download fails or is larger than 256 KiB.
+    pub async fn download_texture(&self, url: String) -> Result<Vec<u8>, CobletError> {
+        let url = HttpUrl::new(url).map_err(|error| invalid(&error))?;
+        Ok(self.inner.download_texture(&url).await?)
+    }
+
+    /// Uploads a PNG skin, 64x64 or 64x32, and wears it. Like the other
+    /// skin and cape calls it returns the new player profile and saves it.
     ///
     /// # Errors
     ///

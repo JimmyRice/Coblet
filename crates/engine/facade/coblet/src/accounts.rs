@@ -11,6 +11,10 @@ const MICROSOFT: &str = "coblet:microsoft";
 impl Coblet {
     /// Returns the account store: the accounts in `data_root/accounts.json`,
     /// the default account and the account chosen for each instance.
+    ///
+    /// Reading it needs no network. The player profile of each account is
+    /// the snapshot from its last login, token renewal or skin change; call
+    /// [`refresh_profile`](Self::refresh_profile) for the current one.
     #[must_use]
     pub fn accounts(&self) -> &AccountStore {
         &self.inner.accounts

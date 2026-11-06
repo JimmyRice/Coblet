@@ -27,11 +27,11 @@ mod secrets;
 mod types;
 
 pub use accounts::{
-    CobletSkinModel, coblet_account_add_offline, coblet_account_appearance_json,
-    coblet_account_assign, coblet_account_refresh, coblet_account_remove,
-    coblet_account_reset_skin, coblet_account_set_cape, coblet_account_set_default,
-    coblet_account_set_skin_model, coblet_account_upload_skin, coblet_account_upload_skin_url,
-    coblet_accounts_json,
+    CobletSkinModel, coblet_account_add_offline, coblet_account_assign, coblet_account_refresh,
+    coblet_account_refresh_profile, coblet_account_remove, coblet_account_reset_skin,
+    coblet_account_set_cape, coblet_account_set_default, coblet_account_set_skin_model,
+    coblet_account_upload_skin, coblet_account_upload_skin_url, coblet_accounts_json,
+    coblet_bytes_free, coblet_download_texture,
 };
 pub use builder::{
     CobletBuilder, coblet_builder_add_customizer, coblet_builder_add_platform_profile,
@@ -74,4 +74,6 @@ pub use secrets::{
     COBLET_SECRET_KEY_LEN, CobletSecretCall, CobletSecretStore, coblet_generate_secret_key,
     coblet_secret_call_fail, coblet_secret_call_set_value,
 };
-pub use types::{COBLET_ABI_VERSION, CobletError, CobletErrorKind, CobletStatus, CobletString};
+pub use types::{
+    COBLET_ABI_VERSION, CobletBytes, CobletError, CobletErrorKind, CobletStatus, CobletString,
+};

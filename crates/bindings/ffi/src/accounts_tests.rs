@@ -7,8 +7,9 @@ use std::sync::Mutex;
 use coblet::runtime::{Secret, SecretKey, SecretStore as _};
 
 use super::{
-    coblet_account_add_offline, coblet_account_appearance_json, coblet_account_assign,
-    coblet_account_remove, coblet_account_set_default, coblet_accounts_json,
+    coblet_account_add_offline, coblet_account_assign, coblet_account_refresh_profile,
+    coblet_account_remove, coblet_account_set_default, coblet_accounts_json, coblet_bytes_free,
+    coblet_download_texture,
 };
 use crate::builder::{
     coblet_builder_build, coblet_builder_new, coblet_builder_set_encrypted_secret_file,
@@ -20,7 +21,7 @@ use crate::secrets::{
     COBLET_SECRET_KEY_LEN, CobletSecretCall, CobletSecretStore, ForeignSecrets,
     coblet_generate_secret_key, coblet_secret_call_fail, coblet_secret_call_set_value,
 };
-use crate::types::{CobletError, CobletErrorKind, CobletStatus, CobletString};
+use crate::types::{CobletBytes, CobletError, CobletErrorKind, CobletStatus, CobletString};
 
 /// Takes an error out of `err`, returning its kind and message.
 fn take_error(err: *mut CobletError) -> (CobletErrorKind, String) {
@@ -119,9 +120,21 @@ fn offline_accounts_round_trip_through_json() {
 
     // SAFETY: as above.
     let status =
-        unsafe { coblet_account_appearance_json(coblet, id.as_ptr(), &raw mut out, &raw mut err) };
-    assert_eq!(status, CobletStatus::Error);
-    assert_eq!(take_error(err).0, CobletErrorKind::Unsupported);
+        unsafe { coblet_account_refresh_profile(coblet, id.as_ptr(), &raw mut out, &raw mut err) };
+    assert_eq!(status, CobletStatus::Ok);
+    let refreshed = json(&mut out);
+    assert_eq!(refreshed["id"], account["id"]);
+    assert_eq!(refreshed["player"]["name"], "Steve");
+
+    let mut png = CobletBytes::empty();
+    let bad_url = CString::new("not a url").unwrap();
+    // SAFETY: as above.
+    let status =
+        unsafe { coblet_download_texture(coblet, bad_url.as_ptr(), &raw mut png, &raw mut err) };
+    assert_eq!(status, CobletStatus::InvalidArgument);
+    take_error(err);
+    // SAFETY: an empty value owns nothing.
+    unsafe { coblet_bytes_free(png) };
 
     // SAFETY: as above.
     unsafe {

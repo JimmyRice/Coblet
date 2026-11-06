@@ -29,7 +29,7 @@
 #define COBLET_SECRET_KEY_LEN 32
 
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 7
+#define COBLET_ABI_VERSION 8
 
 // Result of a call.
 typedef enum CobletStatus {
@@ -202,6 +202,15 @@ typedef struct CobletError {
   struct CobletString message;
 } CobletError;
 
+// Bytes owned by the library, such as a PNG image. Free them with
+// `coblet_bytes_free`.
+typedef struct CobletBytes {
+  // The bytes, or NULL when there are none.
+  uint8_t *ptr;
+  // Number of bytes.
+  size_t len;
+} CobletBytes;
+
 // Callback table of a Platform Profile written in C.
 //
 // It adapts launches to a group of platforms, as TOML profiles do, but
@@ -334,6 +343,10 @@ extern "C" {
 // `slim`. `session_expires_at` is in Unix seconds or null. On success
 // `*out_json` receives a string to free with `coblet_string_free`.
 //
+// Reading the list needs no network. Each `player` is the snapshot from
+// the account's last login, token renewal or skin change;
+// `coblet_account_refresh_profile` fetches the current one.
+//
 // # Safety
 //
 // `coblet` must be a live handle; `out_json` must be writable; `out_err`
@@ -399,26 +412,56 @@ enum CobletStatus coblet_account_refresh(const struct Coblet *coblet,
                                          struct CobletString *out_json,
                                          struct CobletError **out_err);
 
-// Reads the account's skins and capes from Minecraft services as JSON:
-// the `player` object of `coblet_accounts_json` with a `schema` field.
-// Fails with `COBLET_ERROR_KIND_UNSUPPORTED` for offline accounts.
+// Fetches the account's player profile (name, UUID, skins and capes)
+// from Minecraft services now, saves it and returns the updated account
+// as JSON, in the account format of `coblet_accounts_json` with a
+// `schema` field.
+//
+// It sends one request with the current token, so a launcher can show the
+// snapshot from `coblet_accounts_json` at once and call this in the
+// background; `coblet_account_refresh` renews the tokens themselves.
+// Offline accounts are returned unchanged. Fails with
+// `COBLET_ERROR_KIND_AUTH` when the user has to sign in again and
+// `COBLET_ERROR_KIND_NO_PROFILE` for an account without a profile.
 //
 // # Safety
 //
 // `coblet` must be a live handle; `account_id` must be NULL or
 // NUL-terminated; `out_json` must be writable; `out_err` must be NULL or
 // writable.
-enum CobletStatus coblet_account_appearance_json(const struct Coblet *coblet,
+enum CobletStatus coblet_account_refresh_profile(const struct Coblet *coblet,
                                                  const char *account_id,
                                                  struct CobletString *out_json,
                                                  struct CobletError **out_err);
 
-// Uploads a PNG skin of 64x64 or 64x32 pixels, wears it and returns the
-// player as in `coblet_account_appearance_json`.
+// Downloads a skin or cape texture, such as a skin `url` from
+// `coblet_accounts_json`, as PNG bytes, for example to draw the player's
+// head. On success `*out_png` receives bytes to free with
+// `coblet_bytes_free`.
 //
 // # Safety
 //
-// As `coblet_account_appearance_json`; `png` must point to `len` readable bytes.
+// `coblet` must be a live handle; `url` must be NULL or NUL-terminated;
+// `out_png` must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_download_texture(const struct Coblet *coblet,
+                                          const char *url,
+                                          struct CobletBytes *out_png,
+                                          struct CobletError **out_err);
+
+// Frees bytes returned by the library; an empty value is ignored.
+//
+// # Safety
+//
+// `value` must come from this library and must not be freed twice.
+void coblet_bytes_free(struct CobletBytes value);
+
+// Uploads a PNG skin of 64x64 or 64x32 pixels, wears it and returns the
+// player as the `player` object of `coblet_accounts_json`
+// with a `schema` field.
+//
+// # Safety
+//
+// As `coblet_account_refresh_profile`; `png` must point to `len` readable bytes.
 enum CobletStatus coblet_account_upload_skin(const struct Coblet *coblet,
                                              const char *account_id,
                                              const uint8_t *png,
@@ -428,11 +471,12 @@ enum CobletStatus coblet_account_upload_skin(const struct Coblet *coblet,
                                              struct CobletError **out_err);
 
 // Wears the skin at a public URL, which Minecraft services download, and
-// returns the player as in `coblet_account_appearance_json`.
+// returns the player as the `player` object of `coblet_accounts_json`
+// with a `schema` field.
 //
 // # Safety
 //
-// As `coblet_account_appearance_json`; `url` must be NULL or NUL-terminated.
+// As `coblet_account_refresh_profile`; `url` must be NULL or NUL-terminated.
 enum CobletStatus coblet_account_upload_skin_url(const struct Coblet *coblet,
                                                  const char *account_id,
                                                  const char *url,
@@ -440,35 +484,36 @@ enum CobletStatus coblet_account_upload_skin_url(const struct Coblet *coblet,
                                                  struct CobletString *out_json,
                                                  struct CobletError **out_err);
 
-// Switches the arm width of the worn skin and returns the player as in
-// `coblet_account_appearance_json`.
+// Switches the arm width of the worn skin and returns the player as
+// the `player` object of `coblet_accounts_json` with a `schema` field.
 //
 // # Safety
 //
-// As `coblet_account_appearance_json`.
+// As `coblet_account_refresh_profile`.
 enum CobletStatus coblet_account_set_skin_model(const struct Coblet *coblet,
                                                 const char *account_id,
                                                 enum CobletSkinModel model,
                                                 struct CobletString *out_json,
                                                 struct CobletError **out_err);
 
-// Goes back to the default skin and returns the player as in
-// `coblet_account_appearance_json`.
+// Goes back to the default skin and returns the player as
+// the `player` object of `coblet_accounts_json` with a `schema` field.
 //
 // # Safety
 //
-// As `coblet_account_appearance_json`.
+// As `coblet_account_refresh_profile`.
 enum CobletStatus coblet_account_reset_skin(const struct Coblet *coblet,
                                             const char *account_id,
                                             struct CobletString *out_json,
                                             struct CobletError **out_err);
 
 // Shows an owned cape by ID, or hides the cape when `cape_id` is NULL,
-// and returns the player as in `coblet_account_appearance_json`.
+// and returns the player as the `player` object of `coblet_accounts_json`
+// with a `schema` field.
 //
 // # Safety
 //
-// As `coblet_account_appearance_json`; `cape_id` must be NULL or
+// As `coblet_account_refresh_profile`; `cape_id` must be NULL or
 // NUL-terminated.
 enum CobletStatus coblet_account_set_cape(const struct Coblet *coblet,
                                           const char *account_id,

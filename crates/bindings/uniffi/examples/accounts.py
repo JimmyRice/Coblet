@@ -1,6 +1,6 @@
 """Signs in to Microsoft through the coblet UniFFI bindings, shows the
-account's skins and capes, and launches a version online with it until a
-log message contains a marker.
+account's skins and capes, downloads the active skin, and launches a
+version online with it until a log message contains a marker.
 
 Tokens go to a Python SecretStore that keeps them in memory; a real
 launcher would back it with the system keychain.
@@ -55,11 +55,16 @@ async def main(data_root: str, version: str, marker: str, browser: bool) -> int:
     print(f"signed in: {account.id} {account.state} {account.player and account.player.name}")
     print(f"secrets kept: {sorted(key.rsplit('/', 1)[-1] for key in keychain.values)}")
 
-    player = await launcher.appearance(account.id)
+    account = await launcher.refresh_profile(account.id)
+    player = account.player
     for skin in player.skins:
         print(f"skin {'*' if skin.active else ' '} {skin.model} {skin.url}")
     for cape in player.capes:
         print(f"cape {'*' if cape.active else ' '} {cape.id} {cape.alias}")
+    active = next((skin for skin in player.skins if skin.active), None)
+    if active is not None:
+        png = await launcher.download_texture(active.url)
+        print(f"active skin texture: {len(png)} bytes")
 
     game = await launcher.launch_account(version, account.id, None, [])
     print(f"started pid {game.pid()}")
