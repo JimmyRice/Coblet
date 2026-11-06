@@ -59,8 +59,8 @@ pub use cancel::{CancellationToken, Cancelled, ensure_not_cancelled};
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use events::{
     AuthPrompt, DEFAULT_PROGRESS_INTERVAL, Event, EventBus, EventSubscription, GameLogLine,
-    LogLevel, LogSource, OperationOutcome, ProgressThrottle, Received, StepOutcome, Warning,
-    WarningCode,
+    LogLevel, LogSource, OperationOutcome, ProgressThrottle, Received, StepOutcome, TransferKind,
+    TransferProgress, TransferSnapshot, Warning, WarningCode,
 };
 pub use extension::{Extension, Registry, RegistryError};
 pub use future::BoxFuture;

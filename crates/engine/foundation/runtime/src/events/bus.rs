@@ -57,6 +57,13 @@ impl EventBus {
         let _ = self.sender.send(event);
     }
 
+    /// Reports whether anyone subscribes, so publishers can skip building
+    /// events nobody reads, such as a copy of every game log line.
+    #[must_use]
+    pub fn has_subscribers(&self) -> bool {
+        self.sender.receiver_count() > 0
+    }
+
     /// Starts receiving events published from now on.
     #[must_use]
     pub fn subscribe(&self) -> EventSubscription {

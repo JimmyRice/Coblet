@@ -149,6 +149,7 @@ async fn installs_a_runtime_and_selects_it() {
     let search = SearchPaths::default().with_runtimes(dir.path().join("runtimes"));
     let spawner = TokioSpawner::new();
     let os = OsFamily::MacOs;
+    let progress = coblet_runtime::TransferProgress::new();
     let cx = JavaContext {
         storage: storage.as_ref(),
         spawner: &spawner,
@@ -156,6 +157,7 @@ async fn installs_a_runtime_and_selects_it() {
         search: &search,
         installer: Some(&installer),
         catalog: &catalog,
+        progress: Some(&progress),
     };
     let cancel = CancellationToken::new();
 
@@ -177,6 +179,11 @@ async fn installs_a_runtime_and_selects_it() {
         std::fs::read_link(link).unwrap(),
         std::path::Path::new("java")
     );
+
+    let counted = progress.snapshot();
+    assert!(counted.files_total > 0, "{counted:?}");
+    assert_eq!(counted.files_done, counted.files_total);
+    assert_eq!(Some(counted.bytes_done), counted.bytes_total);
 
     // Second call finds the installed runtime without downloading.
     let requests = transport.requested.lock().unwrap().len();

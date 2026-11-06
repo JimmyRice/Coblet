@@ -153,20 +153,11 @@ impl OperationEvents {
             match self.inner.recv().await? {
                 Received::Missed(count) => return Some(Received::Missed(count)),
                 Received::Event(event) => {
-                    let op = match &event {
-                        Event::OperationStarted { op, .. }
-                        | Event::StepProgress { op, .. }
-                        | Event::StepFinished { op, .. } => Some(*op),
-                        Event::OperationFinished { op, .. } => {
-                            self.finished = *op == self.op;
-                            Some(*op)
-                        }
-                        Event::Warning(warning) => warning.op,
-                        Event::GameLog(_) | Event::AuthPrompt(_) => None,
-                    };
-                    if op == Some(self.op) {
-                        return Some(Received::Event(event));
+                    if event.op() != Some(self.op) {
+                        continue;
                     }
+                    self.finished = matches!(event, Event::OperationFinished { .. });
+                    return Some(Received::Event(event));
                 }
             }
         }
