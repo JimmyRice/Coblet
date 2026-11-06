@@ -236,13 +236,16 @@ impl Player {
         public_player(&reply)
     }
 
-    /// Downloads a texture such as a skin PNG.
+    /// Downloads a texture such as a skin or cape PNG.
+    ///
+    /// Minecraft services hand out texture URLs on
+    /// `http://textures.minecraft.net`; they are fetched over HTTPS instead.
     ///
     /// # Errors
     ///
     /// Returns an error when the download fails or is larger than 256 KiB.
     pub async fn download(&self, texture: &HttpUrl) -> Result<Vec<u8>, PlayerError> {
-        let request = Request::get(texture.clone());
+        let request = Request::get(secure_texture(texture));
         let limit = u64::try_from(crate::MAX_SKIN_BYTES).unwrap_or(u64::MAX);
         let reply = send(&self.transport, "texture", request, Some(limit)).await?;
         if !reply.is_success() {
@@ -355,6 +358,15 @@ fn public_player(reply: &Reply) -> Result<PublicPlayer, PlayerError> {
         model,
         cape: texture(textures.cape)?,
     })
+}
+
+
+/// Moves texture URLs of `textures.minecraft.net` from HTTP to HTTPS.
+fn secure_texture(url: &HttpUrl) -> HttpUrl {
+    url.as_str()
+        .strip_prefix("http://textures.minecraft.net/")
+        .and_then(|path| HttpUrl::new(format!("https://textures.minecraft.net/{path}")).ok())
+        .unwrap_or_else(|| url.clone())
 }
 
 #[cfg(test)]
