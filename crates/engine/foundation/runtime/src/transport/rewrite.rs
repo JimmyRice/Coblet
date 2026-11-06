@@ -276,5 +276,5 @@ impl fmt::Debug for UrlRewriters {
 }
 
 #[cfg(test)]
-#[path = "rewrite_tests.rs"]
+#[path = "../../tests/transport/rewrite.rs"]
 mod tests;

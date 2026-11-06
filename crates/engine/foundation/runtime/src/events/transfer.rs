@@ -195,5 +195,5 @@ impl TransferProgress {
 }
 
 #[cfg(test)]
-#[path = "transfer_tests.rs"]
+#[path = "../../tests/events/transfer.rs"]
 mod tests;
