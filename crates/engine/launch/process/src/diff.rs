@@ -250,5 +250,5 @@ pub(crate) fn record(
 }
 
 #[cfg(test)]
-#[path = "diff_tests.rs"]
+#[path = "../tests/diff.rs"]
 mod tests;

@@ -13,6 +13,7 @@ mod error;
 mod http;
 mod library;
 #[cfg(test)]
+#[path = "../tests/mock.rs"]
 mod mock;
 mod player;
 mod png;

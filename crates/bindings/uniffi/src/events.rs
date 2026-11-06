@@ -320,5 +320,5 @@ pub(crate) fn operation_id(id: &str) -> Result<OperationId, CobletError> {
 }
 
 #[cfg(test)]
-#[path = "events_tests.rs"]
+#[path = "../tests/events.rs"]
 mod tests;

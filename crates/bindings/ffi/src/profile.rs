@@ -921,5 +921,5 @@ impl coblet::platform::PlatformProfile for ForeignProfile {
 }
 
 #[cfg(test)]
-#[path = "profile_tests.rs"]
+#[path = "../tests/profile.rs"]
 mod tests;

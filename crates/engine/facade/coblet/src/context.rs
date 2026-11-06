@@ -139,5 +139,5 @@ impl Coblet {
 }
 
 #[cfg(test)]
-#[path = "context_tests.rs"]
+#[path = "../tests/context.rs"]
 mod tests;

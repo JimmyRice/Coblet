@@ -704,5 +704,5 @@ pub unsafe extern "C" fn coblet_builder_free(builder: *mut CobletBuilder) {
 }
 
 #[cfg(test)]
-#[path = "builder_tests.rs"]
+#[path = "../tests/builder.rs"]
 mod tests;

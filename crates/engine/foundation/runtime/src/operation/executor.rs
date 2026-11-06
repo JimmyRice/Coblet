@@ -476,5 +476,5 @@ impl std::fmt::Debug for Operations {
 }
 
 #[cfg(test)]
-#[path = "executor_tests.rs"]
+#[path = "../../tests/operation/executor.rs"]
 mod tests;

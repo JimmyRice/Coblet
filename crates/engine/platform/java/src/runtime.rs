@@ -382,5 +382,5 @@ pub async fn find_or_install(
 }
 
 #[cfg(test)]
-#[path = "runtime_tests.rs"]
+#[path = "../tests/runtime.rs"]
 mod tests;

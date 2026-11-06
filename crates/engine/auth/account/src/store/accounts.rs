@@ -657,5 +657,5 @@ fn merge(account: &mut Account, update: AccountUpdate, secrets: &AccountSecrets)
 }
 
 #[cfg(test)]
-#[path = "accounts_tests.rs"]
+#[path = "../../tests/store/accounts.rs"]
 mod tests;

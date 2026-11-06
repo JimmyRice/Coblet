@@ -303,5 +303,5 @@ pub unsafe extern "C" fn coblet_login_free(login: *mut CobletLogin) {
 }
 
 #[cfg(test)]
-#[path = "login_tests.rs"]
+#[path = "../tests/login.rs"]
 mod tests;

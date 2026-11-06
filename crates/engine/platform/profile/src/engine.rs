@@ -525,5 +525,5 @@ fn validate(
 }
 
 #[cfg(test)]
-#[path = "engine_tests.rs"]
+#[path = "../tests/engine.rs"]
 mod tests;

@@ -16,6 +16,18 @@ pub(crate) fn root() -> PathBuf {
 
 /// Lists every `.rs` file under `root`, skipping build output and hidden directories.
 pub(crate) fn rust_files(root: &Path) -> io::Result<Vec<PathBuf>> {
+    walk(root, |path| path.extension().is_some_and(|ext| ext == "rs"))
+}
+
+/// Lists every `Cargo.toml` under `root`, skipping build output and hidden directories.
+pub(crate) fn manifests(root: &Path) -> io::Result<Vec<PathBuf>> {
+    walk(root, |path| {
+        path.file_name().is_some_and(|name| name == "Cargo.toml")
+    })
+}
+
+/// Lists the files under `root` that `keep` accepts, sorted.
+fn walk(root: &Path, keep: impl Fn(&Path) -> bool) -> io::Result<Vec<PathBuf>> {
     let mut found = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
@@ -29,7 +41,7 @@ pub(crate) fn rust_files(root: &Path) -> io::Result<Vec<PathBuf>> {
                 if !name.starts_with('.') && !SKIPPED_DIRS.contains(&name.as_ref()) {
                     pending.push(path);
                 }
-            } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
+            } else if file_type.is_file() && keep(&path) {
                 found.push(path);
             }
         }

@@ -700,5 +700,5 @@ pub unsafe extern "C" fn coblet_account_set_cape(
 }
 
 #[cfg(test)]
-#[path = "accounts_tests.rs"]
+#[path = "../tests/accounts.rs"]
 mod tests;

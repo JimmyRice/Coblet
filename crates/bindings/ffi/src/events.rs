@@ -360,5 +360,5 @@ pub unsafe extern "C" fn coblet_events_free(events: *mut CobletEvents) {
 }
 
 #[cfg(test)]
-#[path = "events_tests.rs"]
+#[path = "../tests/events.rs"]
 mod tests;

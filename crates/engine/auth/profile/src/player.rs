@@ -369,5 +369,5 @@ fn secure_texture(url: &HttpUrl) -> HttpUrl {
 }
 
 #[cfg(test)]
-#[path = "player_tests.rs"]
+#[path = "../tests/player.rs"]
 mod tests;
