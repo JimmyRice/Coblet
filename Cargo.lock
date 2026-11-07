@@ -396,6 +396,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "coblet-loader"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "coblet-catalog",
+ "coblet-mojang",
+ "coblet-platform",
+ "coblet-runtime",
+ "coblet-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "coblet-mojang"
 version = "0.1.0"
 dependencies = [

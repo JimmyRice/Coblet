@@ -1,0 +1,27 @@
+[package]
+name = "coblet-loader"
+description = "Mod Loader extension point for coblet: the ModLoader trait, version listings, install recipes and the loader registry."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bytes.workspace = true
+coblet-catalog.workspace = true
+coblet-mojang.workspace = true
+coblet-platform.workspace = true
+coblet-runtime.workspace = true
+coblet-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+coblet-runtime = { workspace = true, features = ["fs"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+[lints]
+workspace = true
