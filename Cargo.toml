@@ -10,6 +10,7 @@ members = [
     "crates/engine/foundation/types",
     "crates/engine/launch/command",
     "crates/engine/launch/process",
+    "crates/engine/loaders/api",
     "crates/engine/metadata/catalog",
     "crates/engine/metadata/mojang",
     "crates/engine/platform/java",
@@ -36,6 +37,7 @@ coblet-platform = { path = "crates/engine/platform/profile" }
 coblet-java = { path = "crates/engine/platform/java" }
 coblet-launch-command = { path = "crates/engine/launch/command" }
 coblet-launch = { path = "crates/engine/launch/process" }
+coblet-loader = { path = "crates/engine/loaders/api" }
 coblet = { path = "crates/engine/facade/coblet", default-features = false }
 coblet-download = { path = "crates/engine/transfer/download" }
 

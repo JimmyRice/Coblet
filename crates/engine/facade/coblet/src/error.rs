@@ -32,6 +32,10 @@ pub enum Error {
     #[cfg(feature = "launch")]
     #[error(transparent)]
     Launch(#[from] coblet_launch::LaunchError),
+    /// A Mod Loader call failed.
+    #[cfg(feature = "loaders")]
+    #[error(transparent)]
+    Loader(#[from] coblet_loader::LoaderError),
     /// The feature is not available in this setup, such as Microsoft login
     /// without a Client ID.
     #[error("{0}")]

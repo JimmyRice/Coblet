@@ -5,7 +5,7 @@ use coblet::platform::ProfileError;
 use coblet::player::PlayerError;
 
 /// Version of the C ABI; it grows with every incompatible change.
-pub const COBLET_ABI_VERSION: u32 = 11;
+pub const COBLET_ABI_VERSION: u32 = 12;
 
 /// Result of a call.
 #[repr(C)]
@@ -207,10 +207,13 @@ impl From<coblet::Error> for Failure {
             coblet::Error::Transport(_) | coblet::Error::Catalog(_) => CobletErrorKind::Network,
             coblet::Error::UnknownVersion(_) => CobletErrorKind::NotFound,
             coblet::Error::Profile(ProfileError::Failed { .. }) => CobletErrorKind::Other,
-            coblet::Error::Profile(_) | coblet::Error::Unsupported(_) => {
+            coblet::Error::Profile(_)
+            | coblet::Error::Unsupported(_)
+            | coblet::Error::Launch(coblet::launch::LaunchError::Unsupported(_)) => {
                 CobletErrorKind::Unsupported
             }
             coblet::Error::Launch(_) => CobletErrorKind::Launch,
+            coblet::Error::Loader(error) => loader_kind(error),
             coblet::Error::Auth(error) => auth_kind(error),
             coblet::Error::Player(error) => player_kind(error),
             _ => CobletErrorKind::Other,
@@ -222,6 +225,18 @@ impl From<coblet::Error> for Failure {
 impl From<AuthError> for Failure {
     fn from(error: AuthError) -> Self {
         Self::from(coblet::Error::Auth(error))
+    }
+}
+
+fn loader_kind(error: &coblet::loader::LoaderError) -> CobletErrorKind {
+    use coblet::loader::LoaderError;
+    match error {
+        LoaderError::UnknownLoader(_) | LoaderError::UnknownVersion { .. } => {
+            CobletErrorKind::NotFound
+        }
+        LoaderError::InvalidDefinition { .. } => CobletErrorKind::InvalidArgument,
+        LoaderError::Catalog(_) => CobletErrorKind::Network,
+        _ => CobletErrorKind::Other,
     }
 }
 

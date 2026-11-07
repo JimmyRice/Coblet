@@ -49,8 +49,29 @@ pub struct CobletBuilder<State> {
     profile_engine: Option<coblet_platform::ProfileEngine>,
     #[cfg(feature = "launch")]
     platform_profiles: Vec<Arc<dyn coblet_platform::PlatformProfile>>,
+    #[cfg(feature = "loaders")]
+    loaders: LoaderSettings,
     auth: AuthSettings,
     state: PhantomData<State>,
+}
+
+/// Mod Loader changes collected by the builder, applied in order by [`CobletBuilder::build`].
+#[cfg(feature = "loaders")]
+#[derive(Default)]
+struct LoaderSettings {
+    changes: Vec<LoaderChange>,
+    /// The first data definition that failed to parse.
+    error: Option<coblet_loader::LoaderError>,
+}
+
+#[cfg(feature = "loaders")]
+enum LoaderChange {
+    Register(Arc<dyn coblet_loader::ModLoader>),
+    Replace(Arc<dyn coblet_loader::ModLoader>),
+    Source(
+        coblet_types::ExtensionId,
+        Arc<dyn coblet_catalog::CatalogSource<coblet_loader::LoaderVersion>>,
+    ),
 }
 
 /// Version catalog settings collected by the builder.
@@ -104,6 +125,8 @@ impl Coblet {
             profile_engine: None,
             #[cfg(feature = "launch")]
             platform_profiles: Vec::new(),
+            #[cfg(feature = "loaders")]
+            loaders: LoaderSettings::default(),
             auth: AuthSettings::default(),
             state: PhantomData,
         }
@@ -136,6 +159,8 @@ impl CobletBuilder<NoRoot> {
             profile_engine: self.profile_engine,
             #[cfg(feature = "launch")]
             platform_profiles: self.platform_profiles,
+            #[cfg(feature = "loaders")]
+            loaders: self.loaders,
             auth: self.auth,
             state: PhantomData,
         }
@@ -407,6 +432,97 @@ impl<State> CobletBuilder<State> {
         self.auth_grants.push(id);
         self
     }
+
+    /// Registers a Mod Loader written as code.
+    ///
+    /// Built-in and third-party loaders are registered the same way;
+    /// [`build`](CobletBuilder::build) fails when two share an ID. Use
+    /// [`replace_loader`](Self::replace_loader) to swap one on purpose.
+    #[cfg(feature = "loaders")]
+    pub fn loader(mut self, loader: Arc<dyn coblet_loader::ModLoader>) -> Self {
+        self.loaders.changes.push(LoaderChange::Register(loader));
+        self
+    }
+
+    /// Puts a Mod Loader in place of the one registered under the same ID,
+    /// such as a patched copy of a built-in loader; registers it when the ID is free.
+    #[cfg(feature = "loaders")]
+    pub fn replace_loader(mut self, loader: Arc<dyn coblet_loader::ModLoader>) -> Self {
+        self.loaders.changes.push(LoaderChange::Replace(loader));
+        self
+    }
+
+    /// Registers a Mod Loader described in TOML, in the format of
+    /// [`DataLoader`](coblet_loader::DataLoader); [`build`](CobletBuilder::build)
+    /// reports a malformed definition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// use coblet::Coblet;
+    /// use coblet::runtime::UserAgent;
+    ///
+    /// let coblet = Coblet::builder()
+    ///     .data_root("/path/to/launcher-data")
+    ///     .user_agent(UserAgent::new("MyLauncher/1.0 (contact@example.com)")?)
+    ///     .loader_toml(r#"
+    ///         id = "acme:loader"
+    ///         name = "Acme Loader"
+    ///         uid = "net.acme.loader"
+    ///         [versions]
+    ///         format = "json"
+    ///         url = "https://meta.acme.net/versions/{game}"
+    ///         id = "/version"
+    ///         stable = "/stable"
+    ///         [profile]
+    ///         format = "version-json"
+    ///         url = "https://meta.acme.net/versions/{game}/{version}/profile"
+    ///     "#)
+    ///     .build()?;
+    /// assert!(coblet.loaders().get(&"acme:loader".parse()?).is_some());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "loaders")]
+    pub fn loader_toml(self, definition: &str) -> Self {
+        self.data_loader(coblet_loader::DataLoader::from_toml(definition))
+    }
+
+    /// Registers a Mod Loader described in JSON, with the keys of the TOML
+    /// form of [`loader_toml`](Self::loader_toml).
+    #[cfg(feature = "loaders")]
+    pub fn loader_json(self, definition: &str) -> Self {
+        self.data_loader(coblet_loader::DataLoader::from_json(definition))
+    }
+
+    #[cfg(feature = "loaders")]
+    fn data_loader(
+        mut self,
+        parsed: Result<coblet_loader::DataLoader, coblet_loader::LoaderError>,
+    ) -> Self {
+        match parsed {
+            Ok(loader) => self.loader(Arc::new(loader)),
+            Err(error) => {
+                self.loaders.error.get_or_insert(error);
+                self
+            }
+        }
+    }
+
+    /// Adds a version source for a Mod Loader, asked after the loader itself,
+    /// such as a mirror listing or Prism's metadata server.
+    /// [`build`](CobletBuilder::build) fails when no loader has the ID.
+    #[cfg(feature = "loaders")]
+    pub fn loader_version_source(
+        mut self,
+        loader: coblet_types::ExtensionId,
+        source: Arc<dyn coblet_catalog::CatalogSource<coblet_loader::LoaderVersion>>,
+    ) -> Self {
+        self.loaders
+            .changes
+            .push(LoaderChange::Source(loader, source));
+        self
+    }
 }
 
 impl CobletBuilder<WithRoot> {
@@ -432,6 +548,32 @@ impl CobletBuilder<WithRoot> {
             store.register(method)?;
         }
         Ok(store)
+    }
+
+    #[cfg(feature = "loaders")]
+    fn loader_registry(&mut self) -> Result<coblet_loader::LoaderRegistry, Error> {
+        let settings = std::mem::take(&mut self.loaders);
+        if let Some(error) = settings.error {
+            return Err(error.into());
+        }
+        let mut registry = coblet_loader::LoaderRegistry::new();
+        let mut sources = Vec::new();
+        for change in settings.changes {
+            match change {
+                LoaderChange::Register(loader) => registry.register(loader)?,
+                LoaderChange::Replace(loader) => {
+                    registry.replace(loader);
+                }
+                LoaderChange::Source(id, source) => sources.push((id, source)),
+            }
+        }
+        for (id, source) in sources {
+            if registry.get(&id).is_none() {
+                return Err(coblet_loader::LoaderError::UnknownLoader(id).into());
+            }
+            registry.add_version_source(id, source);
+        }
+        Ok(registry)
     }
 
     fn transport_or_default(&mut self) -> Result<Arc<dyn Transport>, Error> {
@@ -460,9 +602,14 @@ impl CobletBuilder<WithRoot> {
     /// [`Error::Platform`] when the platform cannot be detected and
     /// [`Error::Registry`] when two customizers or two auth methods share an ID,
     /// [`Error::Launch`] when [`allow_auth_changes`](CobletBuilder::allow_auth_changes)
-    /// names a customizer that is not registered and [`Error::Profile`]
-    /// when two Platform Profiles share an ID.
+    /// names a customizer that is not registered, [`Error::Profile`]
+    /// when two Platform Profiles share an ID, and, with the `loaders`
+    /// feature, [`Error::Registry`] when two Mod Loaders share an ID and
+    /// [`Error::Loader`] for a malformed loader definition or a version
+    /// source for a loader that is not registered.
     pub fn build(mut self) -> Result<Coblet, Error> {
+        #[cfg(feature = "loaders")]
+        let loaders = self.loader_registry()?;
         #[cfg(feature = "launch")]
         let profiles = {
             let mut engine = self
@@ -547,6 +694,10 @@ impl CobletBuilder<WithRoot> {
             launcher,
             #[cfg(feature = "launch")]
             profiles,
+            #[cfg(feature = "loaders")]
+            loaders,
+            #[cfg(feature = "loaders")]
+            loader_catalogs: std::sync::Mutex::default(),
             data_root,
             transport,
             storage,

@@ -17,6 +17,8 @@
 #![forbid(unsafe_code)]
 
 mod builtin;
+mod component;
+mod compose;
 mod data;
 mod edit;
 mod effective;
@@ -26,6 +28,7 @@ mod pattern;
 mod profile;
 mod resolved;
 
+pub use component::{Agent, Component, ComponentPatch, Requirement};
 pub use data::DataProfile;
 pub use edit::{DetachedDraft, NativesSource, ProfileEdit};
 pub use effective::{

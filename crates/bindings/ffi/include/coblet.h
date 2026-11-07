@@ -32,11 +32,15 @@
 // Length of an operation ID buffer: 36 characters and a NUL.
 #define COBLET_OPERATION_ID_LEN 37
 
+// Flag of `coblet_builder_add_loader` and its data forms: put the loader in
+// place of the one registered under the same ID instead of failing.
+#define COBLET_LOADER_REPLACE 1
+
 // Size in bytes of a key for `coblet_builder_set_encrypted_secret_file`.
 #define COBLET_SECRET_KEY_LEN 32
 
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 11
+#define COBLET_ABI_VERSION 12
 
 // Result of a call.
 typedef enum CobletStatus {
@@ -222,6 +226,9 @@ typedef struct CobletEvents CobletEvents;
 // `coblet_game_next_log`. Only `coblet_game_free` needs the handle to
 // itself.
 typedef struct CobletGame CobletGame;
+
+// One running Mod Loader callback: its requests and its answer.
+typedef struct CobletLoaderCtx CobletLoaderCtx;
 
 // Microsoft login in progress, from `coblet_login_begin`.
 typedef struct CobletLogin CobletLogin;
@@ -448,6 +455,45 @@ typedef struct CobletGameExit {
   // Run time in milliseconds.
   uint64_t duration_ms;
 } CobletGameExit;
+
+// Callback table of a Mod Loader written in C.
+//
+// `id`, `name` and `component_uid` are copied when the table is added.
+// Both callbacks run on a library worker thread where blocking is fine,
+// and get a `CobletLoaderCtx` handle, valid only during the call: they
+// fetch documents with `coblet_loader_ctx_fetch`, which goes through the
+// metadata cache and the mirror rules, hand their answer over with
+// `coblet_loader_ctx_set_result` and return true, or give a reason with
+// `coblet_loader_ctx_fail` and return false.
+//
+// `versions` answers with a JSON array of versions, each
+// `{"id","game","type","released","recommended","data"}` where only `id`
+// is required: `type` defaults to `release`, `released` is RFC 3339 and
+// `data` is an object kept for `install`. `install` gets one such version
+// as JSON and answers with the install recipe, `{"components":[...]}` in
+// the Prism / MultiMC component format, the loader's own component among
+// them. The library owns `user_data` from the call that receives the
+// table, even when it fails, and calls `free` once when the `Coblet` is
+// freed.
+typedef struct CobletModLoader {
+  // Passed to every callback.
+  void *user_data;
+  // Namespaced ID, such as `acme:loader`.
+  const char *id;
+  // Name shown to users.
+  const char *name;
+  // UID of the component the loader installs, such as `net.acme.loader`.
+  const char *component_uid;
+  // Lists versions for the game version `game`. Returns false on failure.
+  bool (*versions)(void *user_data, struct CobletLoaderCtx *ctx, const char *game);
+  // Gives the install recipe of `version_json` for `game`. Returns false on failure.
+  bool (*install)(void *user_data,
+                  struct CobletLoaderCtx *ctx,
+                  const char *game,
+                  const char *version_json);
+  // Releases `user_data`; may be NULL.
+  void (*free)(void *user_data);
+} CobletModLoader;
 
 #ifdef __cplusplus
 extern "C" {
@@ -1232,6 +1278,33 @@ enum CobletStatus coblet_launch_customized(const struct Coblet *coblet,
                                            struct CobletGame **out_game,
                                            struct CobletError **out_err);
 
+// Starts a version like `coblet_launch_customized` with a Mod Loader
+// version on top: the loader's install recipe is resolved with the game
+// version, its files are downloaded and the game starts with its main
+// class and arguments.
+//
+// `loader` and `loader_version` are both NULL, for the plain game, or
+// both set. Unknown loaders and versions fail with
+// `COBLET_ERROR_KIND_NOT_FOUND`, unmet component requirements with
+// `COBLET_ERROR_KIND_UNSUPPORTED`.
+//
+// # Safety
+//
+// As `coblet_launch_customized`; `loader` and `loader_version` must be
+// NULL or NUL-terminated.
+enum CobletStatus coblet_launch_loader(const struct Coblet *coblet,
+                                       const char *version_id,
+                                       const char *loader,
+                                       const char *loader_version,
+                                       const char *player_name,
+                                       enum CobletLaunchMode mode,
+                                       const char *game_dir,
+                                       const char *const *customizers,
+                                       size_t count,
+                                       const char *operation_id,
+                                       struct CobletGame **out_game,
+                                       struct CobletError **out_err);
+
 // Starts a version with a saved account, renewing its tokens first when
 // needed, and runs the customizers listed in `customizers`, in order.
 //
@@ -1331,6 +1404,156 @@ enum CobletStatus coblet_game_wait(const struct CobletGame *game,
 //
 // `game` must be NULL or a handle from `coblet_launch` that is not used afterwards.
 void coblet_game_free(struct CobletGame *game);
+
+// Fetches a document for the running Mod Loader callback and caches it
+// under `cache_name`, a relative path such as `versions/1.20.1.json`;
+// blocks until it is there.
+//
+// The request goes through the metadata cache as Mod Loader metadata, so
+// mirror rules and fallback apply. On success `*out_body` receives bytes
+// to free with `coblet_bytes_free`. An address that is not HTTP or HTTPS
+// or an unsafe cache name fails with `COBLET_ERROR_KIND_OTHER`, a document
+// that is unavailable and not cached with `COBLET_ERROR_KIND_NETWORK`.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback, used on that
+// callback's thread; strings must be NULL or NUL-terminated; `out_body`
+// must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_loader_ctx_fetch(struct CobletLoaderCtx *ctx,
+                                          const char *url,
+                                          const char *cache_name,
+                                          struct CobletBytes *out_body,
+                                          struct CobletError **out_err);
+
+// Hands the answer of the running Mod Loader callback to the library,
+// which copies it: the JSON array of versions or the recipe.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `json` must be
+// NULL or NUL-terminated.
+enum CobletStatus coblet_loader_ctx_set_result(struct CobletLoaderCtx *ctx, const char *json);
+
+// Gives the reason the running Mod Loader callback is about to return false.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `message` must
+// be NULL or NUL-terminated.
+enum CobletStatus coblet_loader_ctx_fail(struct CobletLoaderCtx *ctx, const char *message);
+
+// Registers a Mod Loader written in C.
+//
+// `flags` is 0 or `COBLET_LOADER_REPLACE`, which puts the loader in place
+// of the one registered under the same ID, such as a patched copy of a
+// built-in loader. The library owns the table's `user_data` from this call
+// on, even when it fails. A table without both callbacks, a malformed ID,
+// an ID already registered without the flag or an unknown flag fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; the table's strings must be
+// NULL or NUL-terminated and its callbacks must stay valid until its
+// `free` runs; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_loader(struct CobletBuilder *builder,
+                                            struct CobletModLoader loader,
+                                            uint32_t flags,
+                                            struct CobletError **out_err);
+
+// Registers a Mod Loader described in TOML: where its versions are listed
+// and how a version becomes components, in the format of coblet's data
+// loaders. `flags` is as for `coblet_builder_add_loader`; a malformed
+// definition fails with `COBLET_STATUS_INVALID_ARGUMENT`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `definition` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_loader_toml(struct CobletBuilder *builder,
+                                                 const char *definition,
+                                                 uint32_t flags,
+                                                 struct CobletError **out_err);
+
+// Registers a Mod Loader described in JSON, with the keys of the TOML form
+// of `coblet_builder_add_loader_toml`.
+//
+// # Safety
+//
+// As `coblet_builder_add_loader_toml`.
+enum CobletStatus coblet_builder_add_loader_json(struct CobletBuilder *builder,
+                                                 const char *definition,
+                                                 uint32_t flags,
+                                                 struct CobletError **out_err);
+
+// Lists the Mod Loaders as JSON: `{"schema":1,"loaders":[{"id","name",
+// "component_uid"}]}`. On success `*out_json` receives a string to free
+// with `coblet_string_free`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `out_json` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_loaders_json(const struct Coblet *coblet,
+                                      struct CobletString *out_json,
+                                      struct CobletError **out_err);
+
+// Lists the versions of a Mod Loader for a game version as JSON:
+// `{"schema":1,"versions":[{"id","game","type","released","recommended",
+// "data"}],"preselect"}`, where `preselect` is the ID to preselect (the
+// recommended version, otherwise the newest release) or null. On success
+// `*out_json` receives a string to free with `coblet_string_free`. An
+// unknown loader fails with `COBLET_ERROR_KIND_NOT_FOUND`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; strings must be NULL or NUL-terminated;
+// `out_json` must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_loader_versions_json(const struct Coblet *coblet,
+                                              const char *loader,
+                                              const char *game,
+                                              struct CobletString *out_json,
+                                              struct CobletError **out_err);
+
+// Returns the install recipe of a Mod Loader version as JSON:
+// `{"schema":1,"components":[...]}` in the Prism / MultiMC component
+// format. On success `*out_json` receives a string to free with
+// `coblet_string_free`. An unknown loader or version fails with
+// `COBLET_ERROR_KIND_NOT_FOUND`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; strings must be NULL or NUL-terminated;
+// `out_json` must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_loader_recipe_json(const struct Coblet *coblet,
+                                            const char *loader,
+                                            const char *game,
+                                            const char *version,
+                                            struct CobletString *out_json,
+                                            struct CobletError **out_err);
+
+// Resolves a version for this platform, with a Mod Loader version on top
+// when `loader` is given, without downloading or starting anything, and
+// returns what the launch would run as JSON: `{"schema":1,"main_class",
+// "classpath":[maven coordinates],"jvm_args":[],"game_args":[],
+// "java_major","report"}`, arguments with their `${...}` placeholders.
+//
+// `loader` and `loader_version` are both NULL or both set. On success
+// `*out_json` receives a string to free with `coblet_string_free`.
+// Unmet component requirements fail with `COBLET_ERROR_KIND_UNSUPPORTED`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; strings must be NULL or NUL-terminated
+// (`version_id` not NULL); `out_json` must be writable; `out_err` must be
+// NULL or writable.
+enum CobletStatus coblet_plan_launch_json(const struct Coblet *coblet,
+                                          const char *version_id,
+                                          const char *loader,
+                                          const char *loader_version,
+                                          struct CobletString *out_json,
+                                          struct CobletError **out_err);
 
 // Starts a Microsoft login.
 //

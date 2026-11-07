@@ -6,12 +6,13 @@ use coblet::runtime::{Extension, UserAgent};
 use coblet::types::{ExtensionId, Platform};
 
 use crate::customize::ForeignCustomizer;
+use crate::loaders::ForeignLoader;
 use crate::profile::ForeignProfile;
 use crate::secrets::{ForeignSecrets, encryption_key};
 use crate::sources::ForeignRewriter;
 use crate::{
-    ArtifactKind, Coblet, CobletError, ErrorKind, LaunchCustomizer, PlatformInfo, PlatformProfile,
-    SecretStore, UrlRewriter,
+    ArtifactKind, Coblet, CobletError, ErrorKind, LaunchCustomizer, ModLoader, PlatformInfo,
+    PlatformProfile, SecretStore, UrlRewriter,
 };
 
 /// Where tokens are kept.
@@ -33,6 +34,7 @@ struct Settings {
     rewriters: Vec<Arc<dyn coblet::runtime::UrlRewriter>>,
     mirror_fallback: bool,
     version_sources: Vec<coblet::mojang::MojangVersions>,
+    loaders: Vec<(Arc<dyn coblet::loader::ModLoader>, bool)>,
 }
 
 /// Settings of a [`Coblet`] before it is built: Platform Profiles, launch
@@ -76,6 +78,36 @@ impl CobletBuilder {
         })
     }
 
+    /// Adds a Mod Loader; `replace` puts it in place of one with the same ID.
+    fn add_mod_loader(
+        &self,
+        loader: Arc<dyn coblet::loader::ModLoader>,
+        replace: bool,
+    ) -> Result<(), CobletError> {
+        self.with(|settings| {
+            let taken = settings
+                .loaders
+                .iter()
+                .any(|(known, replaces)| !*replaces && known.id() == loader.id());
+            if taken && !replace {
+                return Err(invalid(format!(
+                    "mod loader `{}` is already registered",
+                    loader.id()
+                )));
+            }
+            settings.loaders.push((loader, replace));
+            Ok(())
+        })
+    }
+
+    fn data_loader(
+        parsed: Result<coblet::loader::DataLoader, coblet::loader::LoaderError>,
+    ) -> Result<Arc<dyn coblet::loader::ModLoader>, CobletError> {
+        Ok(Arc::new(
+            parsed.map_err(|error| invalid(error.to_string()))?,
+        ))
+    }
+
     fn with<T>(
         &self,
         body: impl FnOnce(&mut Settings) -> Result<T, CobletError>,
@@ -114,6 +146,7 @@ impl CobletBuilder {
                 rewriters: Vec::new(),
                 mirror_fallback: true,
                 version_sources: Vec::new(),
+                loaders: Vec::new(),
             })),
         }))
     }
@@ -360,6 +393,73 @@ impl CobletBuilder {
         })
     }
 
+    /// Registers a Mod Loader written in this language.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID, an ID that is already registered, and
+    /// after `build`.
+    pub fn add_loader(&self, loader: Arc<dyn ModLoader>) -> Result<(), CobletError> {
+        self.add_mod_loader(Arc::new(ForeignLoader::new(loader)?), false)
+    }
+
+    /// Puts a Mod Loader written in this language in place of the one
+    /// registered under the same ID, such as a patched copy of a built-in
+    /// loader; registers it when the ID is free.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`.
+    pub fn replace_loader(&self, loader: Arc<dyn ModLoader>) -> Result<(), CobletError> {
+        self.add_mod_loader(Arc::new(ForeignLoader::new(loader)?), true)
+    }
+
+    /// Registers a Mod Loader described in TOML: where its versions are
+    /// listed and how a version becomes components, in the format of
+    /// coblet's data loaders.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed definition, an ID that is already registered,
+    /// and after `build`.
+    pub fn add_loader_toml(&self, definition: &str) -> Result<(), CobletError> {
+        let loader = Self::data_loader(coblet::loader::DataLoader::from_toml(definition))?;
+        self.add_mod_loader(loader, false)
+    }
+
+    /// Registers a Mod Loader described in JSON, with the keys of the TOML
+    /// form of [`add_loader_toml`](Self::add_loader_toml).
+    ///
+    /// # Errors
+    ///
+    /// Fails like [`add_loader_toml`](Self::add_loader_toml).
+    pub fn add_loader_json(&self, definition: &str) -> Result<(), CobletError> {
+        let loader = Self::data_loader(coblet::loader::DataLoader::from_json(definition))?;
+        self.add_mod_loader(loader, false)
+    }
+
+    /// Puts a Mod Loader described in TOML in place of the one registered
+    /// under the same ID; registers it when the ID is free.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed definition and after `build`.
+    pub fn replace_loader_toml(&self, definition: &str) -> Result<(), CobletError> {
+        let loader = Self::data_loader(coblet::loader::DataLoader::from_toml(definition))?;
+        self.add_mod_loader(loader, true)
+    }
+
+    /// Puts a Mod Loader described in JSON in place of the one registered
+    /// under the same ID; registers it when the ID is free.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed definition and after `build`.
+    pub fn replace_loader_json(&self, definition: &str) -> Result<(), CobletError> {
+        let loader = Self::data_loader(coblet::loader::DataLoader::from_json(definition))?;
+        self.add_mod_loader(loader, true)
+    }
+
     /// Creates the `Coblet`.
     ///
     /// # Errors
@@ -398,6 +498,13 @@ impl CobletBuilder {
         builder = builder.mirror_fallback(settings.mirror_fallback);
         for source in settings.version_sources {
             builder = builder.version_source(Arc::new(source));
+        }
+        for (loader, replace) in settings.loaders {
+            builder = if replace {
+                builder.replace_loader(loader)
+            } else {
+                builder.loader(loader)
+            };
         }
         match settings.secrets {
             Secrets::Memory => {}

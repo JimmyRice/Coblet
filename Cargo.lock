@@ -274,6 +274,7 @@ dependencies = [
  "coblet-java",
  "coblet-launch",
  "coblet-launch-command",
+ "coblet-loader",
  "coblet-mojang",
  "coblet-platform",
  "coblet-player",
@@ -396,6 +397,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "coblet-loader"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "coblet-catalog",
+ "coblet-mojang",
+ "coblet-platform",
+ "coblet-runtime",
+ "coblet-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml 1.2.0+spec-1.1.0",
+]
+
+[[package]]
 name = "coblet-mojang"
 version = "0.1.0"
 dependencies = [
@@ -422,6 +441,7 @@ dependencies = [
  "coblet-runtime",
  "coblet-types",
  "serde",
+ "serde_json",
  "thiserror",
  "toml 1.2.0+spec-1.1.0",
  "tracing",
@@ -479,6 +499,7 @@ name = "coblet-uniffi"
 version = "0.1.0"
 dependencies = [
  "coblet",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",

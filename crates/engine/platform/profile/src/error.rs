@@ -71,6 +71,27 @@ pub enum ProfileError {
         /// What went wrong.
         message: String,
     },
+    /// A component needs another component that is missing or at another version.
+    #[error("component {component} requires {}", .requirement_text(requirement, found.as_deref()))]
+    Requirement {
+        /// UID of the component with the requirement.
+        component: String,
+        /// The required component, as `uid` or `uid version`.
+        requirement: String,
+        /// Version of the required component in the stack, if it is there.
+        found: Option<String>,
+    },
+    /// Two components that must not be combined are both in the stack.
+    #[error("component {component} conflicts with {other}")]
+    Conflict {
+        /// UID of the component that declares the conflict.
+        component: String,
+        /// UID of the other component.
+        other: String,
+    },
+    /// A component UID appears twice.
+    #[error("component {0} is in the stack twice")]
+    DuplicateComponent(String),
     /// A profile tried to change an authentication argument.
     #[error("profile {profile} may not change authentication argument `{argument}`")]
     AuthArgument {
@@ -83,6 +104,13 @@ pub enum ProfileError {
 
 fn platform_name(platform: &Platform) -> String {
     format!("{} {}", platform.os().as_str(), platform.arch().as_str())
+}
+
+fn requirement_text(requirement: &str, found: Option<&str>) -> String {
+    match found {
+        Some(found) => format!("{requirement}, found {found}"),
+        None => format!("{requirement}, which is missing"),
+    }
 }
 
 impl ProfileError {

@@ -71,13 +71,28 @@ impl From<coblet::Error> for CobletError {
             coblet::Error::Transport(_) | coblet::Error::Catalog(_) => ErrorKind::Network,
             coblet::Error::UnknownVersion(_) => ErrorKind::NotFound,
             coblet::Error::Profile(ProfileError::Failed { .. }) => ErrorKind::Other,
-            coblet::Error::Profile(_) | coblet::Error::Unsupported(_) => ErrorKind::Unsupported,
+            coblet::Error::Profile(_)
+            | coblet::Error::Unsupported(_)
+            | coblet::Error::Launch(coblet::launch::LaunchError::Unsupported(_)) => {
+                ErrorKind::Unsupported
+            }
             coblet::Error::Launch(_) => ErrorKind::Launch,
+            coblet::Error::Loader(error) => loader_kind(error),
             coblet::Error::Auth(error) => auth_kind(error),
             coblet::Error::Player(error) => player_kind(error),
             _ => ErrorKind::Other,
         };
         Self::new(kind, error.to_string())
+    }
+}
+
+fn loader_kind(error: &coblet::loader::LoaderError) -> ErrorKind {
+    use coblet::loader::LoaderError;
+    match error {
+        LoaderError::UnknownLoader(_) | LoaderError::UnknownVersion { .. } => ErrorKind::NotFound,
+        LoaderError::InvalidDefinition { .. } => ErrorKind::InvalidArgument,
+        LoaderError::Catalog(_) => ErrorKind::Network,
+        _ => ErrorKind::Other,
     }
 }
 

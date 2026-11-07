@@ -104,4 +104,7 @@ pub enum LaunchError {
     /// The launch was cancelled.
     #[error("launch was cancelled")]
     Cancelled,
+    /// The profile needs something this engine cannot do yet, such as merging jar mods.
+    #[error("not supported yet: {0}")]
+    Unsupported(String),
 }

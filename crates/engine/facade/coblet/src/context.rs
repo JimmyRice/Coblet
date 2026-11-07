@@ -49,6 +49,16 @@ pub(crate) struct Inner {
     pub(crate) launcher: coblet_launch::Launcher,
     #[cfg(feature = "launch")]
     pub(crate) profiles: coblet_platform::ProfileEngine,
+    #[cfg(feature = "loaders")]
+    pub(crate) loaders: coblet_loader::LoaderRegistry,
+    /// Version catalogs of the Mod Loaders, created on first use.
+    #[cfg(feature = "loaders")]
+    pub(crate) loader_catalogs: std::sync::Mutex<
+        std::collections::BTreeMap<
+            coblet_types::ExtensionId,
+            Arc<coblet_catalog::Catalog<coblet_loader::LoaderVersion>>,
+        >,
+    >,
 }
 
 impl std::fmt::Debug for Coblet {
