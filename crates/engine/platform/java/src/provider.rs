@@ -329,6 +329,12 @@ impl<'a> ProviderContext<'a> {
     }
 }
 
+/// Definitions of the built-in data providers, in the order they are asked.
+const BUILTIN_DATA: [&str; 2] = [
+    include_str!("../data/providers/adoptium.toml"),
+    include_str!("../data/providers/zulu.toml"),
+];
+
 /// The Java providers of a launcher, asked in order when no installed Java
 /// fits.
 ///
@@ -390,12 +396,19 @@ impl JavaProviders {
         Self::default()
     }
 
-    /// Creates the list of built-in providers: Mojang's runtimes.
+    /// Creates the list of built-in providers, in this order: Mojang's
+    /// runtimes, then Eclipse Temurin from Adoptium and Azul Zulu for the
+    /// platforms and versions Mojang does not ship.
     #[must_use]
     pub fn builtin() -> Self {
-        Self {
-            entries: vec![Arc::new(crate::MojangRuntimes::new())],
+        let mut entries: Vec<Arc<dyn JavaProvider>> = vec![Arc::new(crate::MojangRuntimes::new())];
+        for definition in BUILTIN_DATA {
+            match crate::DataJavaProvider::from_toml(definition) {
+                Ok(provider) => entries.push(Arc::new(provider)),
+                Err(error) => tracing::error!(%error, "a built-in java provider is invalid"),
+            }
         }
+        Self { entries }
     }
 
     /// Appends a provider.
@@ -461,6 +474,15 @@ mod tests {
     use coblet_types::Arch;
 
     use super::{ArchiveFormat, JavaDownload, JavaPackage};
+
+    #[test]
+    fn builtin_providers_parse_in_order() {
+        let ids: Vec<_> = super::JavaProviders::builtin()
+            .iter()
+            .map(|provider| provider.id().as_str().to_owned())
+            .collect();
+        assert_eq!(ids, ["coblet:mojang", "coblet:adoptium", "coblet:zulu"]);
+    }
 
     #[test]
     fn packages_round_trip_through_json() {

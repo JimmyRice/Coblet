@@ -1,0 +1,27 @@
+# Eclipse Temurin JREs from the Adoptium API. Adoptium ships tar.gz on
+# macOS and Linux and zip on Windows; installers are skipped.
+id = "coblet:adoptium"
+name = "Eclipse Temurin (Adoptium)"
+
+[packages]
+format = "json"
+url = "https://api.adoptium.net/v3/assets/latest/{major}/hotspot?architecture={arch}&image_type=jre&os={os}&vendor=eclipse"
+items = ""
+id = "/binary/package/name"
+version = "/version/openjdk_version"
+download = "/binary/package/link"
+hash = "/binary/package/checksum"
+hash_algorithm = "sha256"
+size = "/binary/package/size"
+major = "/version/major"
+
+[os]
+macos = "mac"
+
+[arch]
+x86_64 = "x64"
+x86 = "x32"
+
+[supports]
+os = ["macos", "linux", "windows"]
+arch = ["x86_64", "aarch64", "x86", "arm", "ppc64le", "riscv64"]

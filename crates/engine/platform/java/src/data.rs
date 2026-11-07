@@ -42,6 +42,10 @@ use crate::{
 ///
 /// [arch]
 /// x86_64 = "x64"
+///
+/// [supports]                       # optional: other queries get no packages
+/// os = ["macos", "linux", "windows"]
+/// arch = ["x86_64", "aarch64"]
 /// ```
 ///
 /// A `static` provider lists `[[packages.list]]` entries with `id`,
@@ -83,6 +87,17 @@ pub struct DataJavaProvider {
     packages: Packages,
     os_names: BTreeMap<String, String>,
     arch_names: BTreeMap<String, String>,
+    supports: Supports,
+}
+
+/// Systems and architectures a provider serves; empty lists allow all.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Supports {
+    #[serde(default)]
+    os: Vec<OsFamily>,
+    #[serde(default)]
+    arch: Vec<Arch>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -95,6 +110,8 @@ struct Definition {
     os: BTreeMap<String, String>,
     #[serde(default)]
     arch: BTreeMap<String, String>,
+    #[serde(default)]
+    supports: Supports,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -294,6 +311,7 @@ impl DataJavaProvider {
             packages,
             os_names: definition.os,
             arch_names: definition.arch,
+            supports: definition.supports,
         })
     }
 
@@ -455,6 +473,12 @@ impl JavaProvider for DataJavaProvider {
         query: &'a JavaQuery,
     ) -> BoxFuture<'a, Result<Vec<JavaPackage>, JavaError>> {
         Box::pin(async move {
+            let supports = &self.supports;
+            let served = (supports.os.is_empty() || supports.os.contains(&query.os))
+                && (supports.arch.is_empty() || supports.arch.contains(&query.arch));
+            if !served {
+                return Ok(Vec::new());
+            }
             match &self.packages {
                 Packages::Json(fields) => self.json_packages(cx, fields, query).await,
                 Packages::Static(list) => Ok(static_packages(list, query)),
