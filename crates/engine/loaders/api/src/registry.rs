@@ -396,6 +396,38 @@ mod tests {
         assert!(dir.path().join("loaders/acme/loader/1.20.1.json").is_file());
         assert_eq!(served.asked(), ["https://mirror.example/1.20.1.json"]);
 
+        assert!(
+            versions
+                .iter()
+                .all(|version| version.source.as_ref() == Some(&id))
+        );
+
+        let extra = ExtensionId::new("acme:extra").unwrap();
+        loaders.add_version_source(id.clone(), Arc::new(Extra(extra.clone())));
+        let merged = loaders
+            .catalog(&id, meta.clone())
+            .unwrap()
+            .list(&Filter::new().compatible_with(game.clone()))
+            .await
+            .unwrap();
+        let sources: Vec<(&str, &str)> = merged
+            .iter()
+            .map(|version| {
+                (
+                    version.id.as_str(),
+                    version.source.as_ref().unwrap().as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            sources,
+            [
+                ("2.0", "acme:loader"),
+                ("1.0", "acme:loader"),
+                ("0.9", "acme:extra")
+            ]
+        );
+
         let unlisted = catalog.list(&Filter::new()).await.unwrap_err();
         assert!(
             unlisted.to_string().contains("per game version"),

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use coblet_catalog::{CatalogItem, Timestamp};
-use coblet_types::{GameVersionId, VersionType};
+use coblet_types::{ExtensionId, GameVersionId, VersionType};
 use serde::{Deserialize, Serialize};
 
 /// Version of a Mod Loader for one game version, as listed in a version picker.
@@ -46,6 +46,10 @@ pub struct LoaderVersion {
     /// Data of the Mod Loader for this version, kept verbatim.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub data: BTreeMap<String, serde_json::Value>,
+    /// Version source that listed the version, set by the catalog: the
+    /// Mod Loader's own ID or that of an added version source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ExtensionId>,
 }
 
 fn release() -> VersionType {
@@ -63,6 +67,7 @@ impl LoaderVersion {
             released: None,
             recommended: false,
             data: BTreeMap::new(),
+            source: None,
         }
     }
 
@@ -129,6 +134,10 @@ impl CatalogItem for LoaderVersion {
 
     fn is_compatible_with(&self, game: &GameVersionId) -> bool {
         self.game.as_ref().is_none_or(|own| own == game)
+    }
+
+    fn listed_by(&mut self, source: &ExtensionId) {
+        self.source = Some(source.clone());
     }
 }
 
