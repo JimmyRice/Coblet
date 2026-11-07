@@ -8,13 +8,15 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-default = ["launch", "mojang", "java", "tls-rustls"]
+default = ["launch", "loaders", "mojang", "java", "tls-rustls"]
 # Official version metadata and game file downloads.
 mojang = ["dep:coblet-mojang"]
 # Java discovery and Mojang runtime downloads.
 java = ["dep:coblet-java"]
 # Launch command construction and process management.
 launch = ["mojang", "java", "dep:coblet-launch", "dep:coblet-launch-command", "dep:coblet-platform"]
+# Mod Loader extension point: register loaders in code or as data, list versions, install recipes.
+loaders = ["launch", "dep:coblet-loader"]
 # Default transport: reqwest with rustls.
 tls-rustls = ["coblet-runtime/reqwest"]
 # Microsoft login, skins and capes. Launchers pass their own Client ID.
@@ -31,6 +33,7 @@ coblet-download.workspace = true
 coblet-java = { workspace = true, optional = true }
 coblet-launch = { workspace = true, optional = true }
 coblet-launch-command = { workspace = true, optional = true }
+coblet-loader = { workspace = true, optional = true }
 coblet-mojang = { workspace = true, optional = true }
 coblet-platform = { workspace = true, optional = true }
 coblet-player = { workspace = true, optional = true }

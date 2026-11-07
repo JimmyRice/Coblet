@@ -5,7 +5,7 @@ use coblet_catalog::{CachePolicy, CatalogContext};
 use coblet_java::{RuntimeInstaller, SearchPaths};
 use coblet_launch::{GameLayout, GameSession, LaunchContext, LaunchRequest, LaunchServices};
 use coblet_mojang::{GameVersion, fetch_version_json};
-use coblet_platform::{EffectiveLaunchProfile, ProfileEngine, ResolvedProfile};
+use coblet_platform::{Component, EffectiveLaunchProfile, ProfileEngine, ResolvedProfile};
 use coblet_runtime::Event;
 
 use crate::{Coblet, Error};
@@ -15,7 +15,7 @@ impl Coblet {
         CatalogContext::new(self.inner.meta.clone(), CachePolicy::PreferCache)
     }
 
-    fn forward_warnings(&self, cx: &CatalogContext) {
+    pub(crate) fn forward_warnings(&self, cx: &CatalogContext) {
         for warning in cx.take_warnings() {
             self.inner.events.publish(Event::Warning(warning));
         }
@@ -31,12 +31,32 @@ impl Coblet {
     /// [`Error::Profile`] when the version cannot run here; the error
     /// lists what is missing.
     pub async fn resolve(&self, version: &GameVersion) -> Result<EffectiveLaunchProfile, Error> {
+        self.resolve_with(version, &[]).await
+    }
+
+    /// Adapts a version with extra components on top, such as those of a
+    /// Mod Loader's install recipe, in stack order.
+    ///
+    /// The components go through the Compose step before the Platform
+    /// Profiles, so a loader's libraries and arguments are adapted like the
+    /// game's own.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`resolve`](Self::resolve), and
+    /// [`Error::Profile`] when a component's requirements are not met or two
+    /// components conflict.
+    pub async fn resolve_with(
+        &self,
+        version: &GameVersion,
+        components: &[Component],
+    ) -> Result<EffectiveLaunchProfile, Error> {
         let cx = self.catalog_context();
         let document = fetch_version_json(&cx, version).await;
         self.forward_warnings(&cx);
         let raw = document?.value;
         let traits = self.inner.versions.mojang.traits_of(&raw);
-        let resolved = ResolvedProfile::from_version(raw, traits)?;
+        let resolved = ResolvedProfile::from_version(raw, traits)?.compose(components)?;
         Ok(self
             .inner
             .profiles

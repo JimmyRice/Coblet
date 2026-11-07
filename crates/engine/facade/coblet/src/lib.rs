@@ -11,9 +11,12 @@
 //! Every source can be replaced or extended:
 //! [`CobletBuilder::url_rewriter`] points downloads and metadata at
 //! mirrors, and [`CobletBuilder::version_source`] adds game versions next
-//! to the Mojang manifest.
+//! to the Mojang manifest. Mod Loaders are registered the same way,
+//! built-in or not: [`CobletBuilder::loader`] for code,
+//! [`CobletBuilder::loader_toml`] for data, and
+//! [`CobletBuilder::replace_loader`] to swap one.
 //!
-//! Features: `mojang`, `java` and `launch` (all default) select subsystems;
+//! Features: `mojang`, `java`, `launch` and `loaders` (all default) select subsystems;
 //! `tls-rustls` (default) provides the default transport. `auth-msa` adds
 //! Microsoft login, skins and capes, `auth-loopback` its built-in redirect
 //! listener and `encrypted-secrets` an encrypted token file.
@@ -27,6 +30,8 @@ mod context;
 mod error;
 #[cfg(feature = "launch")]
 mod launching;
+#[cfg(feature = "loaders")]
+mod loaders;
 #[cfg(feature = "mojang")]
 mod versions;
 
@@ -43,6 +48,8 @@ pub use coblet_java as java;
 pub use coblet_launch as launch;
 #[cfg(feature = "launch")]
 pub use coblet_launch_command as launch_command;
+#[cfg(feature = "loaders")]
+pub use coblet_loader as loader;
 #[cfg(feature = "mojang")]
 pub use coblet_mojang as mojang;
 #[cfg(feature = "launch")]

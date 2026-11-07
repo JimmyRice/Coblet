@@ -274,6 +274,7 @@ dependencies = [
  "coblet-java",
  "coblet-launch",
  "coblet-launch-command",
+ "coblet-loader",
  "coblet-mojang",
  "coblet-platform",
  "coblet-player",
