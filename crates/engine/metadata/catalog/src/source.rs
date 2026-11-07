@@ -77,3 +77,14 @@ impl CatalogContext {
         std::mem::take(&mut *self.warnings.lock().unwrap_or_else(PoisonError::into_inner))
     }
 }
+
+/// Step that changes the merged list of a [`Catalog`](crate::Catalog)
+/// before the catalog keeps it, such as one that tags game versions.
+///
+/// Stages run after every source has answered, on the deduplicated and
+/// sorted list, once per listing. A stage cannot fail the listing: it
+/// reports problems with [`CatalogContext::warn`].
+pub trait CatalogStage<Item>: Send + Sync {
+    /// Changes the items in place.
+    fn apply<'a>(&'a self, cx: &'a CatalogContext, items: &'a mut [Item]) -> BoxFuture<'a, ()>;
+}

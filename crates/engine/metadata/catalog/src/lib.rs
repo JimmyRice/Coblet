@@ -2,8 +2,8 @@
 //! server builds share one [`Catalog`] abstraction.
 //!
 //! A [`Catalog`] merges the items of several [`CatalogSource`]s, removes
-//! duplicates, sorts by release time and keeps the result in memory until
-//! [`Catalog::refresh`]. Sources fetch documents through a [`MetaCache`],
+//! duplicates, sorts by release time, lets [`CatalogStage`]s change the
+//! list and keeps the result in memory until [`Catalog::refresh`]. Sources fetch documents through a [`MetaCache`],
 //! an HTTP cache in `data_root/cache/meta/` that revalidates with `ETag` and
 //! `If-Modified-Since` and falls back to the cached copy when the network
 //! fails, publishing a `catalog.offline-cache` warning.
@@ -48,5 +48,5 @@ pub use meta::{
     CachePolicy, DEFAULT_MAX_SIZE, Fetched, MetaCache, MetaRequest, OFFLINE_CACHE, Origin,
     UNVERIFIED_MIRROR,
 };
-pub use source::{CatalogContext, CatalogSource};
+pub use source::{CatalogContext, CatalogSource, CatalogStage};
 pub use timestamp::{Timestamp, TimestampError};

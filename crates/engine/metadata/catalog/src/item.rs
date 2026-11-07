@@ -1,4 +1,4 @@
-use coblet_types::{GameVersionId, VersionType};
+use coblet_types::{ExtensionId, GameVersionId, VersionType};
 
 use crate::Timestamp;
 
@@ -32,6 +32,12 @@ pub trait CatalogItem: Clone + Send + Sync + 'static {
     /// Returns text matched by [`Filter::text`]; the key by default.
     fn search_text(&self) -> &str {
         self.key()
+    }
+
+    /// Records the source that listed the item; the catalog calls it for
+    /// every item it receives. Does nothing by default.
+    fn listed_by(&mut self, source: &ExtensionId) {
+        let _ = source;
     }
 }
 
