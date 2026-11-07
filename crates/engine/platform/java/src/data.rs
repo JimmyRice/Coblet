@@ -53,8 +53,10 @@ use crate::{
 /// `archive` and `home`; the entries matching the query's system,
 /// architecture and major version are offered.
 ///
-/// Items without a hash are skipped: the engine installs nothing it cannot
-/// check. With `archive = "auto"`, items whose address does not end in
+/// A trailing `.zip`, `.tar.gz` or `.tgz` is dropped from the ID, and when
+/// two items end up with the same ID, such as one build packed both ways,
+/// the first is kept. Items without a hash are skipped: the engine installs
+/// nothing it cannot check. With `archive = "auto"`, items whose address does not end in
 /// `.zip`, `.tar.gz` or `.tgz`, such as installers, are skipped too.
 ///
 /// # Examples
@@ -344,9 +346,12 @@ impl DataJavaProvider {
             .pointer(&fields.items)
             .and_then(Value::as_array)
             .ok_or_else(|| JavaError::provider(&self.id, format!("{url}: no item array")))?;
-        let mut packages = Vec::new();
+        let mut packages: Vec<JavaPackage> = Vec::new();
         for item in items {
             match json_package(fields, item, query) {
+                // The same build is often listed once per archive format;
+                // the first one listed is kept.
+                Ok(Some(package)) if packages.iter().any(|known| known.id == package.id) => {}
                 Ok(Some(package)) => packages.push(package),
                 Ok(None) => {}
                 Err(reason) => {
@@ -364,7 +369,7 @@ fn json_package(
     query: &JavaQuery,
 ) -> Result<Option<JavaPackage>, String> {
     let text = |pointer: &str| item.pointer(pointer).and_then(Value::as_str);
-    let id = text(&fields.id).ok_or("no id")?.to_owned();
+    let id = without_archive_extension(text(&fields.id).ok_or("no id")?).to_owned();
     let version = item
         .pointer(&fields.version)
         .and_then(version_text)
@@ -402,6 +407,16 @@ fn json_package(
         arch: query.arch.clone(),
         download,
     }))
+}
+
+/// Drops a trailing `.zip`, `.tar.gz` or `.tgz` from a package ID taken
+/// from a file name, so the install directory is named after the build.
+fn without_archive_extension(id: &str) -> &str {
+    [".tar.gz", ".tgz", ".zip"]
+        .iter()
+        .find_map(|extension| id.strip_suffix(extension))
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or(id)
 }
 
 fn static_packages(list: &[(StaticEntry, Kind)], query: &JavaQuery) -> Vec<JavaPackage> {
@@ -507,6 +522,8 @@ mod tests {
     const LISTING: &str = r#"[
         { "name": "acme-21-mac.tar.gz", "version": [21, 0, 8], "link": "https://cdn.acme.test/acme-21-mac.tar.gz",
           "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", "size": 42 },
+        { "name": "acme-21-mac.zip", "version": [21, 0, 8], "link": "https://cdn.acme.test/acme-21-mac.zip",
+          "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", "size": 43 },
         { "name": "acme-21-mac.dmg", "version": [21, 0, 8], "link": "https://cdn.acme.test/acme-21-mac.dmg",
           "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" },
         { "name": "acme-21-unchecked.zip", "version": "21.0.8", "link": "https://cdn.acme.test/acme-21.zip" }
@@ -570,7 +587,7 @@ mod tests {
         );
         assert_eq!(packages.len(), 1, "{packages:?}");
         let package = &packages[0];
-        assert_eq!(package.id, "acme-21-mac.tar.gz");
+        assert_eq!(package.id, "acme-21-mac");
         assert_eq!(package.version, "21.0.8");
         assert_eq!((package.major, package.arch.clone()), (21, Arch::Aarch64));
         assert!(matches!(
