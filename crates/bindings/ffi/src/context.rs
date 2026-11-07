@@ -1,7 +1,8 @@
 use std::ffi::c_char;
 
 use coblet::catalog::Filter;
-use coblet::types::{Libc, Platform, PlatformTrait};
+use coblet::mojang::VersionTrait;
+use coblet::types::{ExtensionId, Libc, Platform, PlatformTrait};
 use tokio::runtime::Runtime;
 
 use crate::builder::{coblet_builder_build, coblet_builder_new};
@@ -118,7 +119,10 @@ pub unsafe extern "C" fn coblet_free(coblet: *mut Coblet) {
 /// Lists game versions as JSON, newest first.
 ///
 /// The document is `{"schema":1,"versions":[{"id","type","released",
-/// "latest_release"}]}`. On success `*out_json` receives a string to free
+/// "latest_release","traits","source"}]}`, where `traits` are the version
+/// traits known from the list (see `coblet_version_traits_json` for those
+/// that need the version JSON) and `source` the ID of the version source
+/// that listed it. On success `*out_json` receives a string to free
 /// with `coblet_string_free`.
 ///
 /// # Safety
@@ -152,6 +156,8 @@ pub unsafe extern "C" fn coblet_versions_json(
                         "type": version.version_type.as_str(),
                         "released": version.released.to_string(),
                         "latest_release": version.latest_release,
+                        "traits": version.traits.iter().map(VersionTrait::as_str).collect::<Vec<_>>(),
+                        "source": version.source.as_ref().map(ExtensionId::as_str),
                     })
                 })
                 .collect();
@@ -201,7 +207,7 @@ mod tests {
     #[test]
     #[allow(unsafe_code, reason = "calls the C ABI")]
     fn creates_and_frees_an_sdk_and_reports_bad_arguments() {
-        assert_eq!(coblet_abi_version(), 13);
+        assert_eq!(coblet_abi_version(), 14);
         let dir = tempfile::tempdir().unwrap();
         let root = CString::new(dir.path().to_str().unwrap()).unwrap();
         let agent = CString::new("coblet-ffi-test/1.0").unwrap();

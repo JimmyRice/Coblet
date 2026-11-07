@@ -44,8 +44,13 @@
 // Size in bytes of a key for `coblet_builder_set_encrypted_secret_file`.
 #define COBLET_SECRET_KEY_LEN 32
 
+// Flag of `coblet_builder_add_trait_source` and the table forms: put the
+// source in place of the one with the same ID, keeping its place, instead
+// of failing.
+#define COBLET_TRAITS_REPLACE 1
+
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 13
+#define COBLET_ABI_VERSION 14
 
 // Result of a call.
 typedef enum CobletStatus {
@@ -277,6 +282,9 @@ typedef struct CobletSecretCall CobletSecretCall;
 
 // Reason a step failed, given with `coblet_step_fail`.
 typedef struct CobletStepFailure CobletStepFailure;
+
+// One running trait source callback: its requests and its answer.
+typedef struct CobletTraitCtx CobletTraitCtx;
 
 // UTF-8 string owned by the library; `ptr` is NUL-terminated and `len`
 // excludes the NUL. Free it with `coblet_string_free`.
@@ -566,6 +574,39 @@ typedef struct CobletModLoader {
   // Releases `user_data`; may be NULL.
   void (*free)(void *user_data);
 } CobletModLoader;
+
+// Callback table of a version trait source written in C.
+//
+// `id` and `name` are copied when the table is added. `adjust` runs once
+// per batch on a library worker thread where blocking is fine: once with
+// every listed version when the version list is loaded, and once with the
+// version being launched. It gets a `CobletTraitCtx` handle, valid only
+// during the call, and the batch as JSON: `{"schema":1,"versions":[{"id",
+// "type","released","source","version","traits"}]}` where `version` is
+// the version JSON, present only for a launch, and `type`, `released` and
+// `source` may be null.
+//
+// It fetches documents with `coblet_trait_ctx_fetch`, which goes through
+// the metadata cache and the mirror rules, and answers with
+// `coblet_trait_ctx_set_result`: a JSON array holding the new trait list
+// of every version, in the order given. Returning true without an answer
+// keeps the traits as they are. On failure it returns false, optionally
+// after `coblet_trait_ctx_fail`; the library then keeps the traits as they
+// were and reports a `version.trait-source-failed` warning. The library
+// owns `user_data` from the call that receives the table, even when it
+// fails, and calls `free` once when the `Coblet` is freed.
+typedef struct CobletTraitSource {
+  // Passed to every callback.
+  void *user_data;
+  // Namespaced ID, such as `acme:fixes`.
+  const char *id;
+  // Name shown to users.
+  const char *name;
+  // Changes the traits of the batch in `versions_json`. Returns false on failure.
+  bool (*adjust)(void *user_data, struct CobletTraitCtx *ctx, const char *versions_json);
+  // Releases `user_data`; may be NULL.
+  void (*free)(void *user_data);
+} CobletTraitSource;
 
 #ifdef __cplusplus
 extern "C" {
@@ -1089,7 +1130,10 @@ void coblet_free(struct Coblet *coblet);
 // Lists game versions as JSON, newest first.
 //
 // The document is `{"schema":1,"versions":[{"id","type","released",
-// "latest_release"}]}`. On success `*out_json` receives a string to free
+// "latest_release","traits","source"}]}`, where `traits` are the version
+// traits known from the list (see `coblet_version_traits_json` for those
+// that need the version JSON) and `source` the ID of the version source
+// that listed it. On success `*out_json` receives a string to free
 // with `coblet_string_free`.
 //
 // # Safety
@@ -2200,6 +2244,140 @@ enum CobletStatus coblet_generate_secret_key(uint8_t *out_key,
 // `out` must be the handle passed to the running `rewrite` callback;
 // `url` must be NULL or NUL-terminated.
 enum CobletStatus coblet_rewrite_set_url(struct CobletRewrite *out, const char *url);
+
+// Fetches a document for the running trait source callback and caches it
+// under `cache_name`, a relative path such as `traits.json`; blocks until
+// it is there.
+//
+// The request goes through the metadata cache, so mirror rules and
+// fallback apply. On success `*out_body` receives bytes to free with
+// `coblet_bytes_free`. An address that is not HTTP or HTTPS or an unsafe
+// cache name fails, a document that is unavailable and not cached with
+// `COBLET_ERROR_KIND_NETWORK`.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback, used on that
+// callback's thread; strings must be NULL or NUL-terminated; `out_body`
+// must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_trait_ctx_fetch(struct CobletTraitCtx *ctx,
+                                         const char *url,
+                                         const char *cache_name,
+                                         struct CobletBytes *out_body,
+                                         struct CobletError **out_err);
+
+// Hands the answer of the running trait source callback to the library,
+// which copies it: a JSON array with the new trait list of every version.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `json` must be
+// NULL or NUL-terminated.
+enum CobletStatus coblet_trait_ctx_set_result(struct CobletTraitCtx *ctx, const char *json);
+
+// Gives the reason the running trait source callback is about to return false.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `message` must
+// be NULL or NUL-terminated.
+enum CobletStatus coblet_trait_ctx_fail(struct CobletTraitCtx *ctx, const char *message);
+
+// Adds a version trait source written in C, run after the built-in table
+// and the sources already added, so it can remove traits they gave.
+//
+// `flags` is 0 or `COBLET_TRAITS_REPLACE`. The library owns the table's
+// `user_data` from this call on, even when it fails. A table without its
+// callback, a malformed ID or an unknown flag fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`; an ID already registered without the
+// flag fails `coblet_builder_build`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; the table's strings must be
+// NULL or NUL-terminated and its callbacks must stay valid until its
+// `free` runs; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_trait_source(struct CobletBuilder *builder,
+                                                  struct CobletTraitSource source,
+                                                  uint32_t flags,
+                                                  struct CobletError **out_err);
+
+// Adds a version trait table written in TOML, in the format of the
+// built-in table (`coblet_builtin_version_traits_toml`). `flags` is as
+// for `coblet_builder_add_trait_source`; `COBLET_TRAITS_REPLACE` with the
+// ID `coblet:version-traits` swaps the built-in table. A malformed table
+// fails with `COBLET_STATUS_INVALID_ARGUMENT`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `table` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_trait_table_toml(struct CobletBuilder *builder,
+                                                      const char *table,
+                                                      uint32_t flags,
+                                                      struct CobletError **out_err);
+
+// Adds a version trait table written in JSON, with the keys of the TOML
+// form of `coblet_builder_add_trait_table_toml`.
+//
+// # Safety
+//
+// As `coblet_builder_add_trait_table_toml`.
+enum CobletStatus coblet_builder_add_trait_table_json(struct CobletBuilder *builder,
+                                                      const char *table,
+                                                      uint32_t flags,
+                                                      struct CobletError **out_err);
+
+// Removes a version trait source, such as the built-in table
+// `coblet:version-traits`; an unknown ID is ignored.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `id` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_remove_trait_source(struct CobletBuilder *builder,
+                                                     const char *id,
+                                                     struct CobletError **out_err);
+
+// Lists the version trait sources, in the order they run, as JSON:
+// `{"schema":1,"sources":[{"id","name"}]}`. On success `*out_json`
+// receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `out_json` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_trait_sources_json(const struct Coblet *coblet,
+                                            struct CobletString *out_json,
+                                            struct CobletError **out_err);
+
+// Returns the traits of a version with its version JSON, and which trait
+// source added or removed each, as JSON: `{"schema":1,"traits":[...],
+// "changes":[{"source","action","value"}]}` with `action` `added` or
+// `removed`. Sources that fail are skipped and reported as
+// `version.trait-source-failed` warnings. An unknown version fails with
+// `COBLET_ERROR_KIND_NOT_FOUND`. On success `*out_json` receives a string
+// to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `version` must be NULL or
+// NUL-terminated; `out_json` must be writable; `out_err` must be NULL or
+// writable.
+enum CobletStatus coblet_version_traits_json(const struct Coblet *coblet,
+                                             const char *version,
+                                             struct CobletString *out_json,
+                                             struct CobletError **out_err);
+
+// Hands out the text of the built-in version trait table, to copy into a
+// table that replaces it under the ID `coblet:version-traits`. On success
+// `*out_toml` receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `out_toml` must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builtin_version_traits_toml(struct CobletString *out_toml,
+                                                     struct CobletError **out_err);
 
 #ifdef __cplusplus
 }  // extern "C"
