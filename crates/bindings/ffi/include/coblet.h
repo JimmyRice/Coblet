@@ -50,7 +50,13 @@
 #define COBLET_TRAITS_REPLACE 1
 
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 14
+#define COBLET_ABI_VERSION 15
+
+// Flag of `coblet_builder_add_version_source`,
+// `coblet_builder_add_loader_version_source` and the data forms: put the
+// source in place of the one with the same ID, keeping its place, instead
+// of failing.
+#define COBLET_SOURCE_REPLACE 1
 
 // Result of a call.
 typedef enum CobletStatus {
@@ -279,6 +285,9 @@ typedef struct CobletRules CobletRules;
 
 // Result of one secret store callback.
 typedef struct CobletSecretCall CobletSecretCall;
+
+// One running version source callback: its requests and its answer.
+typedef struct CobletSourceCtx CobletSourceCtx;
 
 // Reason a step failed, given with `coblet_step_fail`.
 typedef struct CobletStepFailure CobletStepFailure;
@@ -607,6 +616,45 @@ typedef struct CobletTraitSource {
   // Releases `user_data`; may be NULL.
   void (*free)(void *user_data);
 } CobletTraitSource;
+
+// Callback table of a version source written in C, for game versions
+// (`coblet_builder_add_version_source`) or for the versions of a Mod
+// Loader (`coblet_builder_add_loader_version_source`).
+//
+// `id` and `name` are copied when the table is added. `list` runs on a
+// library worker thread where blocking is fine, once each time a list is
+// loaded or refreshed; for a Mod Loader, once per game version. It gets a
+// `CobletSourceCtx` handle, valid only during the call, and the query as
+// JSON: `{"schema":1,"game":null}` for game versions,
+// `{"schema":1,"game":"1.20.1"}` for Mod Loader versions.
+//
+// It fetches documents with `coblet_source_ctx_fetch`, which goes through
+// the metadata cache and the mirror rules, and answers with
+// `coblet_source_ctx_set_result`: a JSON array of versions, newest first.
+// A game version is `{"id","type","url","sha1","released",
+// "latest_release","traits"}`: `url` and `sha1` name the version JSON in
+// Mojang's format, checked when the version is launched, `released` is
+// RFC 3339, `type` defaults to `release`, `latest_release` to false and
+// `traits` (declared version traits) to none. A Mod Loader version is an
+// item of `coblet_loader_versions_json`: `{"id","game","type","released",
+// "recommended","data"}`, where only `id` is required. Returning true
+// without an answer lists nothing. On failure it returns false,
+// optionally after `coblet_source_ctx_fail`; the other sources are still
+// listed and a `catalog.source-failed` warning is published. The library
+// owns `user_data` from the call that receives the table, even when it
+// fails, and calls `free` once when the `Coblet` is freed.
+typedef struct CobletVersionSource {
+  // Passed to every callback.
+  void *user_data;
+  // Namespaced ID, such as `acme:experiments`.
+  const char *id;
+  // Name shown to users.
+  const char *name;
+  // Lists the versions for the query in `query_json`. Returns false on failure.
+  bool (*list)(void *user_data, struct CobletSourceCtx *ctx, const char *query_json);
+  // Releases `user_data`; may be NULL.
+  void (*free)(void *user_data);
+} CobletVersionSource;
 
 #ifdef __cplusplus
 extern "C" {
@@ -1004,9 +1052,10 @@ enum CobletStatus coblet_builder_add_url_rewriter(struct CobletBuilder *builder,
 
 // Adds a game version source that reads a manifest in the format of
 // Mojang's `version_manifest_v2.json` from `url`, such as a list of
-// experimental versions. It comes after the official manifest; when both
-// list an ID, the official entry wins. A malformed or already used `id`,
-// or an address that is not HTTP or HTTPS, fails with
+// experimental versions. It comes after the official manifest and the
+// sources added before it; when two list an ID, the earlier one wins. An
+// ID already used fails `coblet_builder_build`. A malformed `id`, or an
+// address that is not HTTP or HTTPS, fails with
 // `COBLET_STATUS_INVALID_ARGUMENT`.
 //
 // # Safety
@@ -1830,8 +1879,10 @@ enum CobletStatus coblet_loaders_json(const struct Coblet *coblet,
 
 // Lists the versions of a Mod Loader for a game version as JSON:
 // `{"schema":1,"versions":[{"id","game","type","released","recommended",
-// "data"}],"preselect"}`, where `preselect` is the ID to preselect (the
-// recommended version, otherwise the newest release) or null. On success
+// "data","source"}],"preselect"}`, where `source` is the ID of the loader
+// or of the added version source that listed the version, and
+// `preselect` is the ID to preselect (the recommended version, otherwise
+// the newest release) or null. On success
 // `*out_json` receives a string to free with `coblet_string_free`. An
 // unknown loader fails with `COBLET_ERROR_KIND_NOT_FOUND`.
 //
@@ -2377,6 +2428,169 @@ enum CobletStatus coblet_version_traits_json(const struct Coblet *coblet,
 //
 // `out_toml` must be writable; `out_err` must be NULL or writable.
 enum CobletStatus coblet_builtin_version_traits_toml(struct CobletString *out_toml,
+                                                     struct CobletError **out_err);
+
+// Fetches a document for the running version source callback and caches
+// it under `cache_name`, a relative path such as `versions.json`; blocks
+// until it is there.
+//
+// The request goes through the metadata cache, so mirror rules and
+// fallback apply. A game version source's documents are cached under
+// `sources/<namespace>/<name>/`, a Mod Loader version source's as Mod
+// Loader metadata under `loaders/<namespace>/<name>/`. On success
+// `*out_body` receives bytes to free with `coblet_bytes_free`. An address
+// that is not HTTP or HTTPS or an unsafe cache name fails, a document that
+// is unavailable and not cached with `COBLET_ERROR_KIND_NETWORK`.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback, used on that
+// callback's thread; strings must be NULL or NUL-terminated; `out_body`
+// must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_source_ctx_fetch(struct CobletSourceCtx *ctx,
+                                          const char *url,
+                                          const char *cache_name,
+                                          struct CobletBytes *out_body,
+                                          struct CobletError **out_err);
+
+// Hands the answer of the running version source callback to the
+// library, which copies it: a JSON array of versions.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `json` must be
+// NULL or NUL-terminated.
+enum CobletStatus coblet_source_ctx_set_result(struct CobletSourceCtx *ctx, const char *json);
+
+// Gives the reason the running version source callback is about to
+// return false.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `message` must
+// be NULL or NUL-terminated.
+enum CobletStatus coblet_source_ctx_fail(struct CobletSourceCtx *ctx, const char *message);
+
+// Adds a game version source written in C after the Mojang manifest and
+// the sources already added; when two list a version ID, the earlier one
+// wins.
+//
+// `flags` is 0 or `COBLET_SOURCE_REPLACE`, which puts the source in place
+// of the one with the same ID, such as `coblet:mojang`. The library owns
+// the table's `user_data` from this call on, even when it fails. A table
+// without its callback, a malformed ID or an unknown flag fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`; an ID already used without the flag
+// fails `coblet_builder_build`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; the table's strings must be
+// NULL or NUL-terminated and its callbacks must stay valid until its
+// `free` runs; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_version_source(struct CobletBuilder *builder,
+                                                    struct CobletVersionSource source,
+                                                    uint32_t flags,
+                                                    struct CobletError **out_err);
+
+// Removes a game version source, such as `coblet:mojang` for a launcher
+// that lists only its own versions; an unknown ID is ignored. Removing
+// every source makes `coblet_builder_build` fail.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `id` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_remove_version_source(struct CobletBuilder *builder,
+                                                       const char *id,
+                                                       struct CobletError **out_err);
+
+// Adds a version source written in C to the Mod Loader `loader`, asked
+// after the loader itself and the sources already added; for the same
+// version string the earlier entry wins.
+//
+// `flags` is as for `coblet_builder_add_version_source`. The library owns
+// the table's `user_data` from this call on, even when it fails. A table
+// without its callback, a malformed ID or an unknown flag fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`; an unknown loader, or an ID the
+// loader's sources already use, fails `coblet_builder_build`.
+//
+// # Safety
+//
+// As `coblet_builder_add_version_source`; `loader` must be NULL or
+// NUL-terminated.
+enum CobletStatus coblet_builder_add_loader_version_source(struct CobletBuilder *builder,
+                                                           const char *loader,
+                                                           struct CobletVersionSource source,
+                                                           uint32_t flags,
+                                                           struct CobletError **out_err);
+
+// Adds a version source described in TOML to the Mod Loader `loader`: an
+// `id`, a `name` and a `[versions]` table in the format of data loaders
+// (`coblet_builder_add_loader_toml`), such as a mirror's listing. `flags`
+// is as for `coblet_builder_add_version_source`. A malformed definition
+// fails with `COBLET_STATUS_INVALID_ARGUMENT`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; strings must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_loader_version_source_toml(struct CobletBuilder *builder,
+                                                                const char *loader,
+                                                                const char *definition,
+                                                                uint32_t flags,
+                                                                struct CobletError **out_err);
+
+// Adds a version source described in JSON to the Mod Loader `loader`,
+// with the keys of the TOML form of
+// `coblet_builder_add_loader_version_source_toml`.
+//
+// # Safety
+//
+// As `coblet_builder_add_loader_version_source_toml`.
+enum CobletStatus coblet_builder_add_loader_version_source_json(struct CobletBuilder *builder,
+                                                                const char *loader,
+                                                                const char *definition,
+                                                                uint32_t flags,
+                                                                struct CobletError **out_err);
+
+// Removes a version source of the Mod Loader `loader`; an unknown ID is
+// ignored.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; strings must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_remove_loader_version_source(struct CobletBuilder *builder,
+                                                              const char *loader,
+                                                              const char *id,
+                                                              struct CobletError **out_err);
+
+// Lists the game version sources, in the order they are asked, as JSON:
+// `{"schema":1,"sources":[{"id","name"}]}`. On success `*out_json`
+// receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `out_json` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_version_sources_json(const struct Coblet *coblet,
+                                              struct CobletString *out_json,
+                                              struct CobletError **out_err);
+
+// Lists the extra version sources of the Mod Loader `loader`, in the
+// order they are asked after the loader itself, as JSON:
+// `{"schema":1,"sources":[{"id","name"}]}`. An unknown loader fails with
+// `COBLET_ERROR_KIND_NOT_FOUND`. On success `*out_json` receives a string
+// to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `loader` must be NULL or
+// NUL-terminated; `out_json` must be writable; `out_err` must be NULL or
+// writable.
+enum CobletStatus coblet_loader_version_sources_json(const struct Coblet *coblet,
+                                                     const char *loader,
+                                                     struct CobletString *out_json,
                                                      struct CobletError **out_err);
 
 #ifdef __cplusplus

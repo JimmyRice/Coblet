@@ -343,6 +343,7 @@ name = "coblet-ffi"
 version = "0.1.0"
 dependencies = [
  "coblet",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

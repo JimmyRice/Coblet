@@ -29,7 +29,8 @@ pub struct CobletBuilder {
     secrets: Secrets,
     rewriters: Vec<Arc<dyn coblet::runtime::UrlRewriter>>,
     mirror_fallback: bool,
-    version_sources: Vec<coblet::mojang::MojangVersions>,
+    /// Game and Mod Loader version source changes in order.
+    pub(crate) version_sources: Vec<crate::version_sources::SourceChange>,
     /// Mod Loaders in order, with whether each replaces one of the same ID.
     pub(crate) loaders: Vec<(Arc<dyn coblet::loader::ModLoader>, bool)>,
     /// Java provider and locator changes in order.
@@ -475,9 +476,10 @@ pub unsafe extern "C" fn coblet_builder_add_url_rewriter(
 
 /// Adds a game version source that reads a manifest in the format of
 /// Mojang's `version_manifest_v2.json` from `url`, such as a list of
-/// experimental versions. It comes after the official manifest; when both
-/// list an ID, the official entry wins. A malformed or already used `id`,
-/// or an address that is not HTTP or HTTPS, fails with
+/// experimental versions. It comes after the official manifest and the
+/// sources added before it; when two list an ID, the earlier one wins. An
+/// ID already used fails `coblet_builder_build`. A malformed `id`, or an
+/// address that is not HTTP or HTTPS, fails with
 /// `COBLET_STATUS_INVALID_ARGUMENT`.
 ///
 /// # Safety
@@ -500,20 +502,11 @@ pub unsafe extern "C" fn coblet_builder_add_version_manifest(
                 .map_err(|error| Failure::argument("source id", &error.to_string()))?;
             let url = coblet::runtime::HttpUrl::new(text(url, "url")?)
                 .map_err(|error| Failure::argument("url", &error.to_string()))?;
-            let taken = id.as_str() == "coblet:mojang"
-                || builder
-                    .version_sources
-                    .iter()
-                    .any(|source| source.id() == &id);
-            if taken {
-                return Err(Failure::argument(
-                    "source id",
-                    &format!("`{id}` is already added"),
-                ));
-            }
             builder
                 .version_sources
-                .push(coblet::mojang::MojangVersions::other(id, url));
+                .push(crate::version_sources::SourceChange::game(Arc::new(
+                    coblet::mojang::MojangVersions::other(id, url),
+                )));
             Ok(CobletStatus::Ok)
         })
     }
@@ -679,15 +672,15 @@ pub unsafe extern "C" fn coblet_builder_build(
                 options = options.url_rewriter(rewriter);
             }
             options = options.mirror_fallback(mirror_fallback);
-            for source in version_sources {
-                options = options.version_source(Arc::new(source));
-            }
             for (loader, replace) in loaders {
                 options = if replace {
                     options.replace_loader(loader)
                 } else {
                     options.loader(loader)
                 };
+            }
+            for change in version_sources {
+                options = change.apply(options);
             }
             for change in java {
                 options = change.apply(options);

@@ -549,8 +549,10 @@ pub unsafe extern "C" fn coblet_loaders_json(
 
 /// Lists the versions of a Mod Loader for a game version as JSON:
 /// `{"schema":1,"versions":[{"id","game","type","released","recommended",
-/// "data"}],"preselect"}`, where `preselect` is the ID to preselect (the
-/// recommended version, otherwise the newest release) or null. On success
+/// "data","source"}],"preselect"}`, where `source` is the ID of the loader
+/// or of the added version source that listed the version, and
+/// `preselect` is the ID to preselect (the recommended version, otherwise
+/// the newest release) or null. On success
 /// `*out_json` receives a string to free with `coblet_string_free`. An
 /// unknown loader fails with `COBLET_ERROR_KIND_NOT_FOUND`.
 ///
