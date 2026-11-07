@@ -18,7 +18,12 @@
 //! a `CobletLoaderCtx` handle, or TOML and JSON definitions
 //! (`coblet_builder_add_loader_toml`); `coblet_loader_*` lists their
 //! versions and recipes, `coblet_plan_launch_json` resolves a version with
-//! one and `coblet_launch_loader` starts it. Events (launch steps, file transfers, game
+//! one and `coblet_launch_loader` starts it. Java providers and locators
+//! are callback tables (`CobletJavaProvider`, `CobletJavaLocator`) that
+//! answer through a `CobletJavaCtx` handle, or TOML and JSON provider
+//! definitions (`coblet_builder_add_java_provider_toml`); built-in ones are
+//! removed with `coblet_builder_remove_java_provider`, and `coblet_java_*`
+//! lists installs, providers and packages. Events (launch steps, file transfers, game
 //! starts, logs and exits) are read with `coblet_events_next` as fixed
 //! layout `CobletEvent` structs. The header `include/coblet.h` is generated with
 //! `cargo xtask gen-header`.
@@ -31,6 +36,7 @@ mod customize;
 mod events;
 mod game;
 mod guard;
+mod java;
 mod loaders;
 mod login;
 mod profile;
@@ -74,6 +80,16 @@ pub use game::{
     coblet_game_kill, coblet_game_next_log, coblet_game_operation_id, coblet_game_report,
     coblet_game_wait, coblet_generate_operation_id, coblet_launch, coblet_launch_account,
     coblet_launch_customized, coblet_launch_loader,
+};
+pub use java::{
+    COBLET_JAVA_REPLACE, CobletJavaCtx, CobletJavaLocator, CobletJavaProvider,
+    coblet_builder_add_java_directory, coblet_builder_add_java_executable,
+    coblet_builder_add_java_locator, coblet_builder_add_java_provider,
+    coblet_builder_add_java_provider_json, coblet_builder_add_java_provider_toml,
+    coblet_builder_remove_java_locator, coblet_builder_remove_java_provider, coblet_install_java,
+    coblet_java_ctx_fail, coblet_java_ctx_fetch, coblet_java_ctx_set_result,
+    coblet_java_installs_json, coblet_java_locators_json, coblet_java_packages_json,
+    coblet_java_providers_json,
 };
 pub use loaders::{
     COBLET_LOADER_REPLACE, CobletLoaderCtx, CobletModLoader, coblet_builder_add_loader,

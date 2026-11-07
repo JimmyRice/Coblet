@@ -32,6 +32,11 @@
 // Length of an operation ID buffer: 36 characters and a NUL.
 #define COBLET_OPERATION_ID_LEN 37
 
+// Flag of `coblet_builder_add_java_provider`, `coblet_builder_add_java_locator`
+// and the data forms: put the extension in place of the one with the same
+// ID, keeping its place, instead of failing.
+#define COBLET_JAVA_REPLACE 1
+
 // Flag of `coblet_builder_add_loader` and its data forms: put the loader in
 // place of the one registered under the same ID instead of failing.
 #define COBLET_LOADER_REPLACE 1
@@ -40,7 +45,7 @@
 #define COBLET_SECRET_KEY_LEN 32
 
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 12
+#define COBLET_ABI_VERSION 13
 
 // Result of a call.
 typedef enum CobletStatus {
@@ -234,6 +239,9 @@ typedef struct CobletEvents CobletEvents;
 // `coblet_game_next_log`. Only `coblet_game_free` needs the handle to
 // itself.
 typedef struct CobletGame CobletGame;
+
+// One running Java provider or locator callback: its requests and its answer.
+typedef struct CobletJavaCtx CobletJavaCtx;
 
 // One running Mod Loader callback: its requests and its answer.
 typedef struct CobletLoaderCtx CobletLoaderCtx;
@@ -463,6 +471,62 @@ typedef struct CobletGameExit {
   // Run time in milliseconds.
   uint64_t duration_ms;
 } CobletGameExit;
+
+// Callback table of a Java provider written in C.
+//
+// `id` and `name` are copied when the table is added. `packages` runs on a
+// library worker thread where blocking is fine and gets a `CobletJavaCtx`
+// handle, valid only during the call, and the query as JSON:
+// `{"os","arch","major","component","runtime_platform"}`, the last two
+// optional. It fetches documents with `coblet_java_ctx_fetch`, which goes
+// through the metadata cache and the mirror rules, answers with
+// `coblet_java_ctx_set_result` and returns true, or gives a reason with
+// `coblet_java_ctx_fail` and returns false.
+//
+// The answer is a JSON array of packages, each `{"id","version","major",
+// "arch","download"}` where `download` is `{"type":"archive","url","hash",
+// "format","size","home"}` with `format` `zip` or `tar.gz`, or
+// `{"type":"manifest","url","hash","size"}` for a Mojang-style file list;
+// `size` and `home` are optional. Every package carries a hash such as
+// `sha256:…`: the engine downloads, checks and unpacks; providers only
+// describe. The library owns `user_data` from the call that receives the
+// table, even when it fails, and calls `free` once when the `Coblet` is
+// freed.
+typedef struct CobletJavaProvider {
+  // Passed to every callback.
+  void *user_data;
+  // Namespaced ID, such as `acme:jdk`.
+  const char *id;
+  // Name shown to users.
+  const char *name;
+  // Lists the packages that fit `query_json`. Returns false on failure.
+  bool (*packages)(void *user_data, struct CobletJavaCtx *ctx, const char *query_json);
+  // Releases `user_data`; may be NULL.
+  void (*free)(void *user_data);
+} CobletJavaProvider;
+
+// Callback table of a place to look for installed Java, written in C.
+//
+// `id` and `name` are copied when the table is added. `locate` runs on a
+// library worker thread where blocking is fine, gets the operating system
+// such as `macos`, and answers with `coblet_java_ctx_set_result` and a
+// JSON array of `java` executable paths, best first; it returns false,
+// optionally after `coblet_java_ctx_fail`, when it cannot look. The
+// library runs each executable to read its version. `coblet_java_ctx_fetch`
+// is not available to locators. Ownership of `user_data` is as for
+// `CobletJavaProvider`.
+typedef struct CobletJavaLocator {
+  // Passed to every callback.
+  void *user_data;
+  // Namespaced ID, such as `acme:other-launcher`.
+  const char *id;
+  // Name shown to users.
+  const char *name;
+  // Lists executables for the operating system `os`. Returns false on failure.
+  bool (*locate)(void *user_data, struct CobletJavaCtx *ctx, const char *os);
+  // Releases `user_data`; may be NULL.
+  void (*free)(void *user_data);
+} CobletJavaLocator;
 
 // Callback table of a Mod Loader written in C.
 //
@@ -1412,6 +1476,215 @@ enum CobletStatus coblet_game_wait(const struct CobletGame *game,
 //
 // `game` must be NULL or a handle from `coblet_launch` that is not used afterwards.
 void coblet_game_free(struct CobletGame *game);
+
+// Fetches a document for the running Java provider callback and caches it
+// under `cache_name`, a relative path such as `17/macos-aarch64.json`;
+// blocks until it is there.
+//
+// The request goes through the metadata cache, so mirror rules and
+// fallback apply. On success `*out_body` receives bytes to free with
+// `coblet_bytes_free`. A locator's context, an address that is not HTTP
+// or HTTPS or an unsafe cache name fails, a document that is unavailable
+// and not cached with `COBLET_ERROR_KIND_NETWORK`.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback, used on that
+// callback's thread; strings must be NULL or NUL-terminated; `out_body`
+// must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_java_ctx_fetch(struct CobletJavaCtx *ctx,
+                                        const char *url,
+                                        const char *cache_name,
+                                        struct CobletBytes *out_body,
+                                        struct CobletError **out_err);
+
+// Hands the answer of the running Java callback to the library, which
+// copies it: the JSON array of packages or of executables.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `json` must be
+// NULL or NUL-terminated.
+enum CobletStatus coblet_java_ctx_set_result(struct CobletJavaCtx *ctx, const char *json);
+
+// Gives the reason the running Java callback is about to return false.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `message` must
+// be NULL or NUL-terminated.
+enum CobletStatus coblet_java_ctx_fail(struct CobletJavaCtx *ctx, const char *message);
+
+// Adds a Java provider written in C, asked after the built-in ones
+// (Mojang, Adoptium, Azul Zulu) when no installed Java fits.
+//
+// `flags` is 0 or `COBLET_JAVA_REPLACE`. The library owns the table's
+// `user_data` from this call on, even when it fails. A table without its
+// callback, a malformed ID or an unknown flag fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`; an ID already registered without the
+// flag fails `coblet_builder_build`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; the table's strings must be
+// NULL or NUL-terminated and its callbacks must stay valid until its
+// `free` runs; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_java_provider(struct CobletBuilder *builder,
+                                                   struct CobletJavaProvider provider,
+                                                   uint32_t flags,
+                                                   struct CobletError **out_err);
+
+// Adds a Java provider described in TOML, in the format of coblet's data
+// Java providers. `flags` is as for `coblet_builder_add_java_provider`; a
+// malformed definition fails with `COBLET_STATUS_INVALID_ARGUMENT`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `definition` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_java_provider_toml(struct CobletBuilder *builder,
+                                                        const char *definition,
+                                                        uint32_t flags,
+                                                        struct CobletError **out_err);
+
+// Adds a Java provider described in JSON, with the keys of the TOML form
+// of `coblet_builder_add_java_provider_toml`.
+//
+// # Safety
+//
+// As `coblet_builder_add_java_provider_toml`.
+enum CobletStatus coblet_builder_add_java_provider_json(struct CobletBuilder *builder,
+                                                        const char *definition,
+                                                        uint32_t flags,
+                                                        struct CobletError **out_err);
+
+// Removes a Java provider, such as `coblet:mojang`; an unknown ID is ignored.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `id` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_remove_java_provider(struct CobletBuilder *builder,
+                                                      const char *id,
+                                                      struct CobletError **out_err);
+
+// Adds a place to look for installed Java, written in C, searched after
+// the built-in places. `flags` and ownership are as for
+// `coblet_builder_add_java_provider`.
+//
+// # Safety
+//
+// As `coblet_builder_add_java_provider`.
+enum CobletStatus coblet_builder_add_java_locator(struct CobletBuilder *builder,
+                                                  struct CobletJavaLocator locator,
+                                                  uint32_t flags,
+                                                  struct CobletError **out_err);
+
+// Removes a Java locator, such as `coblet:path` to ignore `PATH`; an
+// unknown ID is ignored.
+//
+// # Safety
+//
+// As `coblet_builder_remove_java_provider`.
+enum CobletStatus coblet_builder_remove_java_locator(struct CobletBuilder *builder,
+                                                     const char *id,
+                                                     struct CobletError **out_err);
+
+// Adds a `java` executable chosen by the user, searched before every other place.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `executable` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_java_executable(struct CobletBuilder *builder,
+                                                     const char *executable,
+                                                     struct CobletError **out_err);
+
+// Adds a folder holding one Java per child, such as another launcher's
+// runtime folder; `home` leads from each child to its Java home, like
+// `Contents/Home` on macOS or `""`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; strings must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_java_directory(struct CobletBuilder *builder,
+                                                    const char *dir,
+                                                    const char *home,
+                                                    struct CobletError **out_err);
+
+// Lists the Java providers, in the order they are asked, as JSON:
+// `{"schema":1,"providers":[{"id","name"}]}`. On success `*out_json`
+// receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `out_json` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_java_providers_json(const struct Coblet *coblet,
+                                             struct CobletString *out_json,
+                                             struct CobletError **out_err);
+
+// Lists the places searched for installed Java, in order, as JSON:
+// `{"schema":1,"locators":[{"id","name"}]}`. On success `*out_json`
+// receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// As `coblet_java_providers_json`.
+enum CobletStatus coblet_java_locators_json(const struct Coblet *coblet,
+                                            struct CobletString *out_json,
+                                            struct CobletError **out_err);
+
+// Finds and probes every installed Java the locators know of, as JSON:
+// `{"schema":1,"installs":[{"executable","home","version","major","arch",
+// "vendor","source","source_id","package"}]}` where `source` is
+// `java-home`, `path`, `sdkman`, `system`, `configured`, `directory`,
+// `mojang-runtime`, `locator`, `provider` or `other`. On success
+// `*out_json` receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// As `coblet_java_providers_json`.
+enum CobletStatus coblet_java_installs_json(const struct Coblet *coblet,
+                                            struct CobletString *out_json,
+                                            struct CobletError **out_err);
+
+// Asks every Java provider, in order, for packages of a Java major version
+// for this platform, as JSON: `{"schema":1,"answers":[{"provider",
+// "packages","error"}]}` with packages in the format of
+// `CobletJavaProvider` and `error` null unless the provider failed. On
+// success `*out_json` receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// As `coblet_java_providers_json`.
+enum CobletStatus coblet_java_packages_json(const struct Coblet *coblet,
+                                            uint32_t major,
+                                            struct CobletString *out_json,
+                                            struct CobletError **out_err);
+
+// Installs a package of a Java provider, as listed by
+// `coblet_java_packages_json`, and probes the result; blocks until done.
+//
+// Progress arrives as `COBLET_TRANSFER_KIND_JAVA_RUNTIME` transfer events
+// of `operation_id`, from `coblet_generate_operation_id`, or of a random
+// ID when it is NULL. On success `*out_json` receives one install in the
+// format of the entries of `coblet_java_installs_json`, with `schema`, to
+// free with `coblet_string_free`. A malformed provider ID or package fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`, a failed download with
+// `COBLET_ERROR_KIND_NETWORK`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; strings must be NULL or NUL-terminated;
+// `out_json` must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_install_java(const struct Coblet *coblet,
+                                      const char *provider,
+                                      const char *package_json,
+                                      const char *operation_id,
+                                      struct CobletString *out_json,
+                                      struct CobletError **out_err);
 
 // Fetches a document for the running Mod Loader callback and caches it
 // under `cache_name`, a relative path such as `versions/1.20.1.json`;
