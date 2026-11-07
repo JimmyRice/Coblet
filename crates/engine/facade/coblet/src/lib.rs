@@ -14,7 +14,11 @@
 //! to the Mojang manifest. Mod Loaders are registered the same way,
 //! built-in or not: [`CobletBuilder::loader`] for code,
 //! [`CobletBuilder::loader_toml`] for data, and
-//! [`CobletBuilder::replace_loader`] to swap one.
+//! [`CobletBuilder::replace_loader`] to swap one. Java follows the same
+//! pattern: [`CobletBuilder::java_provider`] and
+//! [`CobletBuilder::java_provider_toml`] add download sources after
+//! Mojang, Adoptium and Azul Zulu, and [`CobletBuilder::java_locator`] adds
+//! places to find installed Java.
 //!
 //! Features: `mojang`, `java`, `launch` and `loaders` (all default) select subsystems;
 //! `tls-rustls` (default) provides the default transport. `auth-msa` adds
@@ -28,6 +32,8 @@ mod appearance;
 mod builder;
 mod context;
 mod error;
+#[cfg(feature = "java")]
+mod java_runtimes;
 #[cfg(feature = "launch")]
 mod launching;
 #[cfg(feature = "loaders")]

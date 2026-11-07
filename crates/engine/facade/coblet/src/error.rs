@@ -36,6 +36,11 @@ pub enum Error {
     #[cfg(feature = "loaders")]
     #[error(transparent)]
     Loader(#[from] coblet_loader::LoaderError),
+    /// Finding, describing or installing Java failed, or a Java provider
+    /// definition is malformed.
+    #[cfg(feature = "java")]
+    #[error(transparent)]
+    Java(#[from] coblet_java::JavaError),
     /// The feature is not available in this setup, such as Microsoft login
     /// without a Client ID.
     #[error("{0}")]

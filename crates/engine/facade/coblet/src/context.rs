@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use coblet_catalog::MetaCache;
+#[cfg(feature = "java")]
+use coblet_catalog::{CachePolicy, CatalogContext};
 use coblet_download::Downloader;
 use coblet_runtime::{EventBus, EventSubscription, ProcessSpawner, Storage, Transport};
 use coblet_types::Platform;
@@ -51,6 +53,12 @@ pub(crate) struct Inner {
     pub(crate) profiles: coblet_platform::ProfileEngine,
     #[cfg(feature = "loaders")]
     pub(crate) loaders: coblet_loader::LoaderRegistry,
+    /// Installs Java runtimes from the providers, under `data_root/runtimes`.
+    #[cfg(feature = "java")]
+    pub(crate) java: coblet_java::JavaInstaller,
+    /// Places searched for installed Java.
+    #[cfg(feature = "java")]
+    pub(crate) java_locators: coblet_java::JavaLocators,
     /// Version catalogs of the Mod Loaders, created on first use.
     #[cfg(feature = "loaders")]
     pub(crate) loader_catalogs: std::sync::Mutex<
@@ -74,6 +82,22 @@ impl Coblet {
     pub(crate) fn from_inner(inner: Inner) -> Self {
         Self {
             inner: Arc::new(inner),
+        }
+    }
+
+    /// Returns a metadata context that prefers cached documents.
+    #[cfg(feature = "java")]
+    pub(crate) fn catalog_context(&self) -> CatalogContext {
+        CatalogContext::new(self.inner.meta.clone(), CachePolicy::PreferCache)
+    }
+
+    /// Publishes the warnings collected by a metadata context.
+    #[cfg(feature = "java")]
+    pub(crate) fn forward_warnings(&self, cx: &CatalogContext) {
+        for warning in cx.take_warnings() {
+            self.inner
+                .events
+                .publish(coblet_runtime::Event::Warning(warning));
         }
     }
 

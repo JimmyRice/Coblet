@@ -1,26 +1,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use coblet_catalog::{CachePolicy, CatalogContext};
-use coblet_java::{JavaInstaller, JavaLocators, JavaProviders, SearchPaths};
 use coblet_launch::{GameLayout, GameSession, LaunchContext, LaunchRequest, LaunchServices};
 use coblet_mojang::{GameVersion, fetch_version_json};
 use coblet_platform::{Component, EffectiveLaunchProfile, ProfileEngine, ResolvedProfile};
-use coblet_runtime::Event;
 
 use crate::{Coblet, Error};
 
 impl Coblet {
-    fn catalog_context(&self) -> CatalogContext {
-        CatalogContext::new(self.inner.meta.clone(), CachePolicy::PreferCache)
-    }
-
-    pub(crate) fn forward_warnings(&self, cx: &CatalogContext) {
-        for warning in cx.take_warnings() {
-            self.inner.events.publish(Event::Warning(warning));
-        }
-    }
-
     /// Adapts a version to this platform with the Platform Profiles of this
     /// `Coblet`: the built-in ones and those added with
     /// [`CobletBuilder::platform_profile`](crate::CobletBuilder::platform_profile).
@@ -69,17 +56,11 @@ impl Coblet {
         &self.inner.profiles
     }
 
-    /// Returns the services a launch uses, with Java runtimes under `data_root/runtimes`.
+    /// Returns the services a launch uses: the Java providers and locators
+    /// of this `Coblet`, with runtimes under `data_root/runtimes`.
     #[must_use]
     pub fn launch_services(&self) -> LaunchServices {
         let inner = &self.inner;
-        let runtimes = inner.data_root.join("runtimes");
-        let installer = JavaInstaller::new(
-            Arc::new(inner.downloader.clone()),
-            Arc::clone(&inner.storage),
-            &runtimes,
-        )
-        .with_providers(JavaProviders::builtin());
         LaunchServices::new(
             Arc::clone(&inner.storage),
             Arc::clone(&inner.spawner),
@@ -87,10 +68,8 @@ impl Coblet {
             Arc::new(self.catalog_context()),
             inner.platform.os().clone(),
         )
-        .with_java_locators(JavaLocators::builtin(
-            SearchPaths::from_env().with_runtimes(runtimes),
-        ))
-        .with_java_installer(installer)
+        .with_java_locators(inner.java_locators.clone())
+        .with_java_installer(inner.java.clone())
         .with_events(inner.events.clone())
     }
 

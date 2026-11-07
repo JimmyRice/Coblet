@@ -51,6 +51,8 @@ pub struct CobletBuilder<State> {
     platform_profiles: Vec<Arc<dyn coblet_platform::PlatformProfile>>,
     #[cfg(feature = "loaders")]
     loaders: LoaderSettings,
+    #[cfg(feature = "java")]
+    java: JavaSettings,
     auth: AuthSettings,
     state: PhantomData<State>,
 }
@@ -72,6 +74,29 @@ enum LoaderChange {
         coblet_types::ExtensionId,
         Arc<dyn coblet_catalog::CatalogSource<coblet_loader::LoaderVersion>>,
     ),
+}
+
+/// Java provider and locator changes collected by the builder, applied in
+/// order on top of the built-in lists by [`CobletBuilder::build`].
+#[cfg(feature = "java")]
+#[derive(Default)]
+struct JavaSettings {
+    providers: Vec<Change<Arc<dyn coblet_java::JavaProvider>>>,
+    locators: Vec<Change<Arc<dyn coblet_java::JavaLocator>>>,
+    /// Executables tried before every other place.
+    executables: Vec<PathBuf>,
+    /// Folders holding one Java per child, with the path to each Java home.
+    directories: Vec<(PathBuf, String)>,
+    /// The first data definition that failed to parse.
+    error: Option<coblet_java::JavaError>,
+}
+
+/// One change to an ordered extension list.
+#[cfg(feature = "java")]
+enum Change<T> {
+    Register(T),
+    Replace(T),
+    Remove(coblet_types::ExtensionId),
 }
 
 /// Version catalog settings collected by the builder.
@@ -127,6 +152,8 @@ impl Coblet {
             platform_profiles: Vec::new(),
             #[cfg(feature = "loaders")]
             loaders: LoaderSettings::default(),
+            #[cfg(feature = "java")]
+            java: JavaSettings::default(),
             auth: AuthSettings::default(),
             state: PhantomData,
         }
@@ -161,6 +188,8 @@ impl CobletBuilder<NoRoot> {
             platform_profiles: self.platform_profiles,
             #[cfg(feature = "loaders")]
             loaders: self.loaders,
+            #[cfg(feature = "java")]
+            java: self.java,
             auth: self.auth,
             state: PhantomData,
         }
@@ -523,6 +552,135 @@ impl<State> CobletBuilder<State> {
             .push(LoaderChange::Source(loader, source));
         self
     }
+
+    /// Adds a Java provider written as code, asked after the providers
+    /// already in the list when no installed Java fits.
+    ///
+    /// The built-in providers (Mojang, then Adoptium, then Azul Zulu) are
+    /// registered the same way; [`build`](CobletBuilder::build) fails when
+    /// the ID is taken, so use [`replace_java_provider`](Self::replace_java_provider)
+    /// to swap one on purpose.
+    #[cfg(feature = "java")]
+    pub fn java_provider(mut self, provider: Arc<dyn coblet_java::JavaProvider>) -> Self {
+        self.java.providers.push(Change::Register(provider));
+        self
+    }
+
+    /// Puts a Java provider in place of the one with the same ID, keeping
+    /// its place in the order; appends it when the ID is free.
+    #[cfg(feature = "java")]
+    pub fn replace_java_provider(mut self, provider: Arc<dyn coblet_java::JavaProvider>) -> Self {
+        self.java.providers.push(Change::Replace(provider));
+        self
+    }
+
+    /// Removes a Java provider, such as a built-in one the launcher must not
+    /// download from; an unknown ID is ignored.
+    #[cfg(feature = "java")]
+    pub fn without_java_provider(mut self, id: coblet_types::ExtensionId) -> Self {
+        self.java.providers.push(Change::Remove(id));
+        self
+    }
+
+    /// Adds a Java provider described in TOML, in the format of
+    /// [`DataJavaProvider`](coblet_java::DataJavaProvider);
+    /// [`build`](CobletBuilder::build) reports a malformed definition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn demo() -> Result<(), Box<dyn std::error::Error>> {
+    /// use coblet::{Coblet, runtime::UserAgent};
+    ///
+    /// let coblet = Coblet::builder()
+    ///     .data_root("/path/to/launcher-data")
+    ///     .user_agent(UserAgent::new("MyLauncher/1.0 (contact@example.com)")?)
+    ///     .java_provider_toml(r#"
+    ///         id = "acme:jdk"
+    ///         name = "Acme JDK"
+    ///
+    ///         [packages]
+    ///         format = "json"
+    ///         url = "https://jdk.example.com/{os}/{arch}/{major}.json"
+    ///         items = "/packages"
+    ///         id = "/name"
+    ///         version = "/version"
+    ///         download = "/url"
+    ///         hash = "/sha256"
+    ///         hash_algorithm = "sha256"
+    ///     "#)
+    ///     .build()?;
+    /// assert!(coblet.java_providers().get(&"acme:jdk".parse()?).is_some());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "java")]
+    pub fn java_provider_toml(self, definition: &str) -> Self {
+        self.data_java_provider(coblet_java::DataJavaProvider::from_toml(definition))
+    }
+
+    /// Adds a Java provider described in JSON, with the keys of the TOML
+    /// form of [`java_provider_toml`](Self::java_provider_toml).
+    #[cfg(feature = "java")]
+    pub fn java_provider_json(self, definition: &str) -> Self {
+        self.data_java_provider(coblet_java::DataJavaProvider::from_json(definition))
+    }
+
+    #[cfg(feature = "java")]
+    fn data_java_provider(
+        mut self,
+        parsed: Result<coblet_java::DataJavaProvider, coblet_java::JavaError>,
+    ) -> Self {
+        match parsed {
+            Ok(provider) => self.java_provider(Arc::new(provider)),
+            Err(error) => {
+                self.java.error.get_or_insert(error);
+                self
+            }
+        }
+    }
+
+    /// Adds a place to look for installed Java, searched after the places
+    /// already in the list; [`build`](CobletBuilder::build) fails when the
+    /// ID is taken.
+    #[cfg(feature = "java")]
+    pub fn java_locator(mut self, locator: Arc<dyn coblet_java::JavaLocator>) -> Self {
+        self.java.locators.push(Change::Register(locator));
+        self
+    }
+
+    /// Puts a Java locator in place of the one with the same ID, keeping its
+    /// place in the order; appends it when the ID is free.
+    #[cfg(feature = "java")]
+    pub fn replace_java_locator(mut self, locator: Arc<dyn coblet_java::JavaLocator>) -> Self {
+        self.java.locators.push(Change::Replace(locator));
+        self
+    }
+
+    /// Removes a Java locator, such as `coblet:path` to ignore `PATH`;
+    /// an unknown ID is ignored.
+    #[cfg(feature = "java")]
+    pub fn without_java_locator(mut self, id: coblet_types::ExtensionId) -> Self {
+        self.java.locators.push(Change::Remove(id));
+        self
+    }
+
+    /// Adds a `java` executable chosen by the user, searched before every
+    /// other place.
+    #[cfg(feature = "java")]
+    pub fn java_executable(mut self, executable: impl Into<PathBuf>) -> Self {
+        self.java.executables.push(executable.into());
+        self
+    }
+
+    /// Adds a folder holding one Java per child, such as another launcher's
+    /// runtime folder; `home` leads from each child to its Java home, like
+    /// `Contents/Home` on macOS or `""`.
+    #[cfg(feature = "java")]
+    pub fn java_directory(mut self, dir: impl Into<PathBuf>, home: impl Into<String>) -> Self {
+        self.java.directories.push((dir.into(), home.into()));
+        self
+    }
 }
 
 impl CobletBuilder<WithRoot> {
@@ -576,6 +734,69 @@ impl CobletBuilder<WithRoot> {
         Ok(registry)
     }
 
+    /// Applies the Java changes to the built-in providers and locators and
+    /// creates the installer for `data_root/runtimes`.
+    #[cfg(feature = "java")]
+    fn java(
+        &mut self,
+        data_root: &std::path::Path,
+        downloader: &Downloader,
+        storage: &Arc<dyn Storage>,
+    ) -> Result<(coblet_java::JavaInstaller, coblet_java::JavaLocators), Error> {
+        let runtimes = data_root.join("runtimes");
+        let settings = std::mem::take(&mut self.java);
+        if let Some(error) = settings.error {
+            return Err(error.into());
+        }
+        let mut providers = coblet_java::JavaProviders::builtin();
+        for change in settings.providers {
+            match change {
+                Change::Register(provider) => providers.register(provider)?,
+                Change::Replace(provider) => {
+                    providers.replace(provider);
+                }
+                Change::Remove(id) => {
+                    providers.remove(&id);
+                }
+            }
+        }
+        let mut search = coblet_java::SearchPaths::from_env().with_runtimes(&runtimes);
+        search.configured.extend(settings.executables);
+        search.directories.extend(settings.directories);
+        let mut locators = coblet_java::JavaLocators::builtin(search);
+        for change in settings.locators {
+            match change {
+                Change::Register(locator) => locators.register(locator)?,
+                Change::Replace(locator) => {
+                    locators.replace(locator);
+                }
+                Change::Remove(id) => {
+                    locators.remove(&id);
+                }
+            }
+        }
+        let installer = coblet_java::JavaInstaller::new(
+            Arc::new(downloader.clone()),
+            Arc::clone(storage),
+            runtimes,
+        )
+        .with_providers(providers);
+        Ok((installer, locators))
+    }
+
+    /// Returns the launcher with the customizers and auth grants applied.
+    #[cfg(feature = "launch")]
+    fn take_launcher(&mut self) -> Result<coblet_launch::Launcher, Error> {
+        let mut launcher = self.launcher.take().unwrap_or_default();
+        for customizer in std::mem::take(&mut self.customizers) {
+            launcher.register_customizer(customizer)?;
+        }
+        for id in std::mem::take(&mut self.auth_grants) {
+            launcher.allow_auth_changes(id)?;
+        }
+        Ok(launcher)
+    }
+
     fn transport_or_default(&mut self) -> Result<Arc<dyn Transport>, Error> {
         if let Some(transport) = self.transport.take() {
             return Ok(transport);
@@ -606,7 +827,10 @@ impl CobletBuilder<WithRoot> {
     /// when two Platform Profiles share an ID, and, with the `loaders`
     /// feature, [`Error::Registry`] when two Mod Loaders share an ID and
     /// [`Error::Loader`] for a malformed loader definition or a version
-    /// source for a loader that is not registered.
+    /// source for a loader that is not registered. With the `java` feature
+    /// it returns [`Error::Registry`] when two Java providers or two Java
+    /// locators share an ID and [`Error::Java`] for a malformed provider
+    /// definition.
     pub fn build(mut self) -> Result<Coblet, Error> {
         #[cfg(feature = "loaders")]
         let loaders = self.loader_registry()?;
@@ -622,16 +846,7 @@ impl CobletBuilder<WithRoot> {
             engine
         };
         #[cfg(feature = "launch")]
-        let launcher = {
-            let mut launcher = self.launcher.take().unwrap_or_default();
-            for customizer in std::mem::take(&mut self.customizers) {
-                launcher.register_customizer(customizer)?;
-            }
-            for id in std::mem::take(&mut self.auth_grants) {
-                launcher.allow_auth_changes(id)?;
-            }
-            launcher
-        };
+        let launcher = self.take_launcher()?;
         let transport = self.transport_or_default()?;
         // The game and the Java runtime run with other working directories,
         // so every path derived from the data root must be absolute.
@@ -673,6 +888,8 @@ impl CobletBuilder<WithRoot> {
             .with_cache_root(data_root.join("cache"));
         let downloader = Downloader::new(Arc::clone(&transport), Arc::clone(&storage), config)
             .with_rewriters(rewriters);
+        #[cfg(feature = "java")]
+        let (java, java_locators) = self.java(&data_root, &downloader, &storage)?;
         let accounts = self.accounts(&data_root, &transport, &storage, &events)?;
         #[cfg(feature = "auth-msa")]
         let skins = coblet_player::SkinLibrary::new(
@@ -698,6 +915,10 @@ impl CobletBuilder<WithRoot> {
             loaders,
             #[cfg(feature = "loaders")]
             loader_catalogs: std::sync::Mutex::default(),
+            #[cfg(feature = "java")]
+            java,
+            #[cfg(feature = "java")]
+            java_locators,
             data_root,
             transport,
             storage,
