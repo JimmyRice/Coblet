@@ -86,14 +86,15 @@ pub use login::{
     coblet_login_finish, coblet_login_free, coblet_login_prompt_json, coblet_login_submit_redirect,
 };
 pub use profile::{
-    CobletJavaSource, CobletMatchFailure, CobletNatives, CobletPlatformProfile, CobletProfileDraft,
-    CobletRule, CobletRules, coblet_draft_add_library, coblet_draft_add_native_path,
-    coblet_draft_append_arg, coblet_draft_fail, coblet_draft_handle_natives,
-    coblet_draft_info_json, coblet_draft_prepend_env_paths, coblet_draft_refuse,
-    coblet_draft_remove_args, coblet_draft_remove_libraries, coblet_draft_set_env,
-    coblet_draft_set_java_arch, coblet_draft_set_java_major, coblet_draft_set_java_runtime,
-    coblet_draft_set_java_source, coblet_draft_warn, coblet_match_fail, coblet_rules_fail,
-    coblet_rules_set, coblet_rules_set_native,
+    CobletJavaMatch, CobletJavaSource, CobletMatchFailure, CobletNatives, CobletPlatformProfile,
+    CobletProfileDraft, CobletRule, CobletRules, coblet_draft_add_library,
+    coblet_draft_add_native_path, coblet_draft_append_arg, coblet_draft_fail,
+    coblet_draft_handle_natives, coblet_draft_info_json, coblet_draft_prepend_env_paths,
+    coblet_draft_refuse, coblet_draft_remove_args, coblet_draft_remove_libraries,
+    coblet_draft_set_env, coblet_draft_set_java_arch, coblet_draft_set_java_major,
+    coblet_draft_set_java_match, coblet_draft_set_java_runtime, coblet_draft_set_java_source,
+    coblet_draft_warn, coblet_match_fail, coblet_rules_fail, coblet_rules_set,
+    coblet_rules_set_native,
 };
 pub use secrets::{
     COBLET_SECRET_KEY_LEN, CobletSecretCall, CobletSecretStore, coblet_generate_secret_key,

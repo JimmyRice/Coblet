@@ -207,6 +207,14 @@ typedef enum CobletJavaSource {
   COBLET_JAVA_SOURCE_SYSTEM_ONLY = 1,
 } CobletJavaSource;
 
+// Which installed Java versions a launch accepts.
+typedef enum CobletJavaMatch {
+  // Only the required major version.
+  COBLET_JAVA_MATCH_EXACT = 0,
+  // The required major version or a newer one the components accept.
+  COBLET_JAVA_MATCH_AT_LEAST = 1,
+} CobletJavaMatch;
+
 // Library handle: the Rust `Coblet` and the runtime its work runs on.
 typedef struct Coblet Coblet;
 
@@ -1821,6 +1829,16 @@ enum CobletStatus coblet_draft_set_java_major(struct CobletProfileDraft *draft,
 enum CobletStatus coblet_draft_set_java_source(struct CobletProfileDraft *draft,
                                                enum CobletJavaSource source,
                                                struct CobletError **out_err);
+
+// Sets which installed Java versions are accepted.
+//
+// # Safety
+//
+// `draft` must be the handle of the running `rewrite` callback; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_draft_set_java_match(struct CobletProfileDraft *draft,
+                                              enum CobletJavaMatch matching,
+                                              struct CobletError **out_err);
 
 // Sets the platform key of the Mojang Java runtime, such as `linux`.
 //

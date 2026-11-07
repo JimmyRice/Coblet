@@ -33,8 +33,8 @@ pub use data::DataProfile;
 pub use edit::{DetachedDraft, NativesSource, ProfileEdit};
 pub use effective::{
     Change, ChangeSource, EffectiveLaunchProfile, EffectiveLibrary, EnvValue, FileSource,
-    JavaRequirement, JavaSource, LibraryFile, NativeJar, Natives, PipelineStep, ProfileArg,
-    ProfileWarning,
+    JavaMatch, JavaRequirement, JavaSource, LibraryFile, NativeJar, Natives, PipelineStep,
+    ProfileArg, ProfileWarning,
 };
 pub use engine::{LIBRARIES_URL, ProfileEngine};
 pub use error::{Missing, ProfileError};

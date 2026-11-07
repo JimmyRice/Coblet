@@ -45,8 +45,8 @@ pub use loaders::{
 };
 pub use login::LoginFlow;
 pub use profile::{
-    ComponentInfo, JavaSourceChoice, LibraryInfo, NativesChoice, PlatformProfile, ProfileDraft,
-    ProfileTarget, RuleOverrides,
+    ComponentInfo, JavaMatchChoice, JavaSourceChoice, LibraryInfo, NativesChoice, PlatformProfile,
+    ProfileDraft, ProfileTarget, RuleOverrides,
 };
 pub use secrets::{SecretStore, generate_secret_key};
 pub use sources::{ArtifactKind, UrlRewriter};

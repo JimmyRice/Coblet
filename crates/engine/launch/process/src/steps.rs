@@ -127,7 +127,7 @@ async fn select_java(cx: &mut LaunchContext) -> Result<(), LaunchError> {
     let requirement = &cx.profile.java;
     let install = if let Some(path) = &cx.request.java {
         let install = probe(&*services.spawner, path, InstallSource::Configured).await?;
-        if install.major != requirement.major || install.arch != requirement.arch {
+        if !requirement.accepts(install.major, &install.arch) {
             return Err(LaunchError::JavaMismatch {
                 executable: path.clone(),
                 found_major: install.major,

@@ -532,5 +532,12 @@ mod tests {
         assert!(
             crate::select(&installs, &requirement(17, Arch::X86_64, JavaSource::Any)).is_none()
         );
+
+        let mut newer = requirement(11, Arch::Aarch64, JavaSource::Any);
+        assert!(crate::select(&installs, &newer).is_none());
+        newer.matching = coblet_platform::JavaMatch::AtLeast;
+        assert_eq!(crate::select(&installs, &newer).unwrap().major, 17);
+        newer.compatible = vec![11, 21];
+        assert_eq!(crate::select(&installs, &newer).unwrap().major, 21);
     }
 }

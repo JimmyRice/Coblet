@@ -166,6 +166,19 @@ pub enum JavaSource {
     SystemOnly,
 }
 
+/// Which installed Java versions a [`JavaRequirement`] accepts.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum JavaMatch {
+    /// Only the required major version: launchwrapper versions break on
+    /// Java 9 and later, and newer game versions are tested on one Java line.
+    #[default]
+    Exact,
+    /// The required major version or a newer one the components accept,
+    /// preferring the required one.
+    AtLeast,
+}
+
 /// Java runtime needed by the game on this platform.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,6 +194,28 @@ pub struct JavaRequirement {
     /// Architecture the runtime must be built for; differs from the
     /// machine's when the game runs under emulation such as Rosetta.
     pub arch: Arch,
+    /// Which installed versions are accepted besides [`major`](Self::major).
+    pub matching: JavaMatch,
+    /// Major versions every component accepts; empty when none declared any.
+    pub compatible: Vec<u32>,
+}
+
+impl JavaRequirement {
+    /// Reports whether an installed Java of this major version and
+    /// architecture meets the requirement.
+    #[must_use]
+    pub fn accepts(&self, major: u32, arch: &Arch) -> bool {
+        if *arch != self.arch {
+            return false;
+        }
+        match self.matching {
+            JavaMatch::Exact => major == self.major,
+            JavaMatch::AtLeast => {
+                major >= self.major
+                    && (self.compatible.is_empty() || self.compatible.contains(&major))
+            }
+        }
+    }
 }
 
 /// Pipeline step that made a change, for [`EffectiveLaunchProfile::explain`].

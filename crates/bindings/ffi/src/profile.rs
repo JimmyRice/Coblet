@@ -2,8 +2,8 @@ use std::ffi::{c_char, c_void};
 use std::path::PathBuf;
 
 use coblet::platform::{
-    DetachedDraft, Draft, EnvValue, JavaSource, Natives, NativesSource, ProfileArg, ProfileEdit,
-    ProfileError, RuleSettings, Target,
+    DetachedDraft, Draft, EnvValue, JavaMatch, JavaSource, Natives, NativesSource, ProfileArg,
+    ProfileEdit, ProfileError, RuleSettings, Target,
 };
 use coblet::runtime::Extension;
 use coblet::types::{Arch, ArchName, ExtensionId, VersionType};
@@ -107,6 +107,16 @@ pub enum CobletJavaSource {
     Any = 0,
     /// Only an installed Java; nothing is downloaded.
     SystemOnly = 1,
+}
+
+/// Which installed Java versions a launch accepts.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CobletJavaMatch {
+    /// Only the required major version.
+    Exact = 0,
+    /// The required major version or a newer one the components accept.
+    AtLeast = 1,
 }
 
 /// Reason the `matches` callback cannot decide, given with `coblet_match_fail`.
@@ -634,6 +644,27 @@ pub unsafe extern "C" fn coblet_draft_set_java_source(
     };
     // SAFETY: forwarded from the caller's guarantees.
     unsafe { apply(draft, out_err, || Ok(ProfileEdit::JavaSource(source))) }
+}
+
+/// Sets which installed Java versions are accepted.
+///
+/// # Safety
+///
+/// `draft` must be the handle of the running `rewrite` callback; `out_err`
+/// must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_draft_set_java_match(
+    draft: *mut CobletProfileDraft,
+    matching: CobletJavaMatch,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    let matching = match matching {
+        CobletJavaMatch::Exact => JavaMatch::Exact,
+        CobletJavaMatch::AtLeast => JavaMatch::AtLeast,
+    };
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe { apply(draft, out_err, || Ok(ProfileEdit::JavaMatch(matching))) }
 }
 
 /// Sets the platform key of the Mojang Java runtime, such as `linux`.
