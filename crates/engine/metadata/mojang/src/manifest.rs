@@ -88,6 +88,10 @@ pub struct GameVersion {
     pub latest_release: bool,
     /// Traits known before the version JSON is fetched; see [`TraitTable::for_manifest_entry`].
     pub traits: VersionTraits,
+    /// Traits the source gave the version itself, before any trait source ran.
+    pub declared_traits: VersionTraits,
+    /// Version source that listed the version, set by the catalog.
+    pub source: Option<ExtensionId>,
 }
 
 impl GameVersion {
@@ -131,13 +135,20 @@ impl GameVersion {
             compliance_level: 0,
             latest_release: false,
             traits: VersionTraits::new(),
+            declared_traits: VersionTraits::new(),
+            source: None,
         }
     }
 
-    /// Sets the traits known before the version file is fetched.
+    /// Sets the traits the source knows about the version itself; trait
+    /// sources start from them.
     #[must_use]
     pub fn with_traits(self, traits: VersionTraits) -> Self {
-        Self { traits, ..self }
+        Self {
+            declared_traits: traits.clone(),
+            traits,
+            ..self
+        }
     }
 }
 
@@ -156,6 +167,10 @@ impl CatalogItem for GameVersion {
 
     fn is_recommended(&self) -> bool {
         self.latest_release
+    }
+
+    fn listed_by(&mut self, source: &ExtensionId) {
+        self.source = Some(source.clone());
     }
 }
 
@@ -311,6 +326,8 @@ impl MojangVersions {
             released: entry.release_time,
             compliance_level: entry.compliance_level,
             traits,
+            declared_traits: VersionTraits::new(),
+            source: None,
         }
     }
 }
@@ -398,7 +415,7 @@ mod tests {
     use coblet_runtime::{
         BoxFuture, MemoryBody, Request, Response, TokioStorage, Transport, TransportError,
     };
-    use coblet_types::VersionType;
+    use coblet_types::{ExtensionId, VersionType};
 
     use super::{MojangVersions, VersionManifest, fetch_asset_index, fetch_version_json};
     use crate::version::tests::fixture_bytes;
@@ -468,6 +485,10 @@ mod tests {
         let all = catalog.list(&Filter::new()).await.unwrap();
         assert_eq!(all.len(), 14);
         assert_eq!(catalog.recommended(&all).unwrap().id.as_str(), "26.3");
+        assert!(all.iter().all(|version| {
+            version.source.as_ref().map(ExtensionId::as_str) == Some("coblet:mojang")
+                && version.declared_traits.is_empty()
+        }));
         let betas = catalog
             .list(&Filter::new().with_types([VersionType::OldBeta]))
             .await
