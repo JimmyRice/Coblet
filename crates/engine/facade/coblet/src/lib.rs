@@ -10,11 +10,15 @@
 //!
 //! Every source can be replaced or extended:
 //! [`CobletBuilder::url_rewriter`] points downloads and metadata at
-//! mirrors, and [`CobletBuilder::version_source`] adds game versions next
-//! to the Mojang manifest. Mod Loaders are registered the same way,
-//! built-in or not: [`CobletBuilder::loader`] for code,
-//! [`CobletBuilder::loader_toml`] for data, and
-//! [`CobletBuilder::replace_loader`] to swap one. Java follows the same
+//! mirrors, [`CobletBuilder::version_source`] and
+//! [`CobletBuilder::version_manifest`] add game versions after the Mojang
+//! manifest, and [`CobletBuilder::without_version_source`] can drop the
+//! manifest itself. Mod Loaders are registered the same way, built-in or
+//! not: [`CobletBuilder::loader`] for code, [`CobletBuilder::loader_toml`]
+//! for data, and [`CobletBuilder::replace_loader`] to swap one; a loader
+//! gets versions from more places with
+//! [`CobletBuilder::loader_version_source`] or
+//! [`CobletBuilder::loader_version_source_toml`]. Java follows the same
 //! pattern: [`CobletBuilder::java_provider`] and
 //! [`CobletBuilder::java_provider_toml`] add download sources after
 //! Mojang, Adoptium and Azul Zulu, and [`CobletBuilder::java_locator`] adds

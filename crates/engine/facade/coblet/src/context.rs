@@ -542,6 +542,86 @@ source = "system-only"
         assert_eq!(coblet.latest_release().await.unwrap().id.as_str(), "26.3");
     }
 
+    fn source_ids(coblet: &Coblet) -> Vec<&str> {
+        coblet
+            .version_sources()
+            .iter()
+            .map(|source| source.id().as_str())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn version_sources_can_be_replaced_and_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let builder = || {
+            Coblet::builder()
+                .data_root(dir.path())
+                .transport(Arc::new(Fixtures))
+                .platform(Platform::new(OsFamily::MacOs, Arch::Aarch64))
+        };
+        let mojang = ExtensionId::new("coblet:mojang").unwrap();
+        let experiments = ExtensionId::new("acme:experiments").unwrap();
+
+        // Only the added source is left, under its own ID.
+        let own = builder()
+            .without_version_source(mojang.clone())
+            .version_source(Arc::new(Experiments(experiments.clone())))
+            .build()
+            .unwrap();
+        assert_eq!(source_ids(&own), ["acme:experiments"]);
+        assert!(own.mojang_versions().is_none());
+        let listed = own.versions(&coblet_catalog::Filter::new()).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].source.as_ref(), Some(&experiments));
+
+        // A replacement keeps the first place and the ID.
+        let replaced = builder()
+            .version_source(Arc::new(Experiments(experiments.clone())))
+            .replace_version_source(Arc::new(Experiments(mojang.clone())))
+            .build()
+            .unwrap();
+        assert_eq!(source_ids(&replaced), ["coblet:mojang", "acme:experiments"]);
+        assert!(replaced.mojang_versions().is_none());
+
+        // The manifest form reads a manifest in Mojang's format.
+        let copy = builder()
+            .without_version_source(mojang.clone())
+            .version_manifest(
+                ExtensionId::new("acme:copy").unwrap(),
+                coblet_runtime::HttpUrl::new("https://copy.example/version_manifest_v2.json")
+                    .unwrap(),
+            )
+            .build()
+            .unwrap();
+        let latest = copy.latest_release().await.unwrap();
+        assert_eq!(latest.id.as_str(), "26.3");
+        assert_eq!(
+            latest.source.as_ref().map(ExtensionId::as_str),
+            Some("acme:copy")
+        );
+        assert!(builder().build().unwrap().mojang_versions().is_some());
+
+        let taken = builder()
+            .version_source(Arc::new(Experiments(experiments.clone())))
+            .version_source(Arc::new(Experiments(experiments)))
+            .build()
+            .unwrap_err();
+        assert!(matches!(taken, Error::Registry(_)), "{taken}");
+        let empty = builder()
+            .without_version_source(mojang)
+            .build()
+            .unwrap_err();
+        assert!(matches!(empty, Error::Config(_)), "{empty}");
+        assert_eq!(
+            replaced
+                .version_sources()
+                .get(&ExtensionId::new("coblet:mojang").unwrap())
+                .unwrap()
+                .display_name(),
+            "Experiments"
+        );
+    }
+
     #[test]
     fn mirror_fallback_can_be_turned_off() {
         let build = |fallback: bool| {
