@@ -114,9 +114,23 @@ pub(crate) struct VersionSettings {
 
 #[cfg(feature = "mojang")]
 impl VersionSettings {
+    /// Builds the version catalog with the sources and trait sources
+    /// after the builder's changes.
+    pub(crate) fn catalog(
+        &mut self,
+        meta: MetaCache,
+        events: EventBus,
+    ) -> Result<crate::versions::VersionCatalog, Error> {
+        let traits = self.trait_sources()?;
+        let (sources, mojang) = self.version_sources()?;
+        Ok(crate::versions::version_catalog(
+            meta, events, sources, mojang, traits,
+        ))
+    }
+
     /// Applies the version source changes to the built-in list, and
     /// returns the Mojang source when it is still in the list.
-    pub(crate) fn version_sources(
+    fn version_sources(
         &mut self,
     ) -> Result<
         (
@@ -149,7 +163,7 @@ impl VersionSettings {
     }
 
     /// Applies the trait source changes to the built-in list.
-    pub(crate) fn trait_sources(&mut self) -> Result<coblet_mojang::TraitSources, Error> {
+    fn trait_sources(&mut self) -> Result<coblet_mojang::TraitSources, Error> {
         if let Some(error) = self.traits_error.take() {
             return Err(error.into());
         }
@@ -1046,10 +1060,6 @@ impl CobletBuilder<WithRoot> {
     /// version sources share an ID, [`Error::Traits`] for a malformed trait
     /// table and [`Error::Config`] when every game version source was removed.
     pub fn build(mut self) -> Result<Coblet, Error> {
-        #[cfg(feature = "mojang")]
-        let traits = self.versions.trait_sources()?;
-        #[cfg(feature = "mojang")]
-        let (version_sources, mojang) = self.versions.version_sources()?;
         #[cfg(feature = "loaders")]
         let loaders = self.loader_registry()?;
         #[cfg(feature = "launch")]
@@ -1115,30 +1125,12 @@ impl CobletBuilder<WithRoot> {
             coblet_player::Player::new(Arc::clone(&transport)),
             data_root.join("skins"),
         );
+        #[cfg(feature = "mojang")]
+        let versions = self.versions.catalog(meta.clone(), events.clone())?;
         Ok(Coblet::from_inner(Inner {
             accounts,
             #[cfg(feature = "auth-msa")]
             skins,
-            #[cfg(feature = "mojang")]
-            versions: crate::versions::version_catalog(
-                meta.clone(),
-                events.clone(),
-                version_sources,
-                mojang,
-                traits,
-            ),
-            #[cfg(feature = "launch")]
-            launcher,
-            #[cfg(feature = "launch")]
-            profiles,
-            #[cfg(feature = "loaders")]
-            loaders,
-            #[cfg(feature = "loaders")]
-            loader_catalogs: std::sync::Mutex::default(),
-            #[cfg(feature = "java")]
-            java,
-            #[cfg(feature = "java")]
-            java_locators,
             data_root,
             transport,
             storage,
@@ -1147,6 +1139,20 @@ impl CobletBuilder<WithRoot> {
             events,
             meta,
             downloader,
+            #[cfg(feature = "mojang")]
+            versions,
+            #[cfg(feature = "launch")]
+            launcher,
+            #[cfg(feature = "launch")]
+            profiles,
+            #[cfg(feature = "loaders")]
+            loaders,
+            #[cfg(feature = "java")]
+            java,
+            #[cfg(feature = "java")]
+            java_locators,
+            #[cfg(feature = "loaders")]
+            loader_catalogs: std::sync::Mutex::default(),
         }))
     }
 }
