@@ -77,11 +77,22 @@ impl From<coblet::Error> for CobletError {
                 ErrorKind::Unsupported
             }
             coblet::Error::Launch(_) => ErrorKind::Launch,
+            coblet::Error::Loader(error) => loader_kind(error),
             coblet::Error::Auth(error) => auth_kind(error),
             coblet::Error::Player(error) => player_kind(error),
             _ => ErrorKind::Other,
         };
         Self::new(kind, error.to_string())
+    }
+}
+
+fn loader_kind(error: &coblet::loader::LoaderError) -> ErrorKind {
+    use coblet::loader::LoaderError;
+    match error {
+        LoaderError::UnknownLoader(_) | LoaderError::UnknownVersion { .. } => ErrorKind::NotFound,
+        LoaderError::InvalidDefinition { .. } => ErrorKind::InvalidArgument,
+        LoaderError::Catalog(_) => ErrorKind::Network,
+        _ => ErrorKind::Other,
     }
 }
 

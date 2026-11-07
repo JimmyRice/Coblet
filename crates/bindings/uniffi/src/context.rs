@@ -58,6 +58,9 @@ pub struct LaunchOptions {
     /// absent.
     #[uniffi(default = None)]
     pub operation_id: Option<String>,
+    /// Mod Loader version to launch with; the plain game when absent.
+    #[uniffi(default = None)]
+    pub loader: Option<crate::LoaderChoice>,
 }
 
 /// Platform as Platform Profiles see it.
@@ -188,6 +191,7 @@ impl Coblet {
             game_dir,
             customizers: Vec::new(),
             operation_id: None,
+            loader: None,
         };
         self.launch_with(version_id, options).await
     }
@@ -196,8 +200,8 @@ impl Coblet {
     ///
     /// # Errors
     ///
-    /// Fails for unknown versions or customizers, unsupported platforms and
-    /// failed launch steps.
+    /// Fails for unknown versions, customizers or loaders, unsupported
+    /// platforms, unmet component requirements and failed launch steps.
     pub async fn launch_with(
         &self,
         version_id: String,
@@ -223,7 +227,13 @@ impl Coblet {
             || self.inner.data_root().join("games").join(&version_id),
             Into::into,
         );
-        let session = self.inner.launch(&version_id, game_dir, request).await?;
+        let profile = self
+            .resolve_choice(&version_id, options.loader.as_ref())
+            .await?;
+        let session = self
+            .inner
+            .launch_profile(profile, game_dir, request)
+            .await?;
         Ok(Arc::new(GameHandle::new(session)))
     }
 }

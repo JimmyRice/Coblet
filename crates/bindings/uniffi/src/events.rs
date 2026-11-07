@@ -432,6 +432,7 @@ mod tests {
             game_dir: None,
             customizers: Vec::new(),
             operation_id: Some("not-a-uuid".to_owned()),
+            loader: None,
         };
         let error = coblet(&dir)
             .launch_with("1.20.1".to_owned(), options)

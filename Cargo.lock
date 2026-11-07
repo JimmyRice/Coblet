@@ -499,6 +499,7 @@ name = "coblet-uniffi"
 version = "0.1.0"
 dependencies = [
  "coblet",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
