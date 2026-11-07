@@ -422,6 +422,7 @@ dependencies = [
  "coblet-runtime",
  "coblet-types",
  "serde",
+ "serde_json",
  "thiserror",
  "toml 1.2.0+spec-1.1.0",
  "tracing",
