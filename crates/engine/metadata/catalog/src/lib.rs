@@ -37,6 +37,7 @@ mod error;
 mod item;
 mod meta;
 mod source;
+mod sources;
 #[cfg(test)]
 mod testing;
 mod timestamp;
@@ -49,4 +50,5 @@ pub use meta::{
     UNVERIFIED_MIRROR,
 };
 pub use source::{CatalogContext, CatalogSource, CatalogStage};
+pub use sources::CatalogSources;
 pub use timestamp::{Timestamp, TimestampError};
