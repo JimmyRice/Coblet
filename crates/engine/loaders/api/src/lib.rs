@@ -15,6 +15,7 @@
 
 mod context;
 mod error;
+pub mod kit;
 mod loader;
 #[cfg(test)]
 mod mock;
