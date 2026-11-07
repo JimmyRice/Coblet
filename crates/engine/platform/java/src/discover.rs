@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use coblet_runtime::{EntryKind, ProcessSpawner, Storage};
 use coblet_types::OsFamily;
 
+use crate::installer::{MARKER, Marker, inside};
 use crate::{InstallSource, JavaInstall, probe};
 
 /// Places searched for Java installations.
@@ -167,20 +168,16 @@ pub async fn candidates(
         }
     }
     if let Some(runtimes) = &search.runtimes {
-        for component in children(storage, runtimes).await {
-            let component_name = component
+        for group in children(storage, runtimes).await {
+            let group_name = group
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            for platform in children(storage, &component).await {
-                if let Some(path) = runtime_executable(storage, &platform, os).await {
-                    push(
-                        &mut found,
-                        path,
-                        InstallSource::MojangRuntime {
-                            component: component_name.clone(),
-                        },
-                    );
+            for dir in children(storage, &group).await {
+                if let Some((path, source)) =
+                    installed_runtime(storage, &dir, os, &group_name).await
+                {
+                    push(&mut found, path, source);
                 }
             }
         }
@@ -217,6 +214,37 @@ pub async fn candidates(
         }
     }
     found
+}
+
+/// Reads one runtime directory under the runtimes root: one with a marker
+/// was installed by a Java provider, one without is a Mojang runtime from
+/// before providers, named after its component folder.
+async fn installed_runtime(
+    storage: &dyn Storage,
+    dir: &Path,
+    os: &OsFamily,
+    group: &str,
+) -> Option<(PathBuf, InstallSource)> {
+    if let Ok(bytes) = storage.read(&dir.join(MARKER)).await {
+        let marker: Marker = serde_json::from_slice(&bytes)
+            .inspect_err(
+                |error| tracing::debug!(%error, dir = %dir.display(), "unreadable java marker"),
+            )
+            .ok()?;
+        let path = inside(dir, &marker.executable).ok()?;
+        return is_file(storage, &path).await.then(|| {
+            let source = InstallSource::Provider {
+                provider: marker.provider,
+                package: marker.package,
+            };
+            (path, source)
+        });
+    }
+    let path = runtime_executable(storage, dir, os).await?;
+    let source = InstallSource::MojangRuntime {
+        component: group.to_owned(),
+    };
+    Some((path, source))
 }
 
 /// Finds and probes every Java installation, dropping duplicates of the same `java.home`.

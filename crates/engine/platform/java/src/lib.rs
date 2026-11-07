@@ -1,12 +1,13 @@
 //! Java runtimes for coblet.
 //!
-//! [`discover`] finds installed Java runtimes (configured paths, installed
-//! Mojang runtimes, `JAVA_HOME`, `PATH`, SDKMAN! and the platform's JDK
+//! [`discover`] finds installed Java runtimes (configured paths, runtimes
+//! coblet installed, `JAVA_HOME`, `PATH`, SDKMAN! and the platform's JDK
 //! folders) and [`probe`]s each one for its version and architecture.
 //! [`select`] picks one for a
-//! [`JavaRequirement`](coblet_platform::JavaRequirement) and
-//! [`RuntimeInstaller`] downloads the Mojang runtime the requirement names.
-//! [`find_or_install`] combines the three.
+//! [`JavaRequirement`](coblet_platform::JavaRequirement). When none fits,
+//! the [`JavaProviders`], such as [`MojangRuntimes`], describe packages to
+//! download and the [`JavaInstaller`] installs one. [`find_or_install`]
+//! combines them.
 
 #![forbid(unsafe_code)]
 
@@ -33,6 +34,6 @@ pub use provider::{
 };
 pub use runtime::{
     JavaContext, ManifestRef, RUNTIME_INDEX_URL, RuntimeBuild, RuntimeDownloads, RuntimeEntry,
-    RuntimeFile, RuntimeIndex, RuntimeInstaller, RuntimeManifest, RuntimeVersion, find_or_install,
+    RuntimeFile, RuntimeIndex, RuntimeManifest, RuntimeVersion, find_or_install,
 };
 pub use select::select;

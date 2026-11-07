@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use coblet_catalog::CatalogContext;
 use coblet_download::Downloader;
-use coblet_java::{JavaInstall, RuntimeInstaller, SearchPaths};
+use coblet_java::{JavaInstall, JavaInstaller, SearchPaths};
 use coblet_launch_command::LaunchCommand;
 use coblet_platform::EffectiveLaunchProfile;
 use coblet_runtime::{BoxFuture, CancellationToken, EventBus, ProcessSpawner, Storage};
@@ -38,8 +38,8 @@ pub struct LaunchServices {
     pub catalog: Arc<CatalogContext>,
     /// Where to look for Java.
     pub java_search: SearchPaths,
-    /// Java runtime installer; `None` disables runtime downloads.
-    pub java_installer: Option<RuntimeInstaller>,
+    /// Java runtime installer and its providers; `None` disables runtime downloads.
+    pub java_installer: Option<JavaInstaller>,
     /// Operating system of this machine.
     pub os: OsFamily,
     /// Event stream that receives game log lines.
@@ -77,9 +77,9 @@ impl LaunchServices {
         }
     }
 
-    /// Allows downloading Mojang Java runtimes.
+    /// Allows downloading Java runtimes from the installer's providers.
     #[must_use]
-    pub fn with_java_installer(self, installer: RuntimeInstaller) -> Self {
+    pub fn with_java_installer(self, installer: JavaInstaller) -> Self {
         Self {
             java_installer: Some(installer),
             ..self

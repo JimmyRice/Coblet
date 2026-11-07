@@ -390,6 +390,14 @@ impl JavaProviders {
         Self::default()
     }
 
+    /// Creates the list of built-in providers: Mojang's runtimes.
+    #[must_use]
+    pub fn builtin() -> Self {
+        Self {
+            entries: vec![Arc::new(crate::MojangRuntimes::new())],
+        }
+    }
+
     /// Appends a provider.
     ///
     /// # Errors

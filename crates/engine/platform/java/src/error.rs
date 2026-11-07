@@ -17,14 +17,6 @@ pub enum JavaError {
         /// Why.
         reason: String,
     },
-    /// Mojang has no runtime for this platform and component.
-    #[error("mojang has no `{component}` runtime for `{platform}`")]
-    NotAvailable {
-        /// Runtime platform key, such as `mac-os-arm64`.
-        platform: String,
-        /// Runtime component, such as `jre-legacy`.
-        component: String,
-    },
     /// Fetching the runtime index or manifest failed.
     #[error(transparent)]
     Metadata(#[from] CatalogError),

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use coblet_catalog::{CachePolicy, CatalogContext};
-use coblet_java::{RuntimeInstaller, SearchPaths};
+use coblet_java::{JavaInstaller, JavaProviders, SearchPaths};
 use coblet_launch::{GameLayout, GameSession, LaunchContext, LaunchRequest, LaunchServices};
 use coblet_mojang::{GameVersion, fetch_version_json};
 use coblet_platform::{Component, EffectiveLaunchProfile, ProfileEngine, ResolvedProfile};
@@ -74,11 +74,12 @@ impl Coblet {
     pub fn launch_services(&self) -> LaunchServices {
         let inner = &self.inner;
         let runtimes = inner.data_root.join("runtimes");
-        let installer = RuntimeInstaller::new(
+        let installer = JavaInstaller::new(
             Arc::new(inner.downloader.clone()),
             Arc::clone(&inner.storage),
             &runtimes,
-        );
+        )
+        .with_providers(JavaProviders::builtin());
         LaunchServices::new(
             Arc::clone(&inner.storage),
             Arc::clone(&inner.spawner),
