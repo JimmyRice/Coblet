@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use coblet_catalog::CatalogError;
 use coblet_download::DownloadError;
 use coblet_runtime::StorageError;
+use coblet_types::ExtensionId;
 
 /// Failure to find, probe or install Java.
 #[non_exhaustive]
@@ -42,6 +43,14 @@ pub enum JavaError {
     /// The runtime manifest is unusable.
     #[error("invalid runtime manifest: {0}")]
     InvalidManifest(String),
+    /// A Java provider failed or returned unusable metadata.
+    #[error("java provider `{provider}`: {reason}")]
+    Provider {
+        /// The provider.
+        provider: ExtensionId,
+        /// What went wrong.
+        reason: String,
+    },
     /// No installation meets the requirement.
     #[error("no java {major} for {arch} found and none can be installed: {reason}")]
     NotFound {
@@ -52,4 +61,14 @@ pub enum JavaError {
         /// Why nothing could be installed.
         reason: String,
     },
+}
+
+impl JavaError {
+    /// Creates a [`JavaError::Provider`].
+    pub fn provider(provider: &ExtensionId, reason: impl Into<String>) -> Self {
+        Self::Provider {
+            provider: provider.clone(),
+            reason: reason.into(),
+        }
+    }
 }

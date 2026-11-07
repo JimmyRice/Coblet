@@ -14,6 +14,7 @@ mod discover;
 mod error;
 mod install;
 mod probe;
+mod provider;
 mod runtime;
 mod select;
 
@@ -21,6 +22,10 @@ pub use discover::{SearchPaths, candidates, discover, executable_name};
 pub use error::JavaError;
 pub use install::{InstallSource, JavaInstall, major_version};
 pub use probe::probe;
+pub use provider::{
+    ArchiveFormat, JavaDownload, JavaPackage, JavaProvider, JavaProviders, JavaQuery,
+    ProviderContext,
+};
 pub use runtime::{
     JavaContext, ManifestRef, RUNTIME_INDEX_URL, RuntimeBuild, RuntimeDownloads, RuntimeEntry,
     RuntimeFile, RuntimeIndex, RuntimeInstaller, RuntimeManifest, RuntimeVersion, find_or_install,

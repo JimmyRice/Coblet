@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+bytes.workspace = true
 coblet-catalog.workspace = true
 coblet-download.workspace = true
 coblet-platform.workspace = true
