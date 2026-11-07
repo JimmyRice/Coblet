@@ -9,7 +9,7 @@ use coblet_runtime::{BoxFuture, Extension, HttpUrl, RelPath};
 use coblet_types::{ExtensionId, FileHash, GameVersionId, Sha1Digest, VersionType};
 use serde::{Deserialize, Serialize};
 
-use crate::{AssetIndex, AssetIndexRef, RawVersionJson, TraitSource, TraitTable, VersionTraits};
+use crate::{AssetIndex, AssetIndexRef, RawVersionJson, TraitTable, VersionTraits};
 
 /// Address of the Mojang version manifest.
 pub const MANIFEST_URL: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
@@ -199,14 +199,12 @@ pub struct MojangVersions {
     id: ExtensionId,
     manifest: HttpUrl,
     table: Arc<TraitTable>,
-    trait_sources: Vec<Arc<dyn TraitSource>>,
 }
 
 impl std::fmt::Debug for MojangVersions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MojangVersions")
             .field("manifest", &self.manifest)
-            .field("trait_sources", &self.trait_sources.len())
             .finish_non_exhaustive()
     }
 }
@@ -225,7 +223,6 @@ impl MojangVersions {
             id: ExtensionId::new("coblet:mojang").unwrap_or_else(|_| unreachable!()),
             manifest: HttpUrl::new(MANIFEST_URL).unwrap_or_else(|_| unreachable!()),
             table: Arc::new(TraitTable::builtin().clone()),
-            trait_sources: Vec::new(),
         }
     }
 
@@ -273,21 +270,10 @@ impl MojangVersions {
         }
     }
 
-    /// Adds a trait source, run after the table.
-    #[must_use]
-    pub fn with_trait_source(mut self, source: Arc<dyn TraitSource>) -> Self {
-        self.trait_sources.push(source);
-        self
-    }
-
-    /// Returns the traits of a version JSON: the table, then the trait sources.
+    /// Returns the traits of a version JSON according to the table.
     #[must_use]
     pub fn traits_of(&self, raw: &RawVersionJson) -> VersionTraits {
-        let mut traits = self.table.for_version(raw);
-        for source in &self.trait_sources {
-            source.adjust(&raw.id, &mut traits);
-        }
-        traits
+        self.table.for_version(raw)
     }
 
     /// Fetches and parses the manifest.
@@ -311,12 +297,9 @@ impl MojangVersions {
     }
 
     fn entry(&self, entry: ManifestEntry, latest: &GameVersionId) -> GameVersion {
-        let mut traits = self
+        let traits = self
             .table
             .for_manifest_entry(&entry.id, Some(entry.release_time));
-        for source in &self.trait_sources {
-            source.adjust(&entry.id, &mut traits);
-        }
         GameVersion {
             latest_release: entry.id == *latest,
             id: entry.id,

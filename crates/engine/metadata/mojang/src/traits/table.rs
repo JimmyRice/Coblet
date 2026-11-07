@@ -1,10 +1,11 @@
 use std::sync::LazyLock;
 
 use coblet_catalog::Timestamp;
-use coblet_types::GameVersionId;
+use coblet_runtime::{BoxFuture, Extension};
+use coblet_types::{ExtensionId, GameVersionId};
 use serde::Deserialize;
 
-use super::{VersionTrait, VersionTraits};
+use super::{TraitContext, TraitError, TraitSource, TraitTarget, VersionTrait, VersionTraits};
 use crate::RawVersionJson;
 
 /// Main class of Mojang's launchwrapper.
@@ -13,9 +14,11 @@ pub const LAUNCHWRAPPER_MAIN: &str = "net.minecraft.launchwrapper.Launch";
 /// Data table of traits that cannot be derived from metadata alone.
 ///
 /// The built-in table is `data/version-traits.toml`, embedded at build time.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TraitTable {
+    #[serde(skip, default = "builtin_id")]
+    id: ExtensionId,
     /// Tweakers that mark a launchwrapper version as an Applet.
     #[serde(default)]
     applet_tweakers: Vec<String>,
@@ -45,9 +48,17 @@ const BUILTIN_TABLE: &str = include_str!("../../data/version-traits.toml");
 static BUILTIN: LazyLock<TraitTable> = LazyLock::new(|| {
     TraitTable::parse(BUILTIN_TABLE).unwrap_or_else(|error| {
         tracing::error!(%error, "the built-in version trait table is invalid");
-        TraitTable::default()
+        TraitTable {
+            id: builtin_id(),
+            applet_tweakers: Vec::new(),
+            rules: Vec::new(),
+        }
     })
 });
+
+fn builtin_id() -> ExtensionId {
+    ExtensionId::new("coblet:version-traits").unwrap_or_else(|_| unreachable!())
+}
 
 /// What a [`TraitTable`] rule is checked against.
 struct Facts<'a> {
@@ -148,6 +159,35 @@ impl TraitTable {
             .filter(|rule| rule.applies(facts))
             .flat_map(|rule| rule.traits.iter().cloned())
             .collect()
+    }
+}
+
+impl Extension for TraitTable {
+    fn id(&self) -> &ExtensionId {
+        &self.id
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Built-in version traits"
+    }
+}
+
+impl TraitSource for TraitTable {
+    fn adjust<'a>(
+        &'a self,
+        _cx: &'a TraitContext<'a>,
+        versions: &'a mut [TraitTarget],
+    ) -> BoxFuture<'a, Result<(), TraitError>> {
+        Box::pin(async move {
+            for target in versions.iter_mut() {
+                let found = match target.input().version_json() {
+                    Some(raw) => self.for_version(raw),
+                    None => self.for_manifest_entry(&target.input().id, target.input().released),
+                };
+                target.traits_mut().extend(found.iter().cloned());
+            }
+            Ok(())
+        })
     }
 }
 

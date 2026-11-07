@@ -37,7 +37,11 @@ pub use manifest::{
     Document, GameVersion, Latest, MANIFEST_URL, ManifestEntry, MojangVersions, VersionManifest,
     fetch_asset_index, fetch_version_json,
 };
-pub use traits::{LAUNCHWRAPPER_MAIN, TraitSource, TraitTable, VersionTrait, VersionTraits};
+pub use traits::{
+    LAUNCHWRAPPER_MAIN, TRAIT_SOURCE_FAILED, TraitAction, TraitChange, TraitContext, TraitError,
+    TraitFailure, TraitInput, TraitReport, TraitSource, TraitSources, TraitTable, TraitTarget,
+    VersionTrait, VersionTraits,
+};
 pub use version::{
     Argument, ArgumentValue, Arguments, Artifact, AssetIndexRef, Condition, Download, Downloads,
     Extract, FeatureClause, InheritError, JavaVersion, Library, LibraryDownloads, Logging,
