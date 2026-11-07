@@ -18,6 +18,7 @@
 
 mod builtin;
 mod component;
+mod compose;
 mod data;
 mod edit;
 mod effective;

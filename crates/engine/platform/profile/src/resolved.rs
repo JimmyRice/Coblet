@@ -5,7 +5,7 @@ use coblet_mojang::{
 };
 use coblet_types::{GameVersionId, VersionType};
 
-use crate::ProfileError;
+use crate::{Agent, ProfileError};
 
 /// Component UID of the game itself.
 pub const MINECRAFT_UID: &str = "net.minecraft";
@@ -61,6 +61,14 @@ pub struct ResolvedProfile {
     pub logging: Option<LoggingConfig>,
     /// Version traits.
     pub traits: VersionTraits,
+    /// Files placed in the libraries directory but kept off the classpath.
+    pub maven_files: Vec<Library>,
+    /// Archives merged into the client jar, in order.
+    pub jar_mods: Vec<Library>,
+    /// Java agents.
+    pub agents: Vec<Agent>,
+    /// Java major versions every component accepts; empty when none declared any.
+    pub compatible_java_majors: Vec<u32>,
 }
 
 fn lwjgl_component(libraries: &[Library]) -> Option<ComponentRef> {
@@ -138,6 +146,10 @@ impl ResolvedProfile {
             java: raw.java_version,
             logging: raw.logging.and_then(|logging| logging.client),
             traits,
+            maven_files: Vec::new(),
+            jar_mods: Vec::new(),
+            agents: Vec::new(),
+            compatible_java_majors: Vec::new(),
         })
     }
 
