@@ -319,6 +319,28 @@ impl CatalogSource<GameVersion> for MojangVersions {
     }
 }
 
+/// Fetches a document for a game version source written as code, such as
+/// its own version list, cached under
+/// `sources/<namespace>/<name>/<file>` next to the manifests of
+/// [`MojangVersions::other`].
+///
+/// The request goes through the context's metadata cache, so mirror rules,
+/// fallback to the original address and offline caching apply.
+///
+/// # Errors
+///
+/// Returns [`CatalogError`] for a malformed address or file name, and when
+/// the document is unavailable and not cached.
+pub async fn fetch_for_source(
+    cx: &CatalogContext,
+    source: &ExtensionId,
+    address: &str,
+    file: &str,
+) -> Result<Bytes, CatalogError> {
+    let path = format!("sources/{}/{}/{file}", source.namespace(), source.name());
+    cx.fetch(&MetaRequest::new(url(address)?, key(path)?)).await
+}
+
 /// Fetches the version JSON of a listed version, checked against the manifest's SHA-1.
 ///
 /// The document is cached under `mojang/versions/<sha1>.json`, so later
@@ -375,7 +397,9 @@ mod tests {
     };
     use coblet_types::{ExtensionId, VersionType};
 
-    use super::{MojangVersions, VersionManifest, fetch_asset_index, fetch_version_json};
+    use super::{
+        MojangVersions, VersionManifest, fetch_asset_index, fetch_for_source, fetch_version_json,
+    };
     use crate::version::tests::fixture_bytes;
     use crate::{AssetIndex, TraitSources, TraitTable, VersionTrait};
 
@@ -507,6 +531,19 @@ mod tests {
         let before = files.requested.lock().unwrap().len();
         fetch_version_json(&cx, &entry("b1.7.3")).await.unwrap();
         assert_eq!(files.requested.lock().unwrap().len(), before);
+
+        let source = coblet_types::ExtensionId::new("acme:copy").unwrap();
+        let address = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+        let copied = fetch_for_source(&cx, &source, address, "list.json")
+            .await
+            .unwrap();
+        assert!(!copied.is_empty());
+        assert!(dir.path().join("sources/acme/copy/list.json").is_file());
+        assert!(
+            fetch_for_source(&cx, &source, address, "../escape.json")
+                .await
+                .is_err()
+        );
 
         let tampered = fetch_version_json(&cx, &entry("1.12.2")).await.unwrap_err();
         assert!(
