@@ -81,6 +81,7 @@ impl From<coblet::Error> for CobletError {
             coblet::Error::Java(error) => java_kind(error),
             coblet::Error::Auth(error) => auth_kind(error),
             coblet::Error::Player(error) => player_kind(error),
+            coblet::Error::Traits(error) => traits_kind(error),
             _ => ErrorKind::Other,
         };
         Self::new(kind, error.to_string())
@@ -93,6 +94,15 @@ fn loader_kind(error: &coblet::loader::LoaderError) -> ErrorKind {
         LoaderError::UnknownLoader(_) | LoaderError::UnknownVersion { .. } => ErrorKind::NotFound,
         LoaderError::InvalidDefinition { .. } => ErrorKind::InvalidArgument,
         LoaderError::Catalog(_) => ErrorKind::Network,
+        _ => ErrorKind::Other,
+    }
+}
+
+fn traits_kind(error: &coblet::mojang::TraitError) -> ErrorKind {
+    use coblet::mojang::TraitError;
+    match error {
+        TraitError::Table(_) => ErrorKind::InvalidArgument,
+        TraitError::Metadata(_) => ErrorKind::Network,
         _ => ErrorKind::Other,
     }
 }

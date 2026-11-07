@@ -34,6 +34,8 @@ pub struct CobletBuilder {
     pub(crate) loaders: Vec<(Arc<dyn coblet::loader::ModLoader>, bool)>,
     /// Java provider and locator changes in order.
     pub(crate) java: Vec<crate::java::JavaChange>,
+    /// Version trait source changes in order.
+    pub(crate) traits: Vec<crate::traits::TraitChange>,
 }
 
 /// Flag of `coblet_builder_add_mirror`: metadata documents from the mirror
@@ -128,6 +130,7 @@ pub unsafe extern "C" fn coblet_builder_new(
                 version_sources: Vec::new(),
                 loaders: Vec::new(),
                 java: Vec::new(),
+                traits: Vec::new(),
             });
             put(out_builder, Box::into_raw(builder), "out_builder")?;
             Ok(CobletStatus::Ok)
@@ -647,6 +650,7 @@ pub unsafe extern "C" fn coblet_builder_build(
                 version_sources,
                 loaders,
                 java,
+                traits,
             } = *builder;
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -686,6 +690,9 @@ pub unsafe extern "C" fn coblet_builder_build(
                 };
             }
             for change in java {
+                options = change.apply(options);
+            }
+            for change in traits {
                 options = change.apply(options);
             }
             match secrets {

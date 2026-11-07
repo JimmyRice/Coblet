@@ -5,7 +5,7 @@ use coblet::platform::ProfileError;
 use coblet::player::PlayerError;
 
 /// Version of the C ABI; it grows with every incompatible change.
-pub const COBLET_ABI_VERSION: u32 = 13;
+pub const COBLET_ABI_VERSION: u32 = 14;
 
 /// Result of a call.
 #[repr(C)]
@@ -217,6 +217,7 @@ impl From<coblet::Error> for Failure {
             coblet::Error::Java(error) => java_kind(error),
             coblet::Error::Auth(error) => auth_kind(error),
             coblet::Error::Player(error) => player_kind(error),
+            coblet::Error::Traits(error) => traits_kind(error),
             _ => CobletErrorKind::Other,
         };
         Self::new(kind, error.to_string())
@@ -237,6 +238,15 @@ fn loader_kind(error: &coblet::loader::LoaderError) -> CobletErrorKind {
         }
         LoaderError::InvalidDefinition { .. } => CobletErrorKind::InvalidArgument,
         LoaderError::Catalog(_) => CobletErrorKind::Network,
+        _ => CobletErrorKind::Other,
+    }
+}
+
+fn traits_kind(error: &coblet::mojang::TraitError) -> CobletErrorKind {
+    use coblet::mojang::TraitError;
+    match error {
+        TraitError::Table(_) => CobletErrorKind::InvalidArgument,
+        TraitError::Metadata(_) => CobletErrorKind::Network,
         _ => CobletErrorKind::Other,
     }
 }

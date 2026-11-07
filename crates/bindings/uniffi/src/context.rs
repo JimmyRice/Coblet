@@ -19,6 +19,11 @@ pub struct VersionInfo {
     pub released: String,
     /// Whether the manifest names it the latest release.
     pub latest_release: bool,
+    /// Version traits known from the version list, such as `jre-legacy`;
+    /// `Coblet.version_traits` adds those that need the version JSON.
+    pub traits: Vec<String>,
+    /// Version source that listed it, such as `coblet:mojang`.
+    pub source: Option<String>,
 }
 
 impl From<&GameVersion> for VersionInfo {
@@ -28,6 +33,12 @@ impl From<&GameVersion> for VersionInfo {
             version_type: version.version_type.as_str().to_owned(),
             released: version.released.to_string(),
             latest_release: version.latest_release,
+            traits: version
+                .traits
+                .iter()
+                .map(|value| value.as_str().to_owned())
+                .collect(),
+            source: version.source.as_ref().map(|id| id.as_str().to_owned()),
         }
     }
 }

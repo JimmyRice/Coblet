@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use coblet_launch::{GameLayout, GameSession, LaunchContext, LaunchRequest, LaunchServices};
-use coblet_mojang::{GameVersion, fetch_version_json};
+use coblet_mojang::{GameVersion, TraitInput, fetch_version_json};
 use coblet_platform::{Component, EffectiveLaunchProfile, ProfileEngine, ResolvedProfile};
 
 use crate::{Coblet, Error};
@@ -41,9 +41,11 @@ impl Coblet {
         let cx = self.catalog_context();
         let document = fetch_version_json(&cx, version).await;
         self.forward_warnings(&cx);
-        let raw = document?.value;
-        let traits = self.inner.versions.mojang.traits_of(&raw);
-        let resolved = ResolvedProfile::from_version(raw, traits)?.compose(components)?;
+        let document = Arc::new(document?);
+        let input = TraitInput::listed(version).with_version(Arc::clone(&document));
+        let report = self.traits_of(&cx, input, version).await;
+        let raw = Arc::unwrap_or_clone(document).value;
+        let resolved = ResolvedProfile::from_version(raw, report.traits)?.compose(components)?;
         Ok(self
             .inner
             .profiles

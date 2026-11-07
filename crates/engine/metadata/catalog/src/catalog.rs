@@ -5,8 +5,8 @@ use coblet_runtime::{Event, EventBus, Warning, WarningCode};
 use coblet_types::VersionType;
 
 use crate::{
-    CachePolicy, CatalogContext, CatalogError, CatalogItem, CatalogQuery, CatalogSource, Filter,
-    MetaCache,
+    CachePolicy, CatalogContext, CatalogError, CatalogItem, CatalogQuery, CatalogSource,
+    CatalogStage, Filter, MetaCache,
 };
 
 /// Warning code published when one of several sources fails and the others still answered.
@@ -17,10 +17,12 @@ pub const SOURCE_FAILED: WarningCode = WarningCode::from_static("catalog.source-
 /// Sources are asked in the order they were added. When two sources return
 /// the same [`CatalogItem::key`], the earlier source wins. The merged list is
 /// sorted by release time, newest first, keeping source order for ties and
-/// for items without a time; version strings are never compared. Lists are
+/// for items without a time; version strings are never compared. Then the
+/// [`CatalogStage`]s change the list in the order they were added. Lists are
 /// kept in memory per [`CatalogQuery`] until [`Catalog::refresh`].
 pub struct Catalog<Item> {
     sources: Vec<Arc<dyn CatalogSource<Item>>>,
+    stages: Vec<Arc<dyn CatalogStage<Item>>>,
     meta: MetaCache,
     events: Option<EventBus>,
     lists: Mutex<HashMap<CatalogQuery, Arc<[Item]>>>,
@@ -48,6 +50,7 @@ impl<Item: CatalogItem> Catalog<Item> {
     pub fn new(meta: MetaCache) -> Self {
         Self {
             sources: Vec::new(),
+            stages: Vec::new(),
             meta,
             events: None,
             lists: Mutex::new(HashMap::new()),
@@ -58,6 +61,13 @@ impl<Item: CatalogItem> Catalog<Item> {
     #[must_use]
     pub fn with_source(mut self, source: Arc<dyn CatalogSource<Item>>) -> Self {
         self.sources.push(source);
+        self
+    }
+
+    /// Adds a stage that changes every merged list, after the existing stages.
+    #[must_use]
+    pub fn with_stage(mut self, stage: Arc<dyn CatalogStage<Item>>) -> Self {
+        self.stages.push(stage);
         self
     }
 
@@ -167,7 +177,12 @@ impl<Item: CatalogItem> Catalog<Item> {
                 self.publish(warning);
             }
             match result {
-                Ok(page) => pages.push(page.items),
+                Ok(mut page) => {
+                    for item in &mut page.items {
+                        item.listed_by(source.id());
+                    }
+                    pages.push(page.items);
+                }
                 Err(error) => {
                     let error = CatalogError::Source {
                         source_id: source.id().clone(),
@@ -197,6 +212,15 @@ impl<Item: CatalogItem> Catalog<Item> {
             .filter(|item| seen.insert(item.key().to_owned()))
             .collect();
         merged.sort_by_key(|item| std::cmp::Reverse(item.released()));
+        if !self.stages.is_empty() {
+            let cx = CatalogContext::new(self.meta.clone(), policy);
+            for stage in &self.stages {
+                stage.apply(&cx, &mut merged).await;
+            }
+            for warning in cx.take_warnings() {
+                self.publish(warning);
+            }
+        }
         let merged: Arc<[Item]> = merged.into();
         self.lists
             .lock()
@@ -211,11 +235,13 @@ mod tests {
     use std::sync::Arc;
 
     use coblet_runtime::{
-        BoxFuture, Event, EventBus, Extension, HttpUrl, Received, RelPath, TokioStorage,
+        BoxFuture, Event, EventBus, Extension, HttpUrl, Received, RelPath, TokioStorage, Warning,
+        WarningCode,
     };
     use coblet_types::{ExtensionId, GameVersionId, VersionType};
 
     use super::{Catalog, SOURCE_FAILED};
+    use crate::CatalogStage;
     use crate::testing::{Reply, Scripted};
     use crate::{
         CatalogContext, CatalogError, CatalogItem, CatalogPage, CatalogQuery, CatalogSource,
@@ -229,6 +255,8 @@ mod tests {
         time: Option<Timestamp>,
         star: bool,
         from: &'static str,
+        by: Option<ExtensionId>,
+        note: Option<String>,
     }
 
     impl CatalogItem for Version {
@@ -246,6 +274,9 @@ mod tests {
         }
         fn is_compatible_with(&self, game: &GameVersionId) -> bool {
             self.id.starts_with(game.as_str())
+        }
+        fn listed_by(&mut self, source: &ExtensionId) {
+            self.by = Some(source.clone());
         }
     }
 
@@ -296,6 +327,8 @@ mod tests {
                             kind,
                             time,
                             from,
+                            by: None,
+                            note: None,
                         }
                     })
                     .collect();
@@ -449,5 +482,56 @@ mystery,experiment";
         assert_eq!(ids(&items), ["1.20.1-b", "1.20.1-a"]);
         assert_eq!(catalog.recommended(&items).unwrap().id, "1.20.1-b");
         assert!(catalog.recommended(&[]).is_none());
+    }
+
+    /// Notes the source of every item and warns once.
+    struct Note;
+
+    impl CatalogStage<Version> for Note {
+        fn apply<'a>(
+            &'a self,
+            cx: &'a CatalogContext,
+            items: &'a mut [Version],
+        ) -> BoxFuture<'a, ()> {
+            Box::pin(async move {
+                for item in items.iter_mut() {
+                    item.note = item.by.as_ref().map(|by| format!("from {by}"));
+                }
+                cx.warn(Warning {
+                    op: None,
+                    code: WarningCode::from_static("test.noted"),
+                    message: format!("noted {}", items.len()),
+                });
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn stages_see_the_merged_list_with_its_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let transport = Arc::new(Scripted::new([
+            Reply::Ok(200, Vec::new(), MAIN),
+            Reply::Ok(200, Vec::new(), EXTRA),
+        ]));
+        let events = EventBus::new(16);
+        let mut subscription = events.subscribe();
+        let catalog = catalog(transport, &dir)
+            .with_stage(Arc::new(Note))
+            .with_events(events);
+        let all = catalog.list(&Filter::new()).await.unwrap();
+        let note = |id: &str| {
+            all.iter()
+                .find(|item| item.id == id)
+                .and_then(|item| item.note.clone())
+        };
+        assert_eq!(note("1.20.1").as_deref(), Some("from test:main"));
+        assert_eq!(note("mystery").as_deref(), Some("from test:extra"));
+        let Some(Received::Event(Event::Warning(warning))) = subscription.recv().await else {
+            panic!("expected a warning");
+        };
+        assert_eq!(warning.message, "noted 6");
+        // The list is kept with the stage's changes.
+        let again = catalog.list(&Filter::new()).await.unwrap();
+        assert!(again.iter().all(|item| item.note.is_some()));
     }
 }

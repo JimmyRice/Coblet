@@ -23,7 +23,11 @@
 //! answer through a `CobletJavaCtx` handle, or TOML and JSON provider
 //! definitions (`coblet_builder_add_java_provider_toml`); built-in ones are
 //! removed with `coblet_builder_remove_java_provider`, and `coblet_java_*`
-//! lists installs, providers and packages. Events (launch steps, file transfers, game
+//! lists installs, providers and packages. Version trait sources are
+//! callback tables (`CobletTraitSource`) that answer through a
+//! `CobletTraitCtx` handle, or TOML and JSON tables
+//! (`coblet_builder_add_trait_table_toml`); `coblet_version_traits_json`
+//! reports a version's traits and where each came from. Events (launch steps, file transfers, game
 //! starts, logs and exits) are read with `coblet_events_next` as fixed
 //! layout `CobletEvent` structs. The header `include/coblet.h` is generated with
 //! `cargo xtask gen-header`.
@@ -42,6 +46,7 @@ mod login;
 mod profile;
 mod secrets;
 mod sources;
+mod traits;
 mod types;
 
 pub use accounts::{
@@ -117,6 +122,13 @@ pub use secrets::{
     coblet_secret_call_fail, coblet_secret_call_set_value,
 };
 pub use sources::{CobletRewrite, CobletUrlRewriter, coblet_rewrite_set_url};
+pub use traits::{
+    COBLET_TRAITS_REPLACE, CobletTraitCtx, CobletTraitSource, coblet_builder_add_trait_source,
+    coblet_builder_add_trait_table_json, coblet_builder_add_trait_table_toml,
+    coblet_builder_remove_trait_source, coblet_builtin_version_traits_toml, coblet_trait_ctx_fail,
+    coblet_trait_ctx_fetch, coblet_trait_ctx_set_result, coblet_trait_sources_json,
+    coblet_version_traits_json,
+};
 pub use types::{
     COBLET_ABI_VERSION, CobletBytes, CobletError, CobletErrorKind, CobletStatus, CobletString,
 };

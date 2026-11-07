@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use bytes::Bytes;
 use coblet_catalog::{
     CatalogContext, CatalogError, CatalogItem, CatalogPage, CatalogQuery, CatalogSource,
@@ -9,7 +7,7 @@ use coblet_runtime::{BoxFuture, Extension, HttpUrl, RelPath};
 use coblet_types::{ExtensionId, FileHash, GameVersionId, Sha1Digest, VersionType};
 use serde::{Deserialize, Serialize};
 
-use crate::{AssetIndex, AssetIndexRef, RawVersionJson, TraitSource, TraitTable, VersionTraits};
+use crate::{AssetIndex, AssetIndexRef, RawVersionJson, VersionTraits};
 
 /// Address of the Mojang version manifest.
 pub const MANIFEST_URL: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
@@ -86,15 +84,20 @@ pub struct GameVersion {
     pub compliance_level: u32,
     /// Whether the manifest names this version as the newest release.
     pub latest_release: bool,
-    /// Traits known before the version JSON is fetched; see [`TraitTable::for_manifest_entry`].
+    /// Traits known before the version JSON is fetched: the declared
+    /// traits as changed by the catalog's [`TraitSources`](crate::TraitSources).
     pub traits: VersionTraits,
+    /// Traits the source gave the version itself, before any trait source ran.
+    pub declared_traits: VersionTraits,
+    /// Version source that listed the version, set by the catalog.
+    pub source: Option<ExtensionId>,
 }
 
 impl GameVersion {
     /// Creates a version for a catalog source other than the Mojang manifest.
     ///
     /// The version is not the latest release, has compliance level 0 and
-    /// no traits; launching derives traits from its version file anyway.
+    /// declares no traits; the trait sources still give it traits.
     ///
     /// # Examples
     ///
@@ -131,13 +134,20 @@ impl GameVersion {
             compliance_level: 0,
             latest_release: false,
             traits: VersionTraits::new(),
+            declared_traits: VersionTraits::new(),
+            source: None,
         }
     }
 
-    /// Sets the traits known before the version file is fetched.
+    /// Sets the traits the source knows about the version itself; trait
+    /// sources start from them.
     #[must_use]
     pub fn with_traits(self, traits: VersionTraits) -> Self {
-        Self { traits, ..self }
+        Self {
+            declared_traits: traits.clone(),
+            traits,
+            ..self
+        }
     }
 }
 
@@ -156,6 +166,10 @@ impl CatalogItem for GameVersion {
 
     fn is_recommended(&self) -> bool {
         self.latest_release
+    }
+
+    fn listed_by(&mut self, source: &ExtensionId) {
+        self.source = Some(source.clone());
     }
 }
 
@@ -183,15 +197,12 @@ fn url(text: &str) -> Result<HttpUrl, CatalogError> {
 pub struct MojangVersions {
     id: ExtensionId,
     manifest: HttpUrl,
-    table: Arc<TraitTable>,
-    trait_sources: Vec<Arc<dyn TraitSource>>,
 }
 
 impl std::fmt::Debug for MojangVersions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MojangVersions")
             .field("manifest", &self.manifest)
-            .field("trait_sources", &self.trait_sources.len())
             .finish_non_exhaustive()
     }
 }
@@ -203,14 +214,12 @@ impl Default for MojangVersions {
 }
 
 impl MojangVersions {
-    /// Creates the source with the official manifest address and the built-in trait table.
+    /// Creates the source with the official manifest address.
     #[must_use]
     pub fn new() -> Self {
         Self {
             id: ExtensionId::new("coblet:mojang").unwrap_or_else(|_| unreachable!()),
             manifest: HttpUrl::new(MANIFEST_URL).unwrap_or_else(|_| unreachable!()),
-            table: Arc::new(TraitTable::builtin().clone()),
-            trait_sources: Vec::new(),
         }
     }
 
@@ -242,37 +251,7 @@ impl MojangVersions {
     /// ```
     #[must_use]
     pub fn other(id: ExtensionId, manifest: HttpUrl) -> Self {
-        Self {
-            id,
-            manifest,
-            ..Self::new()
-        }
-    }
-
-    /// Uses another trait table.
-    #[must_use]
-    pub fn with_trait_table(self, table: TraitTable) -> Self {
-        Self {
-            table: Arc::new(table),
-            ..self
-        }
-    }
-
-    /// Adds a trait source, run after the table.
-    #[must_use]
-    pub fn with_trait_source(mut self, source: Arc<dyn TraitSource>) -> Self {
-        self.trait_sources.push(source);
-        self
-    }
-
-    /// Returns the traits of a version JSON: the table, then the trait sources.
-    #[must_use]
-    pub fn traits_of(&self, raw: &RawVersionJson) -> VersionTraits {
-        let mut traits = self.table.for_version(raw);
-        for source in &self.trait_sources {
-            source.adjust(&raw.id, &mut traits);
-        }
-        traits
+        Self { id, manifest }
     }
 
     /// Fetches and parses the manifest.
@@ -295,13 +274,7 @@ impl MojangVersions {
             .map_err(|error| CatalogError::parse(self.manifest.as_str(), error))
     }
 
-    fn entry(&self, entry: ManifestEntry, latest: &GameVersionId) -> GameVersion {
-        let mut traits = self
-            .table
-            .for_manifest_entry(&entry.id, Some(entry.release_time));
-        for source in &self.trait_sources {
-            source.adjust(&entry.id, &mut traits);
-        }
+    fn entry(entry: ManifestEntry, latest: &GameVersionId) -> GameVersion {
         GameVersion {
             latest_release: entry.id == *latest,
             id: entry.id,
@@ -310,7 +283,9 @@ impl MojangVersions {
             sha1: entry.sha1,
             released: entry.release_time,
             compliance_level: entry.compliance_level,
-            traits,
+            traits: VersionTraits::new(),
+            declared_traits: VersionTraits::new(),
+            source: None,
         }
     }
 }
@@ -337,7 +312,7 @@ impl CatalogSource<GameVersion> for MojangVersions {
             let items = manifest
                 .versions
                 .into_iter()
-                .map(|entry| self.entry(entry, &latest))
+                .map(|entry| Self::entry(entry, &latest))
                 .collect();
             Ok(CatalogPage::new(items))
         })
@@ -398,11 +373,11 @@ mod tests {
     use coblet_runtime::{
         BoxFuture, MemoryBody, Request, Response, TokioStorage, Transport, TransportError,
     };
-    use coblet_types::VersionType;
+    use coblet_types::{ExtensionId, VersionType};
 
     use super::{MojangVersions, VersionManifest, fetch_asset_index, fetch_version_json};
     use crate::version::tests::fixture_bytes;
-    use crate::{AssetIndex, VersionTrait};
+    use crate::{AssetIndex, TraitSources, TraitTable, VersionTrait};
 
     /// Serves fixture files by URL suffix and records requested URLs.
     #[derive(Default)]
@@ -464,10 +439,16 @@ mod tests {
             },
             &dir,
         );
-        let catalog = Catalog::new(meta).with_source(Arc::new(MojangVersions::new()));
+        let catalog = Catalog::new(meta)
+            .with_source(Arc::new(MojangVersions::new()))
+            .with_stage(Arc::new(TraitSources::builtin()));
         let all = catalog.list(&Filter::new()).await.unwrap();
         assert_eq!(all.len(), 14);
         assert_eq!(catalog.recommended(&all).unwrap().id.as_str(), "26.3");
+        assert!(all.iter().all(|version| {
+            version.source.as_ref().map(ExtensionId::as_str) == Some("coblet:mojang")
+                && version.declared_traits.is_empty()
+        }));
         let betas = catalog
             .list(&Filter::new().with_types([VersionType::OldBeta]))
             .await
@@ -513,13 +494,13 @@ mod tests {
                 .find(|entry| entry.id.as_str() == id)
                 .unwrap()
                 .clone();
-            source.entry(entry, &latest)
+            MojangVersions::entry(entry, &latest)
         };
 
         let beta = fetch_version_json(&cx, &entry("b1.7.3")).await.unwrap();
         assert_eq!(beta.value.id.as_str(), "b1.7.3");
         assert_eq!(&beta.bytes[..], &fixture_bytes("b1.7.3.json")[..]);
-        let traits = source.traits_of(&beta.value);
+        let traits = TraitTable::builtin().for_version(&beta.value);
         assert!(traits.contains(&VersionTrait::JreLegacy));
 
         // Cached by hash: no second request.

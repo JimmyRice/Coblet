@@ -19,6 +19,12 @@
 //! [`CobletBuilder::java_provider_toml`] add download sources after
 //! Mojang, Adoptium and Azul Zulu, and [`CobletBuilder::java_locator`] adds
 //! places to find installed Java.
+//! Version traits, which tell launchers and Platform Profiles what is
+//! special about a version, come from the same kind of list:
+//! [`CobletBuilder::trait_table_toml`] adds rules as data,
+//! [`CobletBuilder::trait_source`] adds code, and
+//! [`CobletBuilder::replace_trait_source`] or
+//! [`CobletBuilder::without_trait_source`] change the built-in table.
 //!
 //! Features: `mojang`, `java`, `launch` and `loaders` (all default) select subsystems;
 //! `tls-rustls` (default) provides the default transport. `auth-msa` adds

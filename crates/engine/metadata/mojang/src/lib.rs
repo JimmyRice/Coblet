@@ -7,8 +7,10 @@
 //!   unevaluated as the input of the Profile pipeline. [`evaluate`] decides
 //!   OS conditions for a [`RuleContext`] and leaves launch features open.
 //! - [`AssetIndex`] lists the asset objects of a version.
-//! - [`VersionTraits`] name the concrete problems of old versions, derived
-//!   from metadata and from the built-in [`TraitTable`].
+//! - [`VersionTraits`] name the concrete problems of old versions. An
+//!   ordered list of [`TraitSource`]s, [`TraitSources`], gives them to
+//!   versions: the built-in [`TraitTable`] first, then tables and code
+//!   sources added by the launcher, such as an [`FnTraitSource`].
 //!
 //! Mapping downloads are optional throughout: from 26.1 on, versions are
 //! not obfuscated and ship no mappings.
@@ -37,7 +39,11 @@ pub use manifest::{
     Document, GameVersion, Latest, MANIFEST_URL, ManifestEntry, MojangVersions, VersionManifest,
     fetch_asset_index, fetch_version_json,
 };
-pub use traits::{LAUNCHWRAPPER_MAIN, TraitSource, TraitTable, VersionTrait, VersionTraits};
+pub use traits::{
+    BUILTIN_TRAITS_TOML, FnTraitSource, LAUNCHWRAPPER_MAIN, TRAIT_SOURCE_FAILED, TraitAction,
+    TraitChange, TraitContext, TraitError, TraitFailure, TraitInput, TraitReport, TraitSource,
+    TraitSources, TraitTable, TraitTarget, VersionTrait, VersionTraits,
+};
 pub use version::{
     Argument, ArgumentValue, Arguments, Artifact, AssetIndexRef, Condition, Download, Downloads,
     Extract, FeatureClause, InheritError, JavaVersion, Library, LibraryDownloads, Logging,

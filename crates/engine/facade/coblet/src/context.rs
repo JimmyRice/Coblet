@@ -93,6 +93,19 @@ impl Coblet {
 
     /// Publishes the warnings collected by a metadata context.
     #[cfg(feature = "java")]
+    /// Publishes the warnings of failed trait sources and any left in `cx`.
+    #[cfg(feature = "mojang")]
+    pub(crate) fn forward_trait_failures(
+        &self,
+        cx: &CatalogContext,
+        failures: &[coblet_mojang::TraitFailure],
+    ) {
+        for failure in failures {
+            cx.warn(failure.to_warning());
+        }
+        self.forward_warnings(cx);
+    }
+
     pub(crate) fn forward_warnings(&self, cx: &CatalogContext) {
         for warning in cx.take_warnings() {
             self.inner
