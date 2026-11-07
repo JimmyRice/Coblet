@@ -78,6 +78,7 @@ impl From<coblet::Error> for CobletError {
             }
             coblet::Error::Launch(_) => ErrorKind::Launch,
             coblet::Error::Loader(error) => loader_kind(error),
+            coblet::Error::Java(error) => java_kind(error),
             coblet::Error::Auth(error) => auth_kind(error),
             coblet::Error::Player(error) => player_kind(error),
             _ => ErrorKind::Other,
@@ -92,6 +93,16 @@ fn loader_kind(error: &coblet::loader::LoaderError) -> ErrorKind {
         LoaderError::UnknownLoader(_) | LoaderError::UnknownVersion { .. } => ErrorKind::NotFound,
         LoaderError::InvalidDefinition { .. } => ErrorKind::InvalidArgument,
         LoaderError::Catalog(_) => ErrorKind::Network,
+        _ => ErrorKind::Other,
+    }
+}
+
+fn java_kind(error: &coblet::java::JavaError) -> ErrorKind {
+    use coblet::java::JavaError;
+    match error {
+        JavaError::Definition(_) => ErrorKind::InvalidArgument,
+        JavaError::Metadata(_) | JavaError::Download { .. } => ErrorKind::Network,
+        JavaError::NotFound { .. } => ErrorKind::NotFound,
         _ => ErrorKind::Other,
     }
 }

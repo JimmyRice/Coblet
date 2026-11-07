@@ -24,6 +24,7 @@ coblet = { workspace = true, default-features = true, features = ["auth-msa", "a
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
+tracing.workspace = true
 uniffi = { version = "0.32.2", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
