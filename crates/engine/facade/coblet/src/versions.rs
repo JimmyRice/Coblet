@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use coblet_catalog::{Catalog, Filter, MetaCache};
-use coblet_mojang::{GameVersion, MojangVersions};
+use coblet_mojang::{GameVersion, MojangVersions, TraitSources};
 use coblet_runtime::EventBus;
 
 use crate::builder::VersionSettings;
@@ -11,6 +11,7 @@ use crate::{Coblet, Error};
 pub(crate) struct VersionCatalog {
     pub(crate) catalog: Catalog<GameVersion>,
     pub(crate) mojang: Arc<MojangVersions>,
+    pub(crate) traits: Arc<TraitSources>,
 }
 
 pub(crate) fn version_catalog(
@@ -19,13 +20,17 @@ pub(crate) fn version_catalog(
     settings: VersionSettings,
 ) -> VersionCatalog {
     let mojang = Arc::new(settings.mojang.unwrap_or_default());
+    let traits = Arc::new(TraitSources::builtin());
     let catalog = settings.sources.into_iter().fold(
         Catalog::new(meta).with_source(Arc::clone(&mojang) as _),
         Catalog::with_source,
     );
     VersionCatalog {
-        catalog: catalog.with_events(events),
+        catalog: catalog
+            .with_stage(Arc::clone(&traits) as _)
+            .with_events(events),
         mojang,
+        traits,
     }
 }
 
@@ -65,7 +70,7 @@ impl Coblet {
             .ok_or_else(|| Error::UnknownVersion("latest release".to_owned()))
     }
 
-    /// Returns the Mojang version source, for its trait table and manifest address.
+    /// Returns the Mojang version source, for its manifest address.
     #[must_use]
     pub fn mojang_versions(&self) -> &Arc<MojangVersions> {
         &self.inner.versions.mojang

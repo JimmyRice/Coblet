@@ -305,7 +305,7 @@ impl<State> CobletBuilder<State> {
     }
 
     /// Uses this Mojang version source, for example one with another
-    /// manifest address or extra trait sources.
+    /// manifest address.
     #[cfg(feature = "mojang")]
     pub fn mojang_versions(mut self, source: coblet_mojang::MojangVersions) -> Self {
         self.versions.mojang = Some(source);

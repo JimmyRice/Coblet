@@ -1,11 +1,15 @@
 use std::fmt;
 use std::sync::Arc;
 
-use coblet_catalog::CatalogContext;
-use coblet_runtime::{RegistryError, WarningCode};
+use coblet_catalog::{CatalogContext, CatalogStage};
+use coblet_runtime::{BoxFuture, RegistryError, Warning, WarningCode};
 use coblet_types::ExtensionId;
 
-use super::{TraitContext, TraitFailure, TraitSource, TraitTable, TraitTarget, VersionTraits};
+use super::{
+    TraitContext, TraitFailure, TraitInput, TraitReport, TraitSource, TraitTable, TraitTarget,
+    VersionTraits,
+};
+use crate::GameVersion;
 
 /// Warning code published when a trait source fails and its changes are dropped.
 pub const TRAIT_SOURCE_FAILED: WarningCode =
@@ -17,6 +21,12 @@ pub const TRAIT_SOURCE_FAILED: WarningCode =
 /// `coblet:version-traits`. Sources registered later run later, so they
 /// can remove traits earlier ones added. Built-in and third-party sources
 /// are equal: either can be replaced in place or removed by ID.
+///
+/// The list is also the [`CatalogStage`] that gives listed game versions
+/// their traits: each version starts from its
+/// [`declared_traits`](GameVersion::declared_traits), then every source
+/// runs once over the whole merged list. When a version is launched,
+/// [`report`](Self::report) runs the sources again with its version JSON.
 ///
 /// # Examples
 ///
@@ -120,7 +130,7 @@ impl TraitSources {
     ///
     /// A source that fails leaves the batch as it was before that source
     /// ran; its failure is returned and the remaining sources still run.
-    pub async fn apply(
+    pub async fn run(
         &self,
         catalog: &CatalogContext,
         targets: &mut [TraitTarget],
@@ -151,6 +161,55 @@ impl TraitSources {
             }
         }
         failures
+    }
+
+    /// Runs every source for one version and returns its traits with the
+    /// changes that led to them, and the sources that failed.
+    pub async fn report(
+        &self,
+        catalog: &CatalogContext,
+        input: TraitInput,
+        start: VersionTraits,
+    ) -> (TraitReport, Vec<TraitFailure>) {
+        let mut targets = [TraitTarget::new(input, start)];
+        let failures = self.run(catalog, &mut targets).await;
+        let [target] = targets;
+        (target.into_report(), failures)
+    }
+}
+
+impl TraitFailure {
+    /// Returns the `version.trait-source-failed` warning for this failure.
+    #[must_use]
+    pub fn to_warning(&self) -> Warning {
+        Warning {
+            op: None,
+            code: TRAIT_SOURCE_FAILED,
+            message: self.to_string(),
+        }
+    }
+}
+
+impl CatalogStage<GameVersion> for TraitSources {
+    fn apply<'a>(
+        &'a self,
+        cx: &'a CatalogContext,
+        items: &'a mut [GameVersion],
+    ) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            let mut targets: Vec<TraitTarget> = items
+                .iter()
+                .map(|version| {
+                    TraitTarget::new(TraitInput::listed(version), version.declared_traits.clone())
+                })
+                .collect();
+            for failure in self.run(cx, &mut targets).await {
+                cx.warn(failure.to_warning());
+            }
+            for (version, target) in items.iter_mut().zip(targets) {
+                version.traits = target.into_report().traits;
+            }
+        })
     }
 }
 
@@ -247,7 +306,7 @@ mod tests {
             .register(scripted("test:second", "y", "x", false))
             .unwrap();
         let mut targets = [target("a", &["declared"]), target("b", &[])];
-        let failures = sources.apply(&context(&dir), &mut targets).await;
+        let failures = sources.run(&context(&dir), &mut targets).await;
         assert!(failures.is_empty());
         assert_eq!(names(targets[0].traits()), ["y"]);
         let changes: Vec<String> = targets[0]
@@ -277,7 +336,7 @@ mod tests {
             .register(scripted("test:after", "y", "", false))
             .unwrap();
         let mut targets = [target("a", &["declared"])];
-        let failures = sources.apply(&context(&dir), &mut targets).await;
+        let failures = sources.run(&context(&dir), &mut targets).await;
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].source_id.as_str(), "test:broken");
         assert_eq!(
