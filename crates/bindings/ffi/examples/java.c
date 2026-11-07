@@ -1,16 +1,18 @@
 /*
  * Java example of the coblet C ABI, online: Mojang's runtimes are removed
  * and the machine's own Java is hidden, so the launch has to install Java
- * from the next provider that has it (Adoptium, then Azul Zulu). Events
- * are read after the launch returns, so on a cold start the download
- * updates can outgrow the buffer and show up as one `missed` event. A locator written in C adds the `java` named by the
+ * from the next provider that has it (Adoptium, then Azul Zulu). A
+ * thread of its own reads the launch's events while the launch call
+ * blocks, printing the steps and the Java download every 10%. A locator written in C adds the `java` named by the
  * COBLET_EXAMPLE_JAVA environment variable, and a provider described in
  * TOML shows the data form. The game is stopped once a log message
  * contains the marker, and the installed runtimes are listed.
  *
- *   cc -I include examples/java.c -L <target dir> -lcoblet_ffi -o java
+ *   cc -pthread -I include examples/java.c -L <target dir> -lcoblet_ffi -o java
  *   ./java <data root> <version> <marker>
  */
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,30 +71,61 @@ static int print_json(const char *what, const Coblet *coblet, JsonCall call) {
     return 0;
 }
 
-/* Prints the Java runtime transfers and steps of one launch read so far. */
-static void print_launch_events(CobletEvents *events, const char *launch_id) {
+/* Reads the events of one launch on its own thread while the launch blocks. */
+typedef struct {
+    CobletEvents *events;
+    const char *launch_id;
+    atomic_bool launch_returned;
+} LaunchReader;
+
+static void print_java_progress(const CobletEvent *event, unsigned *shown) {
+    unsigned percent = event->has_bytes_total && event->bytes_total > 0
+                           ? (unsigned)(event->bytes_done * 100 / event->bytes_total)
+                           : 0;
+    bool done = event->files_done == event->files_total;
+    if (done || percent / 10 != *shown / 10) {
+        *shown = percent;
+        printf("event: java runtime %u%%, %llu/%llu files, %llu bytes\n", percent,
+               (unsigned long long)event->files_done, (unsigned long long)event->files_total,
+               (unsigned long long)event->bytes_done);
+    }
+}
+
+static void *read_launch_events(void *arg) {
+    LaunchReader *reader = arg;
     CobletEvent event = {0};
     CobletError *err = NULL;
-    unsigned updates = 0;
-    while (coblet_events_next(events, 0, &event, &err) == COBLET_STATUS_OK) {
+    unsigned shown = 0;
+    bool finished = false;
+    while (!finished) {
+        CobletStatus status = coblet_events_next(reader->events, 100, &event, &err);
+        if (status == COBLET_STATUS_TIMEOUT) {
+            /* Events published before the launch returned are already queued. */
+            if (atomic_load(&reader->launch_returned)) {
+                break;
+            }
+            continue;
+        }
+        if (status != COBLET_STATUS_OK) {
+            break;
+        }
         if (event.kind == COBLET_EVENT_KIND_MISSED) {
             printf("event: missed %llu\n", (unsigned long long)event.missed);
-        } else if (strcmp(event.op, launch_id) == 0) {
+        } else if (strcmp(event.op, reader->launch_id) == 0) {
             if (event.kind == COBLET_EVENT_KIND_TRANSFER &&
                 event.transfer == COBLET_TRANSFER_KIND_JAVA_RUNTIME) {
-                updates++;
-                if (event.files_done == event.files_total) {
-                    printf("event: java runtime done, %llu files, %llu bytes, %u updates\n",
-                           (unsigned long long)event.files_total,
-                           (unsigned long long)event.bytes_done, updates);
-                }
+                print_java_progress(&event, &shown);
             } else if (event.kind == COBLET_EVENT_KIND_LAUNCH_STEP && event.json.ptr != NULL) {
                 printf("event: step %s\n", event.json.ptr);
+            } else if (event.kind == COBLET_EVENT_KIND_OPERATION_FINISHED) {
+                printf("event: launch finished %s\n", event.json.ptr ? event.json.ptr : "");
+                finished = true;
             }
         }
         coblet_event_clear(&event);
     }
     coblet_error_free(err);
+    return NULL;
 }
 
 int main(int argc, char **argv) {
@@ -143,14 +176,21 @@ int main(int argc, char **argv) {
         coblet_generate_operation_id(launch_id, &err) != COBLET_STATUS_OK) {
         return fail("coblet_events_subscribe", err);
     }
+    LaunchReader reader = {events, launch_id, false};
+    pthread_t reader_thread;
+    if (pthread_create(&reader_thread, NULL, read_launch_events, &reader) != 0) {
+        fprintf(stderr, "cannot start the event reader\n");
+        return 1;
+    }
     CobletGame *game = NULL;
     CobletStatus launched = coblet_launch_customized(
         coblet, argv[2], "Steve", COBLET_LAUNCH_MODE_OFFLINE, NULL, NULL, 0, launch_id, &game, &err);
+    atomic_store(&reader.launch_returned, true);
+    pthread_join(reader_thread, NULL);
+    coblet_events_free(events);
     if (launched != COBLET_STATUS_OK) {
         return fail("coblet_launch_customized", err);
     }
-    print_launch_events(events, launch_id);
-    coblet_events_free(events);
 
     int reached = 0;
     CobletString line = {0};
