@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use coblet_catalog::MetaCache;
-#[cfg(feature = "java")]
+#[cfg(any(feature = "java", feature = "mojang"))]
 use coblet_catalog::{CachePolicy, CatalogContext};
 use coblet_download::Downloader;
 use coblet_runtime::{EventBus, EventSubscription, ProcessSpawner, Storage, Transport};
@@ -86,13 +86,11 @@ impl Coblet {
     }
 
     /// Returns a metadata context that prefers cached documents.
-    #[cfg(feature = "java")]
+    #[cfg(any(feature = "java", feature = "mojang"))]
     pub(crate) fn catalog_context(&self) -> CatalogContext {
         CatalogContext::new(self.inner.meta.clone(), CachePolicy::PreferCache)
     }
 
-    /// Publishes the warnings collected by a metadata context.
-    #[cfg(feature = "java")]
     /// Publishes the warnings of failed trait sources and any left in `cx`.
     #[cfg(feature = "mojang")]
     pub(crate) fn forward_trait_failures(
@@ -106,6 +104,8 @@ impl Coblet {
         self.forward_warnings(cx);
     }
 
+    /// Publishes the warnings collected by a metadata context.
+    #[cfg(any(feature = "java", feature = "mojang"))]
     pub(crate) fn forward_warnings(&self, cx: &CatalogContext) {
         for warning in cx.take_warnings() {
             self.inner
