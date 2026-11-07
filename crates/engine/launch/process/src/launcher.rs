@@ -1199,4 +1199,69 @@ mod customize_tests {
             .unwrap();
         assert!(launcher.allows_auth_changes(&ExtensionId::new("acme:auth").unwrap()));
     }
+
+    fn with_component(cx: &mut LaunchContext, json: &str) {
+        let component = coblet_platform::ComponentPatch::from_slice(json.as_bytes()).unwrap();
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../fixtures/mojang/1.20.1.json");
+        let raw = RawVersionJson::from_slice(&std::fs::read(fixture).unwrap()).unwrap();
+        let traits = TraitTable::builtin().for_version(&raw);
+        let resolved = ResolvedProfile::from_version(raw, traits)
+            .unwrap()
+            .compose([&coblet_platform::Component::new(component)])
+            .unwrap();
+        cx.profile = ProfileEngine::builtin()
+            .resolve(&resolved, &Platform::new(OsFamily::Linux, Arch::X86_64))
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn maven_files_are_fetched_but_kept_off_the_classpath() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cx = context(dir.path(), "1.20.1", request());
+        with_component(
+            &mut cx,
+            r#"{ "uid": "acme.loader", "version": "1", "mavenFiles": [{
+                "name": "acme:installer:1",
+                "downloads": { "artifact": { "url": "https://maven.example/acme/installer-1.jar", "sha1": "0123456789abcdef0123456789abcdef01234567", "size": 3 } }
+            }] }"#,
+        );
+        assert!(
+            cx.profile
+                .classpath()
+                .all(|file| !file.path.contains("installer"))
+        );
+        let set = crate::files::FileSet::for_profile(&cx.profile, &cx.layout, &cx.services.catalog)
+            .await
+            .unwrap();
+        assert!(set.tasks.iter().any(|task| matches!(
+            &task.dest,
+            coblet_download::Destination::Path(path) if path.ends_with("acme/installer/1/installer-1.jar")
+        )));
+    }
+
+    #[tokio::test]
+    async fn jar_mods_and_agents_are_refused_until_supported() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cx = context(dir.path(), "1.20.1", request());
+        with_component(
+            &mut cx,
+            r#"{ "uid": "acme.old", "version": "1", "jarMods": [{ "name": "acme:jarmod:1" }] }"#,
+        );
+        let error = crate::ClientJar.run(&mut cx).await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "not supported yet: 1 jar mod(s) to merge into the client jar"
+        );
+
+        with_component(
+            &mut cx,
+            r#"{ "uid": "acme.agent", "version": "1", "+agents": [{ "name": "acme:agent:1" }] }"#,
+        );
+        let error = crate::VerifyFiles.run(&mut cx).await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "not supported yet: java agent acme:agent:1"
+        );
+    }
 }

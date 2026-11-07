@@ -207,7 +207,9 @@ impl From<coblet::Error> for Failure {
             coblet::Error::Transport(_) | coblet::Error::Catalog(_) => CobletErrorKind::Network,
             coblet::Error::UnknownVersion(_) => CobletErrorKind::NotFound,
             coblet::Error::Profile(ProfileError::Failed { .. }) => CobletErrorKind::Other,
-            coblet::Error::Profile(_) | coblet::Error::Unsupported(_) => {
+            coblet::Error::Profile(_)
+            | coblet::Error::Unsupported(_)
+            | coblet::Error::Launch(coblet::launch::LaunchError::Unsupported(_)) => {
                 CobletErrorKind::Unsupported
             }
             coblet::Error::Launch(_) => CobletErrorKind::Launch,

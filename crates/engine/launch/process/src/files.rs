@@ -89,6 +89,12 @@ impl FileSet {
                 profile
                     .native_jars()
                     .map(|jar| (&jar.file, ArtifactKind::Natives)),
+            )
+            .chain(
+                profile
+                    .maven_files
+                    .iter()
+                    .map(|file| (file, ArtifactKind::Library)),
             );
         for (file, kind) in libraries {
             if seen.insert(file.path.clone()) {

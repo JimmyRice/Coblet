@@ -70,10 +70,10 @@ step!(
     prepare_natives
 );
 step!(
-    /// Chooses the client jar. Jar mods are merged here once instances support them.
+    /// Chooses the client jar; refuses profiles with jar mods until merging is supported.
     ClientJar,
     "client-jar",
-    infallible client_jar
+    sync client_jar
 );
 step!(
     /// Places the libraries old FML downloads at start; the Forge loader provides them.
@@ -161,6 +161,12 @@ async fn select_java(cx: &mut LaunchContext) -> Result<(), LaunchError> {
 }
 
 async fn verify_files(cx: &mut LaunchContext) -> Result<(), LaunchError> {
+    if let Some(agent) = cx.profile.agents.first() {
+        return Err(LaunchError::Unsupported(format!(
+            "java agent {}",
+            agent.library.name
+        )));
+    }
     let services = &cx.services;
     let storage = &*services.storage;
     let (events, op) = (services.events.as_ref(), cx.request.operation);
@@ -216,10 +222,17 @@ async fn prepare_natives(cx: &mut LaunchContext) -> Result<(), LaunchError> {
     Ok(())
 }
 
-fn client_jar(cx: &mut LaunchContext) {
+fn client_jar(cx: &mut LaunchContext) -> Result<(), LaunchError> {
+    if !cx.profile.jar_mods.is_empty() {
+        return Err(LaunchError::Unsupported(format!(
+            "{} jar mod(s) to merge into the client jar",
+            cx.profile.jar_mods.len()
+        )));
+    }
     if cx.profile.client.is_some() && cx.client_jar.is_none() {
         cx.client_jar = Some(cx.layout.client_jar(&cx.profile.game_version));
     }
+    Ok(())
 }
 
 fn legacy_fml_libs(cx: &mut LaunchContext) {
