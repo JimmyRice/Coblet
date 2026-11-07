@@ -424,7 +424,14 @@ fn evaluate_profile(
         }
     }
 
-    let java = profile.java.as_ref();
+    let mut maven_files = Vec::new();
+    for file in &profile.maven_files {
+        if evaluate(&file.rules, &cx).is_allowed_by_default() {
+            maven_files.extend(library_file(file));
+        }
+    }
+
+    let java = java_requirement(pipeline, profile);
     EffectiveLaunchProfile {
         platform: platform.clone(),
         game_version: profile.game_version.clone(),
@@ -437,9 +444,12 @@ fn evaluate_profile(
         jvm_args: evaluate_args(&profile.jvm_args, &cx),
         game_args: evaluate_args(&profile.game_args, &cx),
         env: BTreeMap::new(),
+        maven_files,
+        jar_mods: profile.jar_mods.clone(),
+        agents: profile.agents.clone(),
         java: JavaRequirement {
-            major: java.map_or(DEFAULT_JAVA_MAJOR, |java| java.major_version),
-            component: java.map(|java| java.component.clone()),
+            major: java.0,
+            component: java.1,
             runtime_platform: None,
             source: JavaSource::Any,
             arch: platform.arch().clone(),
@@ -456,6 +466,30 @@ fn evaluate_profile(
             .collect(),
         warnings: Vec::new(),
         changes: std::mem::take(&mut pipeline.changes),
+    }
+}
+
+/// Picks the Java major version and Mojang runtime component: the version's
+/// own, unless the components accept only other versions, in which case the
+/// newest they accept, with no Mojang component to download.
+fn java_requirement(
+    pipeline: &mut Pipeline<'_>,
+    profile: &ResolvedProfile,
+) -> (u32, Option<String>) {
+    let java = profile.java.as_ref();
+    let major = java.map_or(DEFAULT_JAVA_MAJOR, |java| java.major_version);
+    let accepted = &profile.compatible_java_majors;
+    match accepted.iter().max() {
+        Some(&newest) if !accepted.contains(&major) => {
+            pipeline.record(
+                PipelineStep::Validate,
+                ChangeSource::Metadata,
+                "java",
+                format!("{major} -> {newest}, the newest version the components accept"),
+            );
+            (newest, None)
+        }
+        _ => (major, java.map(|java| java.component.clone())),
     }
 }
 
@@ -558,6 +592,43 @@ mod tests {
 
     fn resolve(name: &str, platform: &Platform) -> Result<EffectiveLaunchProfile, ProfileError> {
         ProfileEngine::builtin().resolve(&resolved(name), platform)
+    }
+
+    #[test]
+    fn carries_component_files_and_java_choices() {
+        let component: crate::Component = serde_json::from_str(
+            r#"{
+                "uid": "acme.loader", "version": "1",
+                "compatibleJavaMajors": [17, 21],
+                "mavenFiles": [
+                    { "name": "acme:installer:1", "url": "https://maven.example/" },
+                    { "name": "acme:windows-only:1", "rules": [{ "action": "allow", "os": { "name": "windows" } }] }
+                ],
+                "jarMods": [{ "name": "acme:jarmod:1" }]
+            }"#,
+        )
+        .unwrap();
+        let composed = resolved("1.12.2").compose([&component]).unwrap();
+        let profile = ProfileEngine::builtin()
+            .resolve(&composed, &mac_arm())
+            .unwrap();
+        assert_eq!(profile.maven_files.len(), 1);
+        assert_eq!(
+            profile.maven_files[0].path,
+            "acme/installer/1/installer-1.jar"
+        );
+        assert!(matches!(
+            &profile.maven_files[0].source,
+            FileSource::Sidecar { url } if url == "https://maven.example/acme/installer/1/installer-1.jar"
+        ));
+        assert_eq!(profile.jar_mods.len(), 1);
+        assert_eq!(profile.java.major, 21);
+        assert_eq!(profile.java.component, None);
+        assert!(profile.explain().contains("8 -> 21"));
+
+        let plain = resolve("1.12.2", &mac_arm()).unwrap();
+        assert_eq!(plain.java.major, 8);
+        assert_eq!(plain.java.component.as_deref(), Some("jre-legacy"));
     }
 
     fn ids(profile: &EffectiveLaunchProfile) -> Vec<&str> {

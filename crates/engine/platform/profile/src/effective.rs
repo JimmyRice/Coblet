@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
 use std::path::PathBuf;
 
+use crate::Agent;
 use coblet_catalog::Timestamp;
 use coblet_mojang::{
-    AssetIndexRef, Condition, Download, LoggingConfig, RuleContext, VersionTraits,
+    AssetIndexRef, Condition, Download, Library, LoggingConfig, RuleContext, VersionTraits,
 };
 use coblet_types::{
     Arch, ExtensionId, GameVersionId, MavenCoordinate, Platform, Sha1Digest, VersionType,
@@ -279,7 +280,7 @@ pub struct ProfileWarning {
 /// Arguments keep the launch-feature conditions (demo mode, custom
 /// resolution, Quick Play), decided by the launch options.
 #[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EffectiveLaunchProfile {
     /// The platform.
     pub platform: Platform,
@@ -293,6 +294,13 @@ pub struct EffectiveLaunchProfile {
     pub main_class: String,
     /// Libraries in classpath order, including inactive ones for explanation.
     pub libraries: Vec<EffectiveLibrary>,
+    /// Files placed in the libraries directory but kept off the classpath,
+    /// such as the inputs of a Mod Loader installer.
+    pub maven_files: Vec<LibraryFile>,
+    /// Archives merged into the client jar, in order.
+    pub jar_mods: Vec<Library>,
+    /// Java agents.
+    pub agents: Vec<Agent>,
     /// The client jar.
     pub client: Option<Download>,
     /// Directories with system native libraries, added to the native search path.
