@@ -11,9 +11,10 @@ use crate::loaders::ForeignLoader;
 use crate::profile::ForeignProfile;
 use crate::secrets::{ForeignSecrets, encryption_key};
 use crate::sources::ForeignRewriter;
+use crate::traits::ForeignTraitSource;
 use crate::{
     ArtifactKind, Coblet, CobletError, ErrorKind, JavaLocator, JavaProvider, LaunchCustomizer,
-    ModLoader, PlatformInfo, PlatformProfile, SecretStore, UrlRewriter,
+    ModLoader, PlatformInfo, PlatformProfile, SecretStore, TraitSource, UrlRewriter,
 };
 
 /// Where tokens are kept.
@@ -37,6 +38,14 @@ struct Settings {
     version_sources: Vec<coblet::mojang::MojangVersions>,
     loaders: Vec<(Arc<dyn coblet::loader::ModLoader>, bool)>,
     java: Vec<JavaChange>,
+    traits: Vec<TraitChange>,
+}
+
+/// One version trait source change, applied in order on top of the built-in list.
+enum TraitChange {
+    Add(Arc<dyn coblet::mojang::TraitSource>),
+    Replace(Arc<dyn coblet::mojang::TraitSource>),
+    Remove(ExtensionId),
 }
 
 /// One Java change, applied in order on top of the built-in lists.
@@ -135,6 +144,21 @@ impl CobletBuilder {
         ))
     }
 
+    fn trait_change(&self, change: TraitChange) -> Result<(), CobletError> {
+        self.with(|settings| {
+            settings.traits.push(change);
+            Ok(())
+        })
+    }
+
+    fn trait_table(
+        parsed: Result<coblet::mojang::TraitTable, coblet::mojang::TraitError>,
+    ) -> Result<Arc<dyn coblet::mojang::TraitSource>, CobletError> {
+        Ok(Arc::new(
+            parsed.map_err(|error| invalid(error.to_string()))?,
+        ))
+    }
+
     fn with<T>(
         &self,
         body: impl FnOnce(&mut Settings) -> Result<T, CobletError>,
@@ -175,6 +199,7 @@ impl CobletBuilder {
                 version_sources: Vec::new(),
                 loaders: Vec::new(),
                 java: Vec::new(),
+                traits: Vec::new(),
             })),
         }))
     }
@@ -602,12 +627,93 @@ impl CobletBuilder {
         self.java_change(JavaChange::Directory(dir, home))
     }
 
+    /// Adds a version trait source written in this language, run after the
+    /// built-in table and the sources already added, so it can remove
+    /// traits they gave.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`; `build` fails when the
+    /// ID is taken.
+    pub fn add_trait_source(&self, source: Arc<dyn TraitSource>) -> Result<(), CobletError> {
+        let source = Arc::new(ForeignTraitSource::new(source)?);
+        self.trait_change(TraitChange::Add(source))
+    }
+
+    /// Puts a trait source written in this language in place of the one
+    /// with the same ID, keeping its place; appends it when the ID is free.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`.
+    pub fn replace_trait_source(&self, source: Arc<dyn TraitSource>) -> Result<(), CobletError> {
+        let source = Arc::new(ForeignTraitSource::new(source)?);
+        self.trait_change(TraitChange::Replace(source))
+    }
+
+    /// Adds a version trait table written in TOML, in the format of
+    /// coblet's built-in table (see `builtin_version_traits_toml`).
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed table and after `build`; `build` fails when
+    /// the ID is taken.
+    pub fn add_trait_table_toml(&self, table: &str) -> Result<(), CobletError> {
+        let source = Self::trait_table(coblet::mojang::TraitTable::from_toml(table))?;
+        self.trait_change(TraitChange::Add(source))
+    }
+
+    /// Adds a version trait table written in JSON, with the keys of the
+    /// TOML form of [`add_trait_table_toml`](Self::add_trait_table_toml).
+    ///
+    /// # Errors
+    ///
+    /// Fails like [`add_trait_table_toml`](Self::add_trait_table_toml).
+    pub fn add_trait_table_json(&self, table: &str) -> Result<(), CobletError> {
+        let source = Self::trait_table(coblet::mojang::TraitTable::from_json(table))?;
+        self.trait_change(TraitChange::Add(source))
+    }
+
+    /// Puts a trait table written in TOML in place of the source with the
+    /// same ID, such as the built-in `coblet:version-traits`.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed table and after `build`.
+    pub fn replace_trait_table_toml(&self, table: &str) -> Result<(), CobletError> {
+        let source = Self::trait_table(coblet::mojang::TraitTable::from_toml(table))?;
+        self.trait_change(TraitChange::Replace(source))
+    }
+
+    /// Puts a trait table written in JSON in place of the source with the
+    /// same ID.
+    ///
+    /// # Errors
+    ///
+    /// Fails like [`replace_trait_table_toml`](Self::replace_trait_table_toml).
+    pub fn replace_trait_table_json(&self, table: &str) -> Result<(), CobletError> {
+        let source = Self::trait_table(coblet::mojang::TraitTable::from_json(table))?;
+        self.trait_change(TraitChange::Replace(source))
+    }
+
+    /// Removes a version trait source, such as the built-in table
+    /// `coblet:version-traits`; an unknown ID is ignored.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`.
+    pub fn remove_trait_source(&self, id: &str) -> Result<(), CobletError> {
+        let id = extension_id("trait source", id)?;
+        self.trait_change(TraitChange::Remove(id))
+    }
+
     /// Creates the `Coblet`.
     ///
     /// # Errors
     ///
     /// Fails when called twice, when the transport cannot start, and when
-    /// two Java providers or two Java locators share an ID.
+    /// two Java providers, two Java locators or two version trait sources
+    /// share an ID.
     pub fn build(&self) -> Result<Arc<Coblet>, CobletError> {
         let settings = self
             .settings
@@ -659,6 +765,13 @@ impl CobletBuilder {
                 JavaChange::RemoveLocator(id) => builder.without_java_locator(id),
                 JavaChange::Executable(path) => builder.java_executable(path),
                 JavaChange::Directory(dir, home) => builder.java_directory(dir, home),
+            };
+        }
+        for change in settings.traits {
+            builder = match change {
+                TraitChange::Add(source) => builder.trait_source(source),
+                TraitChange::Replace(source) => builder.replace_trait_source(source),
+                TraitChange::Remove(id) => builder.without_trait_source(id),
             };
         }
         match settings.secrets {

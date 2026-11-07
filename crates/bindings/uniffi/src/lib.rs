@@ -31,6 +31,7 @@ mod login;
 mod profile;
 mod secrets;
 mod sources;
+mod traits;
 
 pub use account::{
     AccountInfo, AccountState, CapeInfo, GameLicense, LoginInteraction, LoginPrompt, PlayerInfo,
@@ -56,3 +57,7 @@ pub use profile::{
 };
 pub use secrets::{SecretStore, generate_secret_key};
 pub use sources::{ArtifactKind, UrlRewriter};
+pub use traits::{
+    TraitChangeInfo, TraitReportInfo, TraitSource, TraitSourceContext, TraitSourceInfo,
+    TraitVersionInfo, builtin_version_traits_toml,
+};
