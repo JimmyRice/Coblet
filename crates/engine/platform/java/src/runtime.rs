@@ -7,7 +7,7 @@ use coblet_types::{ExtensionId, OsFamily, Sha1Digest};
 use serde::Deserialize;
 
 use crate::{
-    InstallSource, JavaError, JavaInstall, JavaInstaller, JavaPackage, JavaQuery, SearchPaths,
+    InstallSource, JavaError, JavaInstall, JavaInstaller, JavaLocators, JavaPackage, JavaQuery,
     discover, probe, select,
 };
 
@@ -142,8 +142,8 @@ pub struct JavaContext<'a> {
     pub spawner: &'a dyn ProcessSpawner,
     /// Operating system of the machine.
     pub os: &'a OsFamily,
-    /// Places to search.
-    pub search: &'a SearchPaths,
+    /// Places to search for installed Java.
+    pub locators: &'a JavaLocators,
     /// Installer with the providers to ask; `None` disables downloads.
     pub installer: Option<&'a JavaInstaller>,
     /// Metadata context for the runtime index.
@@ -156,7 +156,7 @@ impl std::fmt::Debug for JavaContext<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JavaContext")
             .field("os", self.os)
-            .field("search", self.search)
+            .field("locators", self.locators)
             .finish_non_exhaustive()
     }
 }
@@ -177,7 +177,7 @@ pub async fn find_or_install(
     requirement: &JavaRequirement,
     cancel: &CancellationToken,
 ) -> Result<JavaInstall, JavaError> {
-    let installs = discover(cx.storage, cx.spawner, cx.os, cx.search).await;
+    let installs = discover(cx.storage, cx.spawner, cx.os, cx.locators).await;
     if let Some(install) = select(&installs, requirement) {
         return Ok(install.clone());
     }
@@ -273,8 +273,8 @@ mod tests {
 
     use super::{RuntimeIndex, find_or_install};
     use crate::{
-        InstallSource, JavaContext, JavaError, JavaInstaller, JavaProviders, MojangRuntimes,
-        SearchPaths, candidates, discover,
+        InstallSource, JavaContext, JavaError, JavaInstaller, JavaLocators, JavaProviders,
+        MojangRuntimes, SearchPaths, candidates, discover,
     };
 
     /// Fake `java` that prints a property listing like a real one.
@@ -418,7 +418,9 @@ mod tests {
             MetaCache::new(transport.clone(), storage.clone(), dir.path().join("meta")),
             CachePolicy::Revalidate,
         );
-        let search = SearchPaths::default().with_runtimes(dir.path().join("runtimes"));
+        let locators = JavaLocators::builtin(
+            SearchPaths::default().with_runtimes(dir.path().join("runtimes")),
+        );
         let spawner = TokioSpawner::new();
         let os = OsFamily::MacOs;
         let progress = coblet_runtime::TransferProgress::new();
@@ -426,7 +428,7 @@ mod tests {
             storage: storage.as_ref(),
             spawner: &spawner,
             os: &os,
-            search: &search,
+            locators: &locators,
             installer: Some(&installer),
             catalog: &catalog,
             progress: Some(&progress),
@@ -508,8 +510,9 @@ mod tests {
             ..SearchPaths::default()
         };
         let storage = TokioStorage::new();
-        let found = candidates(&storage, &OsFamily::Linux, &search).await;
-        let sources: Vec<_> = found.iter().map(|(_, source)| source.clone()).collect();
+        let locators = JavaLocators::builtin(search);
+        let found = candidates(&storage, &OsFamily::Linux, &locators).await;
+        let sources: Vec<_> = found.iter().map(|found| found.source.clone()).collect();
         assert_eq!(
             sources,
             [
@@ -518,7 +521,7 @@ mod tests {
                 InstallSource::Sdkman
             ]
         );
-        let installs = discover(&storage, &TokioSpawner::new(), &OsFamily::Linux, &search).await;
+        let installs = discover(&storage, &TokioSpawner::new(), &OsFamily::Linux, &locators).await;
         let versions: Vec<_> = installs.iter().map(|install| install.major).collect();
         assert_eq!(versions, [21, 17]);
         let wanted = requirement(17, Arch::Aarch64, JavaSource::Any);

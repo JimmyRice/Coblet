@@ -23,6 +23,13 @@ pub enum InstallSource {
     },
     /// A path given by the application or the user.
     Configured,
+    /// A folder the application added to the search, holding one Java per child.
+    Directory(PathBuf),
+    /// A third-party [`JavaLocator`](crate::JavaLocator).
+    Located {
+        /// The locator.
+        locator: ExtensionId,
+    },
     /// A runtime a Java provider installed.
     Provider {
         /// The provider.

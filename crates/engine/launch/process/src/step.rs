@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use coblet_catalog::CatalogContext;
 use coblet_download::Downloader;
-use coblet_java::{JavaInstall, JavaInstaller, SearchPaths};
+use coblet_java::{JavaInstall, JavaInstaller, JavaLocators, SearchPaths};
 use coblet_launch_command::LaunchCommand;
 use coblet_platform::EffectiveLaunchProfile;
 use coblet_runtime::{BoxFuture, CancellationToken, EventBus, ProcessSpawner, Storage};
@@ -36,8 +36,8 @@ pub struct LaunchServices {
     pub downloader: Downloader,
     /// Metadata fetches, such as `.sha1` files and the Java runtime index.
     pub catalog: Arc<CatalogContext>,
-    /// Where to look for Java.
-    pub java_search: SearchPaths,
+    /// Where to look for installed Java.
+    pub java_locators: JavaLocators,
     /// Java runtime installer and its providers; `None` disables runtime downloads.
     pub java_installer: Option<JavaInstaller>,
     /// Operating system of this machine.
@@ -61,18 +61,18 @@ impl LaunchServices {
             spawner,
             downloader,
             catalog,
-            java_search: SearchPaths::from_env(),
+            java_locators: JavaLocators::builtin(SearchPaths::from_env()),
             java_installer: None,
             os,
             events: None,
         }
     }
 
-    /// Sets where to look for Java.
+    /// Sets where to look for installed Java.
     #[must_use]
-    pub fn with_java_search(self, java_search: SearchPaths) -> Self {
+    pub fn with_java_locators(self, java_locators: JavaLocators) -> Self {
         Self {
-            java_search,
+            java_locators,
             ..self
         }
     }
@@ -100,7 +100,7 @@ impl fmt::Debug for LaunchServices {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LaunchServices")
             .field("os", &self.os)
-            .field("java_search", &self.java_search)
+            .field("java_locators", &self.java_locators)
             .finish_non_exhaustive()
     }
 }

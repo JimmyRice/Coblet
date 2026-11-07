@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use coblet_catalog::{CachePolicy, CatalogContext};
-use coblet_java::{JavaInstaller, JavaProviders, SearchPaths};
+use coblet_java::{JavaInstaller, JavaLocators, JavaProviders, SearchPaths};
 use coblet_launch::{GameLayout, GameSession, LaunchContext, LaunchRequest, LaunchServices};
 use coblet_mojang::{GameVersion, fetch_version_json};
 use coblet_platform::{Component, EffectiveLaunchProfile, ProfileEngine, ResolvedProfile};
@@ -87,7 +87,9 @@ impl Coblet {
             Arc::new(self.catalog_context()),
             inner.platform.os().clone(),
         )
-        .with_java_search(SearchPaths::from_env().with_runtimes(runtimes))
+        .with_java_locators(JavaLocators::builtin(
+            SearchPaths::from_env().with_runtimes(runtimes),
+        ))
         .with_java_installer(installer)
         .with_events(inner.events.clone())
     }

@@ -22,7 +22,10 @@ mod provider;
 mod runtime;
 mod select;
 
-pub use discover::{SearchPaths, candidates, discover, executable_name};
+pub use discover::{
+    BUILTIN_LOCATORS, JavaCandidate, JavaLocator, JavaLocators, LocateContext, SearchPaths,
+    candidates, discover, executable_name,
+};
 pub use error::JavaError;
 pub use install::{InstallSource, JavaInstall, major_version};
 pub use installer::JavaInstaller;

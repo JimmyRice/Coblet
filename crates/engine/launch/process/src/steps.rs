@@ -144,7 +144,7 @@ async fn select_java(cx: &mut LaunchContext) -> Result<(), LaunchError> {
             storage: &*services.storage,
             spawner: &*services.spawner,
             os: &services.os,
-            search: &services.java_search,
+            locators: &services.java_locators,
             installer: services.java_installer.as_ref(),
             catalog: &services.catalog,
         };
