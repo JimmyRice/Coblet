@@ -54,6 +54,10 @@ pub enum CatalogError {
         #[source]
         error: Box<CatalogError>,
     },
+    /// A source failed for a reason of its own, such as an extension written
+    /// in another language that raised an error.
+    #[error("{0}")]
+    Failed(String),
     /// The catalog has no sources.
     #[error("the catalog has no sources")]
     NoSources,
