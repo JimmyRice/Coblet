@@ -54,6 +54,10 @@ pub struct LoaderVersionInfo {
     /// object, such as an installer address; kept verbatim.
     #[uniffi(default = None)]
     pub data_json: Option<String>,
+    /// ID of the source that listed the version: the loader's own ID or
+    /// that of an added version source. Ignored when a source returns it.
+    #[uniffi(default = None)]
+    pub source: Option<String>,
 }
 
 impl From<&LoaderVersion> for LoaderVersionInfo {
@@ -66,12 +70,13 @@ impl From<&LoaderVersion> for LoaderVersionInfo {
             recommended: version.recommended,
             data_json: (!version.data.is_empty())
                 .then(|| serde_json::to_string(&version.data).unwrap_or_default()),
+            source: version.source.as_ref().map(|id| id.as_str().to_owned()),
         }
     }
 }
 
 impl LoaderVersionInfo {
-    fn into_version(self) -> Result<LoaderVersion, String> {
+    pub(crate) fn into_version(self) -> Result<LoaderVersion, String> {
         let mut version =
             LoaderVersion::new(self.id).with_type(VersionType::from(self.version_type));
         if let Some(game) = self.game {
@@ -560,6 +565,7 @@ mod tests {
                         released: None,
                         recommended: pick,
                         data_json: Some(r#"{"main":"test.fake.Knot"}"#.to_owned()),
+                        source: None,
                     }
                 })
                 .collect())
@@ -616,6 +622,7 @@ mod tests {
                 released: None,
                 recommended: false,
                 data_json: None,
+                source: None,
             }])
         }
 
