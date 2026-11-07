@@ -13,4 +13,4 @@ pub use source::{
     TraitSource, TraitTarget,
 };
 pub use sources::{TRAIT_SOURCE_FAILED, TraitSources};
-pub use table::{LAUNCHWRAPPER_MAIN, TraitTable};
+pub use table::{BUILTIN_TRAITS_TOML, LAUNCHWRAPPER_MAIN, TraitTable};

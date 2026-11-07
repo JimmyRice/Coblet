@@ -1,26 +1,43 @@
-# Built-in version traits that cannot be derived from version metadata alone.
+# Built-in version traits, ID coblet:version-traits.
 #
-# A rule applies when every condition it sets holds:
+# Each [[rule]] adds the traits in `add` and removes those in `remove` when
+# every condition it sets holds; rules run in file order. Conditions known
+# from a version list:
 #   ids             - version IDs
+#   types           - release channels, such as "old_beta"
+#   sources         - IDs of the version sources that listed the version
 #   released_before - release time strictly earlier than this (RFC 3339)
 #   released_after  - release time strictly later than this (RFC 3339)
-#   assets          - asset index IDs; needs the version JSON, so catalog
-#                     entries built from the version manifest skip such rules
+# Conditions that need the version JSON; rules with them are skipped while
+# a version list is built and apply when a version is launched:
+#   assets          - asset index IDs
+#   main_class      - main classes
+#   tweakers        - launchwrapper tweakers passed with --tweakClass (any)
+#   java_component  - Java runtime components named by javaVersion.component
 #
 # Release times do not follow development order around 1.5.2 (released after
 # the first 1.6 snapshot), so rules about pre-1.6 behavior match on the asset
 # index instead.
 
-# Launchwrapper tweakers that host an Applet. A version whose main class is
-# net.minecraft.launchwrapper.Launch and that passes one of these with
-# --tweakClass gets the `applet` trait.
-applet_tweakers = [
+id = "coblet:version-traits"
+name = "Built-in version traits"
+
+[[rule]]
+add = ["applet"]
+main_class = ["net.minecraft.launchwrapper.Launch"]
+tweakers = [
     "net.minecraft.launchwrapper.AlphaVanillaTweaker",
     "net.minecraft.launchwrapper.IndevVanillaTweaker",
 ]
+note = "these launchwrapper tweakers host the game's Applet and pass it the arguments"
 
 [[rule]]
-traits = ["legacy-online-services"]
+add = ["jre-legacy"]
+java_component = ["jre-legacy"]
+note = "the version asks for Mojang's Java 8 runtime"
+
+[[rule]]
+add = ["legacy-online-services"]
 released_before = "2014-04-09T07:52:06Z"
 # Seen in the M1 survey: a1.2.6, 1.2.5 and 1.5.2 request
 # s3.amazonaws.com/MinecraftResources (404) and 1.5.2 requests
@@ -29,7 +46,7 @@ released_before = "2014-04-09T07:52:06Z"
 note = "skins are loaded from the retired skins.minecraft.net service (changed in 1.7.6); versions before 1.6 also poll retired resource servers"
 
 [[rule]]
-traits = ["legacy-macos-rendering"]
+add = ["legacy-macos-rendering"]
 assets = ["pre-1.6"]
 # Not visible in logs; the M1 survey could not confirm it.
 note = "red and blue are swapped on Apple Silicon in versions before 13w16a"

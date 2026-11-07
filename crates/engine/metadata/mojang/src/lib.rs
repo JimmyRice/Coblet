@@ -38,9 +38,9 @@ pub use manifest::{
     fetch_asset_index, fetch_version_json,
 };
 pub use traits::{
-    LAUNCHWRAPPER_MAIN, TRAIT_SOURCE_FAILED, TraitAction, TraitChange, TraitContext, TraitError,
-    TraitFailure, TraitInput, TraitReport, TraitSource, TraitSources, TraitTable, TraitTarget,
-    VersionTrait, VersionTraits,
+    BUILTIN_TRAITS_TOML, LAUNCHWRAPPER_MAIN, TRAIT_SOURCE_FAILED, TraitAction, TraitChange,
+    TraitContext, TraitError, TraitFailure, TraitInput, TraitReport, TraitSource, TraitSources,
+    TraitTable, TraitTarget, VersionTrait, VersionTraits,
 };
 pub use version::{
     Argument, ArgumentValue, Arguments, Artifact, AssetIndexRef, Condition, Download, Downloads,

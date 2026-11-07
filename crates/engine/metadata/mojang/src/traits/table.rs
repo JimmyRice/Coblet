@@ -1,37 +1,102 @@
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use coblet_catalog::Timestamp;
 use coblet_runtime::{BoxFuture, Extension};
-use coblet_types::{ExtensionId, GameVersionId};
+use coblet_types::{ExtensionId, GameVersionId, VersionType};
 use serde::Deserialize;
 
-use super::{TraitContext, TraitError, TraitSource, TraitTarget, VersionTrait, VersionTraits};
+use super::{
+    TraitContext, TraitError, TraitInput, TraitSource, TraitTarget, VersionTrait, VersionTraits,
+};
 use crate::RawVersionJson;
 
 /// Main class of Mojang's launchwrapper.
 pub const LAUNCHWRAPPER_MAIN: &str = "net.minecraft.launchwrapper.Launch";
 
-/// Data table of traits that cannot be derived from metadata alone.
+/// Text of the built-in trait table, `data/version-traits.toml`.
 ///
-/// The built-in table is `data/version-traits.toml`, embedded at build time.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// Copy it to start a table that replaces the built-in one under the same ID.
+pub const BUILTIN_TRAITS_TOML: &str = include_str!("../../data/version-traits.toml");
+
+/// Trait source described as data: rules that add or remove traits when
+/// their conditions hold.
+///
+/// Tables are written in TOML or JSON with the same fields:
+///
+/// - `id` (required) and `name`;
+/// - `[[rule]]` entries, run in file order. A rule adds the traits in
+///   `add` and removes those in `remove` when every condition it sets
+///   holds; a rule without conditions applies to every version.
+///
+/// Conditions known from a version list: `ids`, `types` (release
+/// channels such as `old_beta`), `sources` (IDs of the version sources
+/// that listed the version), `released_before` and `released_after`
+/// (RFC 3339, exclusive). Conditions that need the version JSON, so the
+/// rule is skipped while a list is built and applies when a version is
+/// launched: `assets` (asset index IDs), `main_class`, `tweakers` (any
+/// launchwrapper tweaker passed with `--tweakClass`) and `java_component`
+/// (`javaVersion.component`). A rule may also carry a `note`.
+///
+/// The built-in table, ID `coblet:version-traits`, is
+/// [`BUILTIN_TRAITS_TOML`].
+///
+/// # Examples
+///
+/// ```
+/// use coblet_mojang::{TraitTable, VersionTrait};
+/// use coblet_runtime::Extension;
+/// use coblet_types::GameVersionId;
+///
+/// let table = TraitTable::from_toml(r#"
+///     id = "acme:fixes"
+///     name = "Acme fixes"
+///
+///     [[rule]]
+///     add = ["acme:offline-skins"]
+///     released_before = "2014-04-09T07:52:06Z"
+///
+///     [[rule]]
+///     remove = ["acme:offline-skins"]
+///     ids = ["b1.7.3"]
+/// "#)?;
+/// assert_eq!(table.id().as_str(), "acme:fixes");
+/// let released = "2011-07-07T22:00:00Z".parse().ok();
+/// let old = table.for_manifest_entry(&GameVersionId::new("a1.2.6")?, released);
+/// assert!(old.contains(&VersionTrait::from("acme:offline-skins")));
+/// assert!(table.for_manifest_entry(&GameVersionId::new("b1.7.3")?, released).is_empty());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TraitTable {
-    #[serde(skip, default = "builtin_id")]
     id: ExtensionId,
-    /// Tweakers that mark a launchwrapper version as an Applet.
-    #[serde(default)]
-    applet_tweakers: Vec<String>,
-    #[serde(default, rename = "rule")]
-    rules: Vec<TableRule>,
+    name: String,
+    rules: Vec<Rule>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct TableRule {
-    traits: Vec<VersionTrait>,
+struct Definition {
+    id: String,
     #[serde(default)]
-    ids: Vec<GameVersionId>,
+    name: Option<String>,
+    #[serde(default, rename = "rule")]
+    rules: Vec<RuleDefinition>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleDefinition {
+    #[serde(default)]
+    add: Vec<String>,
+    #[serde(default)]
+    remove: Vec<String>,
+    #[serde(default)]
+    ids: Vec<String>,
+    #[serde(default)]
+    types: Vec<String>,
+    #[serde(default)]
+    sources: Vec<String>,
     #[serde(default)]
     released_before: Option<Timestamp>,
     #[serde(default)]
@@ -39,37 +104,131 @@ struct TableRule {
     #[serde(default)]
     assets: Vec<String>,
     #[serde(default)]
+    main_class: Vec<String>,
+    #[serde(default)]
+    tweakers: Vec<String>,
+    #[serde(default)]
+    java_component: Vec<String>,
+    #[serde(default)]
     #[allow(dead_code, reason = "documents the rule in the data file")]
     note: Option<String>,
 }
 
-const BUILTIN_TABLE: &str = include_str!("../../data/version-traits.toml");
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Rule {
+    add: Vec<VersionTrait>,
+    remove: Vec<VersionTrait>,
+    ids: HashSet<String>,
+    types: Vec<VersionType>,
+    sources: Vec<ExtensionId>,
+    released_before: Option<Timestamp>,
+    released_after: Option<Timestamp>,
+    assets: HashSet<String>,
+    main_class: HashSet<String>,
+    tweakers: HashSet<String>,
+    java_component: HashSet<String>,
+}
 
 static BUILTIN: LazyLock<TraitTable> = LazyLock::new(|| {
-    TraitTable::parse(BUILTIN_TABLE).unwrap_or_else(|error| {
+    TraitTable::from_toml(BUILTIN_TRAITS_TOML).unwrap_or_else(|error| {
         tracing::error!(%error, "the built-in version trait table is invalid");
         TraitTable {
-            id: builtin_id(),
-            applet_tweakers: Vec::new(),
+            id: ExtensionId::new("coblet:version-traits").unwrap_or_else(|_| unreachable!()),
+            name: "Built-in version traits".to_owned(),
             rules: Vec::new(),
         }
     })
 });
 
-fn builtin_id() -> ExtensionId {
-    ExtensionId::new("coblet:version-traits").unwrap_or_else(|_| unreachable!())
-}
-
-/// What a [`TraitTable`] rule is checked against.
+/// What a rule is checked against.
 struct Facts<'a> {
     id: &'a GameVersionId,
+    version_type: Option<&'a VersionType>,
     released: Option<Timestamp>,
-    assets: Option<&'a str>,
+    source: Option<&'a ExtensionId>,
+    raw: Option<&'a RawVersionJson>,
 }
 
-impl TableRule {
+impl<'a> Facts<'a> {
+    fn of_input(input: &'a TraitInput) -> Self {
+        Self {
+            id: &input.id,
+            version_type: input.version_type.as_ref(),
+            released: input.released,
+            source: input.source.as_ref(),
+            raw: input.version_json(),
+        }
+    }
+}
+
+impl Rule {
+    fn from_definition(index: usize, rule: RuleDefinition) -> Result<Self, TraitError> {
+        let invalid = |reason: String| TraitError::Table(format!("rule {}: {reason}", index + 1));
+        let names = |values: Vec<String>, field: &str| {
+            values
+                .into_iter()
+                .map(|name| {
+                    if name.is_empty() || name.chars().any(char::is_whitespace) {
+                        Err(invalid(format!("{field}: invalid trait name `{name}`")))
+                    } else {
+                        Ok(VersionTrait::from(name))
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let add = names(rule.add, "add")?;
+        let remove = names(rule.remove, "remove")?;
+        if add.is_empty() && remove.is_empty() {
+            return Err(invalid("sets neither `add` nor `remove`".to_owned()));
+        }
+        if let Some(both) = add.iter().find(|value| remove.contains(value)) {
+            return Err(invalid(format!("both adds and removes `{both}`")));
+        }
+        let sources = rule
+            .sources
+            .iter()
+            .map(|id| {
+                ExtensionId::new(id).map_err(|error| invalid(format!("sources: `{id}`: {error}")))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            add,
+            remove,
+            ids: rule.ids.into_iter().collect(),
+            types: rule.types.into_iter().map(VersionType::from).collect(),
+            sources,
+            released_before: rule.released_before,
+            released_after: rule.released_after,
+            assets: rule.assets.into_iter().collect(),
+            main_class: rule.main_class.into_iter().collect(),
+            tweakers: rule.tweakers.into_iter().collect(),
+            java_component: rule.java_component.into_iter().collect(),
+        })
+    }
+
+    fn needs_version_json(&self) -> bool {
+        !(self.assets.is_empty()
+            && self.main_class.is_empty()
+            && self.tweakers.is_empty()
+            && self.java_component.is_empty())
+    }
+
     fn applies(&self, facts: &Facts<'_>) -> bool {
-        if !self.ids.is_empty() && !self.ids.contains(facts.id) {
+        if !self.ids.is_empty() && !self.ids.contains(facts.id.as_str()) {
+            return false;
+        }
+        if !self.types.is_empty()
+            && !facts
+                .version_type
+                .is_some_and(|kind| self.types.contains(kind))
+        {
+            return false;
+        }
+        if !self.sources.is_empty()
+            && !facts
+                .source
+                .is_some_and(|source| self.sources.contains(source))
+        {
             return false;
         }
         if self.released_before.is_some() || self.released_after.is_some() {
@@ -84,81 +243,133 @@ impl TableRule {
                 return false;
             }
         }
-        self.assets.is_empty()
-            || facts
-                .assets
-                .is_some_and(|assets| self.assets.iter().any(|known| known == assets))
+        if !self.needs_version_json() {
+            return true;
+        }
+        let Some(raw) = facts.raw else {
+            return false;
+        };
+        let assets = raw
+            .asset_index
+            .as_ref()
+            .map(|index| index.id.as_str())
+            .or(raw.assets.as_deref());
+        (self.assets.is_empty() || assets.is_some_and(|assets| self.assets.contains(assets)))
+            && (self.main_class.is_empty()
+                || raw
+                    .main_class
+                    .as_deref()
+                    .is_some_and(|main| self.main_class.contains(main)))
+            && (self.tweakers.is_empty()
+                || raw
+                    .tweak_classes()
+                    .iter()
+                    .any(|tweaker| self.tweakers.contains(*tweaker)))
+            && (self.java_component.is_empty()
+                || raw
+                    .java_version
+                    .as_ref()
+                    .is_some_and(|java| self.java_component.contains(&java.component)))
     }
 }
 
 impl TraitTable {
-    /// Returns the built-in table.
+    /// Returns the built-in table, ID `coblet:version-traits`.
     #[must_use]
     pub fn builtin() -> &'static Self {
         &BUILTIN
     }
 
-    /// Parses a table in the format of `data/version-traits.toml`.
+    /// Parses a table in TOML.
     ///
     /// # Errors
     ///
-    /// Returns the [`toml::de::Error`] of malformed tables.
-    pub fn parse(text: &str) -> Result<Self, toml::de::Error> {
-        toml::from_str(text)
+    /// Returns [`TraitError::Table`] when the text is malformed, has an
+    /// unknown field or a rule that changes nothing.
+    pub fn from_toml(text: &str) -> Result<Self, TraitError> {
+        let definition: Definition =
+            toml::from_str(text).map_err(|error| TraitError::Table(error.to_string()))?;
+        Self::from_definition(definition)
     }
 
-    /// Returns the traits known from the version manifest alone: rules that
-    /// need the version JSON are skipped.
+    /// Parses a table in JSON, with the same fields as the TOML form.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`from_toml`](Self::from_toml).
+    pub fn from_json(text: &str) -> Result<Self, TraitError> {
+        let definition: Definition =
+            serde_json::from_str(text).map_err(|error| TraitError::Table(error.to_string()))?;
+        Self::from_definition(definition)
+    }
+
+    fn from_definition(definition: Definition) -> Result<Self, TraitError> {
+        let id = ExtensionId::new(&definition.id)
+            .map_err(|error| TraitError::Table(format!("id `{}`: {error}", definition.id)))?;
+        let rules = definition
+            .rules
+            .into_iter()
+            .enumerate()
+            .map(|(index, rule)| Rule::from_definition(index, rule))
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            name: definition.name.unwrap_or_else(|| definition.id.clone()),
+            id,
+            rules,
+        })
+    }
+
+    /// Changes `traits` by the rules that apply to `input`, in order.
+    pub fn apply(&self, input: &TraitInput, traits: &mut VersionTraits) {
+        self.apply_facts(&Facts::of_input(input), traits);
+    }
+
+    /// Returns the traits the table gives a version known from a version
+    /// list alone: rules that need the version JSON are skipped.
     #[must_use]
     pub fn for_manifest_entry(
         &self,
         id: &GameVersionId,
         released: Option<Timestamp>,
     ) -> VersionTraits {
-        self.matching_rules(&Facts {
-            id,
-            released,
-            assets: None,
-        })
-    }
-
-    /// Returns the traits of a version JSON: derived from its main class,
-    /// tweakers and Java runtime, plus the table's rules.
-    #[must_use]
-    pub fn for_version(&self, raw: &RawVersionJson) -> VersionTraits {
-        let mut traits = self.matching_rules(&Facts {
-            id: &raw.id,
-            released: raw.release_time,
-            assets: raw
-                .asset_index
-                .as_ref()
-                .map(|index| index.id.as_str())
-                .or(raw.assets.as_deref()),
-        });
-        if raw.main_class.as_deref() == Some(LAUNCHWRAPPER_MAIN)
-            && raw
-                .tweak_classes()
-                .iter()
-                .any(|tweaker| self.applet_tweakers.iter().any(|known| known == tweaker))
-        {
-            traits.insert(VersionTrait::Applet);
-        }
-        if raw
-            .java_version
-            .as_ref()
-            .is_some_and(|java| java.component == "jre-legacy")
-        {
-            traits.insert(VersionTrait::JreLegacy);
-        }
+        let mut traits = VersionTraits::new();
+        self.apply_facts(
+            &Facts {
+                id,
+                version_type: None,
+                released,
+                source: None,
+                raw: None,
+            },
+            &mut traits,
+        );
         traits
     }
 
-    fn matching_rules(&self, facts: &Facts<'_>) -> VersionTraits {
-        self.rules
-            .iter()
-            .filter(|rule| rule.applies(facts))
-            .flat_map(|rule| rule.traits.iter().cloned())
-            .collect()
+    /// Returns the traits the table gives a version JSON, starting from none.
+    #[must_use]
+    pub fn for_version(&self, raw: &RawVersionJson) -> VersionTraits {
+        let mut traits = VersionTraits::new();
+        self.apply_facts(
+            &Facts {
+                id: &raw.id,
+                version_type: raw.version_type.as_ref(),
+                released: raw.release_time,
+                source: None,
+                raw: Some(raw),
+            },
+            &mut traits,
+        );
+        traits
+    }
+
+    fn apply_facts(&self, facts: &Facts<'_>, traits: &mut VersionTraits) {
+        for rule in self.rules.iter().filter(|rule| rule.applies(facts)) {
+            traits.extend(rule.add.iter().cloned());
+            for value in &rule.remove {
+                traits.remove(value);
+            }
+        }
     }
 }
 
@@ -167,8 +378,8 @@ impl Extension for TraitTable {
         &self.id
     }
 
-    fn display_name(&self) -> &'static str {
-        "Built-in version traits"
+    fn display_name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -180,11 +391,10 @@ impl TraitSource for TraitTable {
     ) -> BoxFuture<'a, Result<(), TraitError>> {
         Box::pin(async move {
             for target in versions.iter_mut() {
-                let found = match target.input().version_json() {
-                    Some(raw) => self.for_version(raw),
-                    None => self.for_manifest_entry(&target.input().id, target.input().released),
-                };
-                target.traits_mut().extend(found.iter().cloned());
+                let facts = Facts::of_input(target.input());
+                let mut traits = target.traits().clone();
+                self.apply_facts(&facts, &mut traits);
+                *target.traits_mut() = traits;
             }
             Ok(())
         })
@@ -193,10 +403,13 @@ impl TraitSource for TraitTable {
 
 #[cfg(test)]
 mod tests {
-    use coblet_types::GameVersionId;
+    use std::sync::Arc;
 
-    use super::{TraitTable, VersionTrait, VersionTraits};
-    use crate::RawVersionJson;
+    use bytes::Bytes;
+    use coblet_types::{ExtensionId, GameVersionId, VersionType};
+
+    use super::{BUILTIN_TRAITS_TOML, TraitTable, VersionTrait, VersionTraits};
+    use crate::{Document, RawVersionJson, TraitInput};
 
     fn fixture(name: &str) -> RawVersionJson {
         let path = format!(
@@ -212,9 +425,10 @@ mod tests {
 
     #[test]
     fn builtin_table_parses() {
-        let table = TraitTable::parse(super::BUILTIN_TABLE).unwrap();
+        let table = TraitTable::from_toml(BUILTIN_TRAITS_TOML).unwrap();
         assert_eq!(&table, TraitTable::builtin());
-        assert_eq!(table.applet_tweakers.len(), 2);
+        assert_eq!(table.id.as_str(), "coblet:version-traits");
+        assert_eq!(table.rules.len(), 4);
     }
 
     #[test]
@@ -266,10 +480,99 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_fields() {
-        assert!(TraitTable::parse("[[rule]]\ntraits = []\nversions = []").is_err());
-        let table = TraitTable::parse("[[rule]]\ntraits = [\"acme-x\"]\nids = [\"1.0\"]").unwrap();
-        let id = GameVersionId::new("1.0").unwrap();
-        assert_eq!(names(&table.for_manifest_entry(&id, None)), ["acme-x"]);
+    fn rules_run_in_order_and_match_list_facts() {
+        let table = TraitTable::from_toml(
+            r#"
+            id = "test:table"
+
+            [[rule]]
+            add = ["x", "y"]
+            types = ["experiment"]
+
+            [[rule]]
+            remove = ["y"]
+            sources = ["acme:experiments"]
+
+            [[rule]]
+            add = ["z"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(table.name, "test:table");
+        let input = |kind: &str, source: Option<&str>| {
+            let mut input = TraitInput::new(GameVersionId::new("combat-8c").unwrap());
+            input.version_type = Some(VersionType::from(kind));
+            input.source = source.map(|id| ExtensionId::new(id).unwrap());
+            input
+        };
+        let run = |input: &TraitInput, start: &[&str]| {
+            let mut traits: VersionTraits =
+                start.iter().map(|name| VersionTrait::from(*name)).collect();
+            table.apply(input, &mut traits);
+            traits
+        };
+        assert_eq!(
+            names(&run(&input("experiment", None), &[])),
+            ["x", "y", "z"]
+        );
+        assert_eq!(
+            names(&run(&input("experiment", Some("acme:experiments")), &[])),
+            ["x", "z"]
+        );
+        assert_eq!(
+            names(&run(
+                &input("release", Some("acme:experiments")),
+                &["y", "w"]
+            )),
+            ["w", "z"]
+        );
+    }
+
+    #[test]
+    fn version_json_rules_apply_once_the_document_is_known() {
+        let table = TraitTable::from_json(
+            r#"{"id": "test:json", "rule": [
+                {"add": ["acme:launchwrapper"], "main_class": ["net.minecraft.launchwrapper.Launch"]},
+                {"remove": ["jre-legacy"], "java_component": ["jre-legacy"], "ids": ["c0.30_01c"]}
+            ]}"#,
+        )
+        .unwrap();
+        let raw = fixture("c0.30_01c");
+        let mut listed = TraitInput::new(raw.id.clone());
+        let mut traits: VersionTraits = [VersionTrait::JreLegacy].into_iter().collect();
+        table.apply(&listed, &mut traits);
+        assert_eq!(names(&traits), ["jre-legacy"]);
+        listed = listed.with_version(Arc::new(Document {
+            value: raw,
+            bytes: Bytes::new(),
+        }));
+        assert_eq!(
+            listed.version_type.as_ref().map(VersionType::as_str),
+            Some("old_alpha")
+        );
+        table.apply(&listed, &mut traits);
+        assert_eq!(names(&traits), ["acme:launchwrapper"]);
+    }
+
+    #[test]
+    fn rejects_malformed_tables() {
+        let error = |text: &str| TraitTable::from_toml(text).unwrap_err().to_string();
+        assert!(error("[[rule]]\nadd = [\"x\"]").contains("missing field `id`"));
+        assert!(
+            error("id = \"test:t\"\n[[rule]]\nadd = [\"x\"]\nversions = []").contains("versions")
+        );
+        assert!(
+            error("id = \"test:t\"\n[[rule]]\nids = [\"1.0\"]").contains("rule 1: sets neither")
+        );
+        assert!(
+            error("id = \"test:t\"\n[[rule]]\nadd = [\"x\"]\n[[rule]]\nadd = [\"y\"]\nremove = [\"y\"]")
+                .contains("rule 2: both adds and removes `y`")
+        );
+        assert!(error("id = \"test:t\"\n[[rule]]\nadd = [\"a b\"]").contains("invalid trait name"));
+        assert!(error("id = \"nope\"").contains("id `nope`"));
+        assert!(
+            error("id = \"test:t\"\n[[rule]]\nadd = [\"x\"]\nsources = [\"bad\"]")
+                .contains("sources")
+        );
     }
 }
