@@ -14,10 +14,13 @@ coblet-download.workspace = true
 coblet-platform.workspace = true
 coblet-runtime.workspace = true
 coblet-types.workspace = true
+flate2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tar.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 coblet-mojang.workspace = true

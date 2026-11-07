@@ -13,6 +13,7 @@ use coblet_types::{FileHash, OsFamily, Sha1Digest};
 use serde::Deserialize;
 
 use crate::discover::runtime_executable;
+use crate::installer::inside;
 use crate::{InstallSource, JavaError, JavaInstall, SearchPaths, discover, probe, select};
 
 /// Address of the Mojang Java runtime index.
@@ -139,21 +140,6 @@ pub struct RuntimeFile {
 
 fn key(path: &str) -> Result<RelPath, JavaError> {
     RelPath::new(path).map_err(|_| JavaError::Metadata(CatalogError::InvalidKey(path.to_owned())))
-}
-
-/// Joins a manifest path onto `root`, refusing absolute paths and `..`.
-fn inside(root: &Path, relative: &str) -> Result<PathBuf, JavaError> {
-    let safe = !relative.is_empty()
-        && !relative.starts_with('/')
-        && relative
-            .split(['/', '\\'])
-            .all(|part| !part.is_empty() && part != "." && part != ".." && !part.contains(':'));
-    if !safe {
-        return Err(JavaError::InvalidManifest(format!(
-            "path `{relative}` leaves the runtime directory"
-        )));
-    }
-    Ok(root.join(relative))
 }
 
 /// Downloads Mojang Java runtimes into `<root>/<component>/<platform>/`.

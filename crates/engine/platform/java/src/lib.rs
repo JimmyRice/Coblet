@@ -10,9 +10,11 @@
 
 #![forbid(unsafe_code)]
 
+mod archive;
 mod discover;
 mod error;
 mod install;
+mod installer;
 mod mojang;
 mod probe;
 mod provider;
@@ -22,6 +24,7 @@ mod select;
 pub use discover::{SearchPaths, candidates, discover, executable_name};
 pub use error::JavaError;
 pub use install::{InstallSource, JavaInstall, major_version};
+pub use installer::JavaInstaller;
 pub use mojang::{MOJANG_PROVIDER_ID, MojangRuntimes};
 pub use probe::probe;
 pub use provider::{
