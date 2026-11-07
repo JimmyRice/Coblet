@@ -43,13 +43,7 @@ impl Coblet {
         self.forward_warnings(&cx);
         let document = Arc::new(document?);
         let input = TraitInput::listed(version).with_version(Arc::clone(&document));
-        let (report, failures) = self
-            .inner
-            .versions
-            .traits
-            .report(&cx, input, version.declared_traits.clone())
-            .await;
-        self.forward_trait_failures(&cx, &failures);
+        let report = self.traits_of(&cx, input, version).await;
         let raw = Arc::unwrap_or_clone(document).value;
         let resolved = ResolvedProfile::from_version(raw, report.traits)?.compose(components)?;
         Ok(self

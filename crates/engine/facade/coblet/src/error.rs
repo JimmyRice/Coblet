@@ -41,6 +41,10 @@ pub enum Error {
     #[cfg(feature = "java")]
     #[error(transparent)]
     Java(#[from] coblet_java::JavaError),
+    /// A version trait table is malformed.
+    #[cfg(feature = "mojang")]
+    #[error(transparent)]
+    Traits(#[from] coblet_mojang::TraitError),
     /// The feature is not available in this setup, such as Microsoft login
     /// without a Client ID.
     #[error("{0}")]

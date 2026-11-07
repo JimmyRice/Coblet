@@ -92,7 +92,7 @@ struct JavaSettings {
 }
 
 /// One change to an ordered extension list.
-#[cfg(feature = "java")]
+#[cfg(any(feature = "java", feature = "mojang"))]
 enum Change<T> {
     Register(T),
     Replace(T),
@@ -105,6 +105,33 @@ enum Change<T> {
 pub(crate) struct VersionSettings {
     pub(crate) mojang: Option<coblet_mojang::MojangVersions>,
     pub(crate) sources: Vec<Arc<dyn coblet_catalog::CatalogSource<coblet_mojang::GameVersion>>>,
+    /// Changes applied in order to the built-in trait sources.
+    traits: Vec<Change<Arc<dyn coblet_mojang::TraitSource>>>,
+    /// The first trait table that failed to parse.
+    traits_error: Option<coblet_mojang::TraitError>,
+}
+
+#[cfg(feature = "mojang")]
+impl VersionSettings {
+    /// Applies the trait source changes to the built-in list.
+    pub(crate) fn trait_sources(&mut self) -> Result<coblet_mojang::TraitSources, Error> {
+        if let Some(error) = self.traits_error.take() {
+            return Err(error.into());
+        }
+        let mut sources = coblet_mojang::TraitSources::builtin();
+        for change in std::mem::take(&mut self.traits) {
+            match change {
+                Change::Register(source) => sources.register(source)?,
+                Change::Replace(source) => {
+                    sources.replace(source);
+                }
+                Change::Remove(id) => {
+                    sources.remove(&id);
+                }
+            }
+        }
+        Ok(sources)
+    }
 }
 
 /// Account settings collected by the builder.
@@ -325,6 +352,119 @@ impl<State> CobletBuilder<State> {
     ) -> Self {
         self.versions.sources.push(source);
         self
+    }
+
+    /// Adds a version trait source after the built-in table and the
+    /// sources already added, so it can remove traits they gave.
+    ///
+    /// [`build`](CobletBuilder::build) fails when the ID is taken; use
+    /// [`replace_trait_source`](Self::replace_trait_source) to swap one on
+    /// purpose. Trait sources tag every listed version, whichever version
+    /// source listed it, and run again with the version JSON when a
+    /// version is resolved.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use coblet::Coblet;
+    /// use coblet::mojang::{FnTraitSource, VersionTrait};
+    ///
+    /// let builder = Coblet::builder().trait_source(Arc::new(FnTraitSource::new(
+    ///     "acme:snapshots".parse()?,
+    ///     "Snapshot marker",
+    ///     |target| {
+    ///         if target.input().id.as_str().contains('w') {
+    ///             target.traits_mut().insert(VersionTrait::from("acme:snapshot"));
+    ///         }
+    ///         Ok(())
+    ///     },
+    /// )));
+    /// # drop(builder);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "mojang")]
+    pub fn trait_source(mut self, source: Arc<dyn coblet_mojang::TraitSource>) -> Self {
+        self.versions.traits.push(Change::Register(source));
+        self
+    }
+
+    /// Puts a trait source in place of the one with the same ID, keeping
+    /// its place in the order; appends it when the ID is free. Replacing
+    /// `coblet:version-traits` swaps the built-in table.
+    #[cfg(feature = "mojang")]
+    pub fn replace_trait_source(mut self, source: Arc<dyn coblet_mojang::TraitSource>) -> Self {
+        self.versions.traits.push(Change::Replace(source));
+        self
+    }
+
+    /// Removes a trait source, such as the built-in table
+    /// `coblet:version-traits`; an unknown ID is ignored.
+    #[cfg(feature = "mojang")]
+    pub fn without_trait_source(mut self, id: coblet_types::ExtensionId) -> Self {
+        self.versions.traits.push(Change::Remove(id));
+        self
+    }
+
+    /// Adds a trait table written in TOML, like
+    /// [`trait_source`](Self::trait_source); see
+    /// [`TraitTable`](coblet_mojang::TraitTable) for the format.
+    ///
+    /// A malformed table makes [`build`](CobletBuilder::build) fail with
+    /// [`Error::Traits`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn demo() -> Result<(), Box<dyn std::error::Error>> {
+    /// use coblet::{Coblet, runtime::{Extension, UserAgent}};
+    ///
+    /// let coblet = Coblet::builder()
+    ///     .data_root("/path/to/launcher-data")
+    ///     .user_agent(UserAgent::new("MyLauncher/1.0 (contact@example.com)")?)
+    ///     .trait_table_toml(r#"
+    ///         id = "acme:fixes"
+    ///         name = "Acme fixes"
+    ///
+    ///         [[rule]]
+    ///         add = ["acme:offline-skins"]
+    ///         released_before = "2014-04-09T07:52:06Z"
+    ///
+    ///         [[rule]]
+    ///         remove = ["legacy-macos-rendering"]
+    ///         ids = ["b1.7.3"]
+    ///     "#)
+    ///     .build()?;
+    /// let ids: Vec<_> = coblet.trait_sources().iter().map(|source| source.id().as_str()).collect();
+    /// assert_eq!(ids, ["coblet:version-traits", "acme:fixes"]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "mojang")]
+    pub fn trait_table_toml(self, table: &str) -> Self {
+        self.trait_table(coblet_mojang::TraitTable::from_toml(table))
+    }
+
+    /// Adds a trait table written in JSON, with the keys of the TOML form
+    /// of [`trait_table_toml`](Self::trait_table_toml).
+    #[cfg(feature = "mojang")]
+    pub fn trait_table_json(self, table: &str) -> Self {
+        self.trait_table(coblet_mojang::TraitTable::from_json(table))
+    }
+
+    #[cfg(feature = "mojang")]
+    fn trait_table(
+        mut self,
+        parsed: Result<coblet_mojang::TraitTable, coblet_mojang::TraitError>,
+    ) -> Self {
+        match parsed {
+            Ok(table) => self.trait_source(Arc::new(table)),
+            Err(error) => {
+                self.versions.traits_error.get_or_insert(error);
+                self
+            }
+        }
     }
 
     /// Publishes events on this bus instead of a new one.
@@ -830,8 +970,12 @@ impl CobletBuilder<WithRoot> {
     /// source for a loader that is not registered. With the `java` feature
     /// it returns [`Error::Registry`] when two Java providers or two Java
     /// locators share an ID and [`Error::Java`] for a malformed provider
-    /// definition.
+    /// definition. With the `mojang` feature it returns
+    /// [`Error::Registry`] when two version trait sources share an ID and
+    /// [`Error::Traits`] for a malformed trait table.
     pub fn build(mut self) -> Result<Coblet, Error> {
+        #[cfg(feature = "mojang")]
+        let traits = self.versions.trait_sources()?;
         #[cfg(feature = "loaders")]
         let loaders = self.loader_registry()?;
         #[cfg(feature = "launch")]
@@ -906,6 +1050,7 @@ impl CobletBuilder<WithRoot> {
                 meta.clone(),
                 events.clone(),
                 std::mem::take(&mut self.versions),
+                traits,
             ),
             #[cfg(feature = "launch")]
             launcher,
