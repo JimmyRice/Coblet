@@ -84,6 +84,20 @@ impl<E: ?Sized + Extension> Registry<E> {
         Ok(())
     }
 
+    /// Puts an extension under its own ID, replacing the one already there.
+    ///
+    /// This is the explicit way to override an extension, for example to
+    /// swap a built-in Mod Loader for a patched one; [`register`](Self::register)
+    /// never replaces anything. Returns the replaced extension, if any.
+    pub fn replace(&mut self, extension: Arc<E>) -> Option<Arc<E>> {
+        self.entries.insert(extension.id().clone(), extension)
+    }
+
+    /// Removes the extension with this ID and returns it.
+    pub fn remove(&mut self, id: &ExtensionId) -> Option<Arc<E>> {
+        self.entries.remove(id)
+    }
+
     /// Looks up an extension by ID.
     #[must_use]
     pub fn get(&self, id: &ExtensionId) -> Option<&Arc<E>> {
@@ -178,6 +192,18 @@ mod tests {
             Err(RegistryError::Duplicate(id.clone()))
         );
         assert_eq!(loaders.get(&id).unwrap().kind(), "builtin");
+    }
+
+    #[test]
+    fn replaces_and_removes_explicitly() {
+        let mut loaders: Registry<dyn Loader> = Registry::new();
+        let id = ExtensionId::new("coblet:fabric").unwrap();
+        assert!(loaders.replace(fake("coblet:fabric", "builtin")).is_none());
+        let old = loaders.replace(fake("coblet:fabric", "patched")).unwrap();
+        assert_eq!(old.kind(), "builtin");
+        assert_eq!(loaders.get(&id).unwrap().kind(), "patched");
+        assert_eq!(loaders.remove(&id).unwrap().kind(), "patched");
+        assert!(loaders.is_empty());
     }
 
     #[test]
