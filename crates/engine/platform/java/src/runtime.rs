@@ -69,6 +69,19 @@ impl RuntimeIndex {
         self.0.get(platform)?.get(component)?.first()
     }
 
+    /// Iterates over the current build of each component on a platform,
+    /// skipping components without builds.
+    pub fn builds<'a>(
+        &'a self,
+        platform: &str,
+    ) -> impl Iterator<Item = (&'a str, &'a RuntimeBuild)> + 'a {
+        self.0
+            .get(platform)
+            .into_iter()
+            .flatten()
+            .filter_map(|(component, builds)| Some((component.as_str(), builds.first()?)))
+    }
+
     /// Iterates over the platform keys.
     pub fn platforms(&self) -> impl Iterator<Item = &str> {
         self.0.keys().map(String::as_str)

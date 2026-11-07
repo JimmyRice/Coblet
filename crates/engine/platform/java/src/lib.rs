@@ -13,6 +13,7 @@
 mod discover;
 mod error;
 mod install;
+mod mojang;
 mod probe;
 mod provider;
 mod runtime;
@@ -21,6 +22,7 @@ mod select;
 pub use discover::{SearchPaths, candidates, discover, executable_name};
 pub use error::JavaError;
 pub use install::{InstallSource, JavaInstall, major_version};
+pub use mojang::{MOJANG_PROVIDER_ID, MojangRuntimes};
 pub use probe::probe;
 pub use provider::{
     ArchiveFormat, JavaDownload, JavaPackage, JavaProvider, JavaProviders, JavaQuery,
