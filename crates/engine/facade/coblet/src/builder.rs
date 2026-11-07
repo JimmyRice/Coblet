@@ -72,7 +72,7 @@ enum LoaderChange {
     Replace(Arc<dyn coblet_loader::ModLoader>),
     Source(
         coblet_types::ExtensionId,
-        Arc<dyn coblet_catalog::CatalogSource<coblet_loader::LoaderVersion>>,
+        Change<Arc<dyn coblet_catalog::CatalogSource<coblet_loader::LoaderVersion>>>,
     ),
 }
 
@@ -92,7 +92,7 @@ struct JavaSettings {
 }
 
 /// One change to an ordered extension list.
-#[cfg(any(feature = "java", feature = "mojang"))]
+#[cfg(any(feature = "java", feature = "mojang", feature = "loaders"))]
 enum Change<T> {
     Register(T),
     Replace(T),
@@ -763,9 +763,15 @@ impl<State> CobletBuilder<State> {
         }
     }
 
-    /// Adds a version source for a Mod Loader, asked after the loader itself,
-    /// such as a mirror listing or Prism's metadata server.
-    /// [`build`](CobletBuilder::build) fails when no loader has the ID.
+    /// Adds a version source for a Mod Loader, asked after the loader itself
+    /// and the sources already added, such as a mirror listing or Prism's
+    /// metadata server. For the same version string the earlier entry wins,
+    /// so the loader's own entry always does.
+    ///
+    /// [`build`](CobletBuilder::build) fails when no loader has the ID, or
+    /// the loader already has a source with the source's ID; use
+    /// [`replace_loader_version_source`](Self::replace_loader_version_source)
+    /// to swap one on purpose.
     #[cfg(feature = "loaders")]
     pub fn loader_version_source(
         mut self,
@@ -774,8 +780,75 @@ impl<State> CobletBuilder<State> {
     ) -> Self {
         self.loaders
             .changes
-            .push(LoaderChange::Source(loader, source));
+            .push(LoaderChange::Source(loader, Change::Register(source)));
         self
+    }
+
+    /// Puts a version source of a Mod Loader in place of the one with the
+    /// same ID, keeping its place in the order; appends it when the ID is free.
+    #[cfg(feature = "loaders")]
+    pub fn replace_loader_version_source(
+        mut self,
+        loader: coblet_types::ExtensionId,
+        source: Arc<dyn coblet_catalog::CatalogSource<coblet_loader::LoaderVersion>>,
+    ) -> Self {
+        self.loaders
+            .changes
+            .push(LoaderChange::Source(loader, Change::Replace(source)));
+        self
+    }
+
+    /// Removes a version source of a Mod Loader; an unknown ID is ignored.
+    #[cfg(feature = "loaders")]
+    pub fn without_loader_version_source(
+        mut self,
+        loader: coblet_types::ExtensionId,
+        id: coblet_types::ExtensionId,
+    ) -> Self {
+        self.loaders
+            .changes
+            .push(LoaderChange::Source(loader, Change::Remove(id)));
+        self
+    }
+
+    /// Adds a version source for a Mod Loader described in TOML, in the
+    /// format of [`DataLoaderVersions`](coblet_loader::DataLoaderVersions).
+    /// A malformed definition makes [`build`](CobletBuilder::build) fail.
+    #[cfg(feature = "loaders")]
+    pub fn loader_version_source_toml(
+        self,
+        loader: coblet_types::ExtensionId,
+        definition: &str,
+    ) -> Self {
+        let parsed = coblet_loader::DataLoaderVersions::from_toml(definition);
+        self.data_loader_version_source(loader, parsed)
+    }
+
+    /// Adds a version source for a Mod Loader described in JSON, with the
+    /// keys of [`loader_version_source_toml`](Self::loader_version_source_toml).
+    #[cfg(feature = "loaders")]
+    pub fn loader_version_source_json(
+        self,
+        loader: coblet_types::ExtensionId,
+        definition: &str,
+    ) -> Self {
+        let parsed = coblet_loader::DataLoaderVersions::from_json(definition);
+        self.data_loader_version_source(loader, parsed)
+    }
+
+    #[cfg(feature = "loaders")]
+    fn data_loader_version_source(
+        mut self,
+        loader: coblet_types::ExtensionId,
+        parsed: Result<coblet_loader::DataLoaderVersions, coblet_loader::LoaderError>,
+    ) -> Self {
+        match parsed {
+            Ok(source) => self.loader_version_source(loader, Arc::new(source)),
+            Err(error) => {
+                self.loaders.error.get_or_insert(error);
+                self
+            }
+        }
     }
 
     /// Adds a Java provider written as code, asked after the providers
@@ -950,11 +1023,19 @@ impl CobletBuilder<WithRoot> {
                 LoaderChange::Source(id, source) => sources.push((id, source)),
             }
         }
-        for (id, source) in sources {
+        for (id, change) in sources {
             if registry.get(&id).is_none() {
                 return Err(coblet_loader::LoaderError::UnknownLoader(id).into());
             }
-            registry.add_version_source(id, source);
+            match change {
+                Change::Register(source) => registry.add_version_source(id, source)?,
+                Change::Replace(source) => {
+                    registry.replace_version_source(id, source)?;
+                }
+                Change::Remove(source) => {
+                    registry.remove_version_source(&id, &source);
+                }
+            }
         }
         Ok(registry)
     }
