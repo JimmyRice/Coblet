@@ -13,7 +13,12 @@
 //! and `coblet_login_*`; a secret store written in C is a callback table
 //! (`CobletSecretStore`). Mirrors are prefix rules
 //! (`coblet_builder_add_mirror`) or callback tables (`CobletUrlRewriter`),
-//! and `coblet_builder_add_version_manifest` adds game version sources. Events (launch steps, file transfers, game
+//! and `coblet_builder_add_version_manifest` adds game version sources.
+//! Mod Loaders are callback tables (`CobletModLoader`) that fetch through
+//! a `CobletLoaderCtx` handle, or TOML and JSON definitions
+//! (`coblet_builder_add_loader_toml`); `coblet_loader_*` lists their
+//! versions and recipes, `coblet_plan_launch_json` resolves a version with
+//! one and `coblet_launch_loader` starts it. Events (launch steps, file transfers, game
 //! starts, logs and exits) are read with `coblet_events_next` as fixed
 //! layout `CobletEvent` structs. The header `include/coblet.h` is generated with
 //! `cargo xtask gen-header`.
@@ -26,6 +31,7 @@ mod customize;
 mod events;
 mod game;
 mod guard;
+mod loaders;
 mod login;
 mod profile;
 mod secrets;
@@ -67,7 +73,13 @@ pub use game::{
     COBLET_OPERATION_ID_LEN, CobletGame, CobletGameExit, CobletLaunchMode, coblet_game_free,
     coblet_game_kill, coblet_game_next_log, coblet_game_operation_id, coblet_game_report,
     coblet_game_wait, coblet_generate_operation_id, coblet_launch, coblet_launch_account,
-    coblet_launch_customized,
+    coblet_launch_customized, coblet_launch_loader,
+};
+pub use loaders::{
+    COBLET_LOADER_REPLACE, CobletLoaderCtx, CobletModLoader, coblet_builder_add_loader,
+    coblet_builder_add_loader_json, coblet_builder_add_loader_toml, coblet_loader_ctx_fail,
+    coblet_loader_ctx_fetch, coblet_loader_ctx_set_result, coblet_loader_recipe_json,
+    coblet_loader_versions_json, coblet_loaders_json, coblet_plan_launch_json,
 };
 pub use login::{
     CobletLogin, CobletLoginInteraction, coblet_login_begin, coblet_login_cancel,

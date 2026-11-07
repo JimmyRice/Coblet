@@ -30,6 +30,8 @@ pub struct CobletBuilder {
     rewriters: Vec<Arc<dyn coblet::runtime::UrlRewriter>>,
     mirror_fallback: bool,
     version_sources: Vec<coblet::mojang::MojangVersions>,
+    /// Mod Loaders in order, with whether each replaces one of the same ID.
+    pub(crate) loaders: Vec<(Arc<dyn coblet::loader::ModLoader>, bool)>,
 }
 
 /// Flag of `coblet_builder_add_mirror`: metadata documents from the mirror
@@ -75,7 +77,9 @@ impl CobletBuilder {
 ///
 /// `builder` must be NULL or a live builder handle.
 #[allow(unsafe_code, reason = "reads a handle argument")]
-unsafe fn builder_mut<'a>(builder: *mut CobletBuilder) -> Result<&'a mut CobletBuilder, Failure> {
+pub(crate) unsafe fn builder_mut<'a>(
+    builder: *mut CobletBuilder,
+) -> Result<&'a mut CobletBuilder, Failure> {
     // SAFETY: forwarded from the caller's guarantee.
     unsafe { builder.as_mut() }.ok_or_else(|| Failure::argument("builder", "is NULL"))
 }
@@ -120,6 +124,7 @@ pub unsafe extern "C" fn coblet_builder_new(
                 rewriters: Vec::new(),
                 mirror_fallback: true,
                 version_sources: Vec::new(),
+                loaders: Vec::new(),
             });
             put(out_builder, Box::into_raw(builder), "out_builder")?;
             Ok(CobletStatus::Ok)
@@ -637,6 +642,7 @@ pub unsafe extern "C" fn coblet_builder_build(
                 rewriters,
                 mirror_fallback,
                 version_sources,
+                loaders,
             } = *builder;
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -667,6 +673,13 @@ pub unsafe extern "C" fn coblet_builder_build(
             options = options.mirror_fallback(mirror_fallback);
             for source in version_sources {
                 options = options.version_source(Arc::new(source));
+            }
+            for (loader, replace) in loaders {
+                options = if replace {
+                    options.replace_loader(loader)
+                } else {
+                    options.loader(loader)
+                };
             }
             match secrets {
                 Secrets::Memory => {}

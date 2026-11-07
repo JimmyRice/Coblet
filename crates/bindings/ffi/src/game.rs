@@ -178,6 +178,55 @@ pub unsafe extern "C" fn coblet_launch_customized(
     out_game: *mut *mut CobletGame,
     out_err: *mut *mut CobletError,
 ) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees; no loader.
+    unsafe {
+        coblet_launch_loader(
+            coblet,
+            version_id,
+            std::ptr::null(),
+            std::ptr::null(),
+            player_name,
+            mode,
+            game_dir,
+            customizers,
+            count,
+            operation_id,
+            out_game,
+            out_err,
+        )
+    }
+}
+
+/// Starts a version like `coblet_launch_customized` with a Mod Loader
+/// version on top: the loader's install recipe is resolved with the game
+/// version, its files are downloaded and the game starts with its main
+/// class and arguments.
+///
+/// `loader` and `loader_version` are both NULL, for the plain game, or
+/// both set. Unknown loaders and versions fail with
+/// `COBLET_ERROR_KIND_NOT_FOUND`, unmet component requirements with
+/// `COBLET_ERROR_KIND_UNSUPPORTED`.
+///
+/// # Safety
+///
+/// As `coblet_launch_customized`; `loader` and `loader_version` must be
+/// NULL or NUL-terminated.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_launch_loader(
+    coblet: *const Coblet,
+    version_id: *const c_char,
+    loader: *const c_char,
+    loader_version: *const c_char,
+    player_name: *const c_char,
+    mode: CobletLaunchMode,
+    game_dir: *const c_char,
+    customizers: *const *const c_char,
+    count: usize,
+    operation_id: *const c_char,
+    out_game: *mut *mut CobletGame,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
         guard(out_err, || {
@@ -185,6 +234,7 @@ pub unsafe extern "C" fn coblet_launch_customized(
                 .as_ref()
                 .ok_or_else(|| Failure::argument("coblet", "is NULL"))?;
             let version = text(version_id, "version_id")?;
+            let choice = crate::loaders::loader_choice(loader, loader_version)?;
             let op = self::operation_id(operation_id)?;
             let name = PlayerName::new(text(player_name, "player_name")?)
                 .map_err(|error| Failure::argument("player_name", &error.to_string()))?;
@@ -203,7 +253,14 @@ pub unsafe extern "C" fn coblet_launch_customized(
             if let Some(op) = op {
                 request = request.with_operation(op);
             }
-            start(handle, version, game_dir, request, out_game)
+            start(
+                handle,
+                version,
+                choice.as_ref(),
+                game_dir,
+                request,
+                out_game,
+            )
         })
     }
 }
@@ -245,13 +302,22 @@ unsafe fn with_customizers(
 unsafe fn start(
     handle: &Coblet,
     version: &str,
+    loader: Option<&(ExtensionId, String)>,
     game_dir: std::path::PathBuf,
     request: LaunchRequest,
     out_game: *mut *mut CobletGame,
 ) -> Result<CobletStatus, Failure> {
-    let session = handle
-        .runtime
-        .block_on(handle.inner.launch(version, game_dir, request))?;
+    let session = handle.runtime.block_on(async {
+        match loader {
+            Some((id, chosen)) => {
+                handle
+                    .inner
+                    .launch_with_loader(version, id, chosen, game_dir, request)
+                    .await
+            }
+            None => handle.inner.launch(version, game_dir, request).await,
+        }
+    })?;
     let logs = session.logs();
     let game = Box::into_raw(Box::new(CobletGame {
         op: session.operation(),
@@ -316,7 +382,7 @@ pub unsafe extern "C" fn coblet_launch_account(
             if let Some(op) = op {
                 request = request.with_operation(op);
             }
-            start(handle, version, game_dir, request, out_game)
+            start(handle, version, None, game_dir, request, out_game)
         })
     }
 }
