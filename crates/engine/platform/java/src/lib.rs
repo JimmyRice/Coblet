@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod archive;
+mod data;
 mod discover;
 mod error;
 mod install;
@@ -22,6 +23,7 @@ mod provider;
 mod runtime;
 mod select;
 
+pub use data::DataJavaProvider;
 pub use discover::{
     BUILTIN_LOCATORS, JavaCandidate, JavaLocator, JavaLocators, LocateContext, SearchPaths,
     candidates, discover, executable_name,

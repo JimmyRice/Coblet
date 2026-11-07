@@ -43,6 +43,9 @@ pub enum JavaError {
         /// What went wrong.
         reason: String,
     },
+    /// A data Java provider definition is malformed.
+    #[error("invalid java provider definition: {0}")]
+    Definition(String),
     /// No installation meets the requirement.
     #[error("no java {major} for {arch} found and none can be installed: {reason}")]
     NotFound {
