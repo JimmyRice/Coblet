@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, PoisonError};
 
-use coblet_catalog::{CachePolicy, Catalog, CatalogContext, Filter};
+use coblet_catalog::{Catalog, Filter};
 use coblet_launch::{GameSession, LaunchRequest};
 use coblet_loader::{InstallRecipe, LoaderError, LoaderRegistry, LoaderVersion};
 use coblet_types::{ExtensionId, GameVersionId};
@@ -120,7 +120,7 @@ impl Coblet {
         game: &GameVersionId,
         version: &LoaderVersion,
     ) -> Result<InstallRecipe, Error> {
-        let cx = CatalogContext::new(self.inner.meta.clone(), CachePolicy::PreferCache);
+        let cx = self.catalog_context();
         let recipe = self.inner.loaders.install(&cx, loader, game, version).await;
         self.forward_warnings(&cx);
         Ok(recipe?)

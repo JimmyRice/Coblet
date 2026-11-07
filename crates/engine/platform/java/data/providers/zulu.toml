@@ -1,0 +1,26 @@
+# Azul Zulu JREs from the Azul metadata API. Zulu has Java 8 for arm64
+# macOS, which neither Mojang nor Adoptium ships. The API lists .deb,
+# .rpm and .dmg files too; only zip and tar.gz archives are kept.
+id = "coblet:zulu"
+name = "Azul Zulu"
+
+[packages]
+format = "json"
+url = "https://api.azul.com/metadata/v1/zulu/packages/?java_version={major}&os={os}&arch={arch}&java_package_type=jre&javafx_bundled=false&crac_supported=false&latest=true&release_status=ga&availability_types=CA&include_fields=sha256_hash,size"
+items = ""
+id = "/name"
+version = "/java_version"
+download = "/download_url"
+hash = "/sha256_hash"
+hash_algorithm = "sha256"
+size = "/size"
+
+[os]
+linux = "linux_glibc"
+
+[arch]
+x86_64 = "x64"
+
+[supports]
+os = ["macos", "linux", "windows"]
+arch = ["x86_64", "aarch64"]

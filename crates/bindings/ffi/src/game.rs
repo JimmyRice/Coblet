@@ -72,7 +72,7 @@ pub(crate) unsafe fn write_operation_id(op: OperationId, out: *mut c_char) -> Re
 ///
 /// `id` must be NULL or NUL-terminated.
 #[allow(unsafe_code, reason = "reads a string argument")]
-unsafe fn operation_id(id: *const c_char) -> Result<Option<OperationId>, Failure> {
+pub(crate) unsafe fn operation_id(id: *const c_char) -> Result<Option<OperationId>, Failure> {
     // SAFETY: forwarded from the caller's guarantee.
     let Some(id) = (unsafe { optional_text(id, "operation_id") })? else {
         return Ok(None);

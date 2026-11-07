@@ -5,7 +5,7 @@ use coblet::platform::ProfileError;
 use coblet::player::PlayerError;
 
 /// Version of the C ABI; it grows with every incompatible change.
-pub const COBLET_ABI_VERSION: u32 = 12;
+pub const COBLET_ABI_VERSION: u32 = 13;
 
 /// Result of a call.
 #[repr(C)]
@@ -214,6 +214,7 @@ impl From<coblet::Error> for Failure {
             }
             coblet::Error::Launch(_) => CobletErrorKind::Launch,
             coblet::Error::Loader(error) => loader_kind(error),
+            coblet::Error::Java(error) => java_kind(error),
             coblet::Error::Auth(error) => auth_kind(error),
             coblet::Error::Player(error) => player_kind(error),
             _ => CobletErrorKind::Other,
@@ -236,6 +237,16 @@ fn loader_kind(error: &coblet::loader::LoaderError) -> CobletErrorKind {
         }
         LoaderError::InvalidDefinition { .. } => CobletErrorKind::InvalidArgument,
         LoaderError::Catalog(_) => CobletErrorKind::Network,
+        _ => CobletErrorKind::Other,
+    }
+}
+
+fn java_kind(error: &coblet::java::JavaError) -> CobletErrorKind {
+    use coblet::java::JavaError;
+    match error {
+        JavaError::Definition(_) => CobletErrorKind::InvalidArgument,
+        JavaError::Metadata(_) | JavaError::Download { .. } => CobletErrorKind::Network,
+        JavaError::NotFound { .. } => CobletErrorKind::NotFound,
         _ => CobletErrorKind::Other,
     }
 }

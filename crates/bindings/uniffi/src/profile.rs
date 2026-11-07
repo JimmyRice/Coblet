@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use coblet::platform::{
-    DetachedDraft, Draft, EnvValue, JavaSource, Natives, NativesSource, ProfileArg, ProfileError,
-    RuleSettings, Target,
+    DetachedDraft, Draft, EnvValue, JavaMatch, JavaSource, Natives, NativesSource, ProfileArg,
+    ProfileError, RuleSettings, Target,
 };
 use coblet::runtime::Extension;
 use coblet::types::{Arch, ArchName, ExtensionId};
@@ -176,6 +176,15 @@ pub enum JavaSourceChoice {
     Any,
     /// Only an installed Java; nothing is downloaded.
     SystemOnly,
+}
+
+/// Which installed Java versions a launch accepts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum JavaMatchChoice {
+    /// Only the required major version.
+    Exact,
+    /// The required major version or a newer one the components accept.
+    AtLeast,
 }
 
 /// Library of the profile as `rewrite` sees it.
@@ -497,6 +506,22 @@ impl ProfileDraft {
         };
         self.with(|draft| {
             draft.draft().set_java_source(source);
+            Ok(())
+        })
+    }
+
+    /// Sets which installed Java versions are accepted.
+    ///
+    /// # Errors
+    ///
+    /// Fails after `rewrite` returned.
+    pub fn set_java_match(&self, matching: JavaMatchChoice) -> Result<(), CobletError> {
+        let matching = match matching {
+            JavaMatchChoice::Exact => JavaMatch::Exact,
+            JavaMatchChoice::AtLeast => JavaMatch::AtLeast,
+        };
+        self.with(|draft| {
+            draft.draft().set_java_match(matching);
             Ok(())
         })
     }

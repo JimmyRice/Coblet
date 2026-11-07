@@ -8,7 +8,8 @@
 //! implement `PlatformProfile` to adapt launches to a platform,
 //! `LaunchCustomizer` and `LaunchStep` to change single launches, and
 //! `SecretStore` to keep tokens in a system keychain, `UrlRewriter` to
-//! point requests at mirrors, and `ModLoader` to add a Mod Loader, as Rust
+//! point requests at mirrors, `JavaProvider` and `JavaLocator` to add
+//! places Java is downloaded from and found in, and `ModLoader` to add a Mod Loader, as Rust
 //! code does with the traits of the same names. Mod Loaders can also be
 //! described as TOML or JSON data with `CobletBuilder.add_loader_toml`. Async methods run on tokio and
 //! appear as `async` in Swift, `suspend` in Kotlin and `asyncio` coroutines
@@ -24,6 +25,7 @@ mod customize;
 mod error;
 mod events;
 mod game;
+mod java;
 mod loaders;
 mod login;
 mod profile;
@@ -40,13 +42,17 @@ pub use customize::{LaunchCustomizer, LaunchStep, LibrarySpec, ProfileEditor, St
 pub use error::{CobletError, ErrorKind};
 pub use events::{CobletEvent, EventStream, Outcome, TransferKind, generate_operation_id};
 pub use game::{GameExitInfo, GameHandle, LogLine};
+pub use java::{
+    JavaExtensionInfo, JavaInstallInfo, JavaLocator, JavaPackageInfo, JavaProvider,
+    JavaProviderAnswer, JavaProviderContext, JavaQueryInfo,
+};
 pub use loaders::{
     LaunchPlan, LoaderChoice, LoaderContext, LoaderInfo, LoaderVersionInfo, ModLoader,
 };
 pub use login::LoginFlow;
 pub use profile::{
-    ComponentInfo, JavaSourceChoice, LibraryInfo, NativesChoice, PlatformProfile, ProfileDraft,
-    ProfileTarget, RuleOverrides,
+    ComponentInfo, JavaMatchChoice, JavaSourceChoice, LibraryInfo, NativesChoice, PlatformProfile,
+    ProfileDraft, ProfileTarget, RuleOverrides,
 };
 pub use secrets::{SecretStore, generate_secret_key};
 pub use sources::{ArtifactKind, UrlRewriter};

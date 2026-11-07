@@ -6,13 +6,14 @@ use coblet::runtime::{Extension, UserAgent};
 use coblet::types::{ExtensionId, Platform};
 
 use crate::customize::ForeignCustomizer;
+use crate::java::{ForeignJavaLocator, ForeignJavaProvider, extension_id};
 use crate::loaders::ForeignLoader;
 use crate::profile::ForeignProfile;
 use crate::secrets::{ForeignSecrets, encryption_key};
 use crate::sources::ForeignRewriter;
 use crate::{
-    ArtifactKind, Coblet, CobletError, ErrorKind, LaunchCustomizer, ModLoader, PlatformInfo,
-    PlatformProfile, SecretStore, UrlRewriter,
+    ArtifactKind, Coblet, CobletError, ErrorKind, JavaLocator, JavaProvider, LaunchCustomizer,
+    ModLoader, PlatformInfo, PlatformProfile, SecretStore, UrlRewriter,
 };
 
 /// Where tokens are kept.
@@ -35,6 +36,17 @@ struct Settings {
     mirror_fallback: bool,
     version_sources: Vec<coblet::mojang::MojangVersions>,
     loaders: Vec<(Arc<dyn coblet::loader::ModLoader>, bool)>,
+    java: Vec<JavaChange>,
+}
+
+/// One Java change, applied in order on top of the built-in lists.
+enum JavaChange {
+    Provider(Arc<dyn coblet::java::JavaProvider>, bool),
+    RemoveProvider(ExtensionId),
+    Locator(Arc<dyn coblet::java::JavaLocator>, bool),
+    RemoveLocator(ExtensionId),
+    Executable(String),
+    Directory(String, String),
 }
 
 /// Settings of a [`Coblet`] before it is built: Platform Profiles, launch
@@ -108,6 +120,21 @@ impl CobletBuilder {
         ))
     }
 
+    fn java_change(&self, change: JavaChange) -> Result<(), CobletError> {
+        self.with(|settings| {
+            settings.java.push(change);
+            Ok(())
+        })
+    }
+
+    fn data_java_provider(
+        parsed: Result<coblet::java::DataJavaProvider, coblet::java::JavaError>,
+    ) -> Result<Arc<dyn coblet::java::JavaProvider>, CobletError> {
+        Ok(Arc::new(
+            parsed.map_err(|error| invalid(error.to_string()))?,
+        ))
+    }
+
     fn with<T>(
         &self,
         body: impl FnOnce(&mut Settings) -> Result<T, CobletError>,
@@ -147,6 +174,7 @@ impl CobletBuilder {
                 mirror_fallback: true,
                 version_sources: Vec::new(),
                 loaders: Vec::new(),
+                java: Vec::new(),
             })),
         }))
     }
@@ -460,11 +488,126 @@ impl CobletBuilder {
         self.add_mod_loader(loader, true)
     }
 
+    /// Adds a Java provider written in this language, asked after the
+    /// built-in ones (Mojang, Adoptium, Azul Zulu) when no installed Java fits.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`; `build` fails when the
+    /// ID is already registered.
+    pub fn add_java_provider(&self, provider: Arc<dyn JavaProvider>) -> Result<(), CobletError> {
+        let provider = Arc::new(ForeignJavaProvider::new(provider)?);
+        self.java_change(JavaChange::Provider(provider, false))
+    }
+
+    /// Puts a Java provider written in this language in place of the one
+    /// with the same ID, keeping its place; appends it when the ID is free.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`.
+    pub fn replace_java_provider(
+        &self,
+        provider: Arc<dyn JavaProvider>,
+    ) -> Result<(), CobletError> {
+        let provider = Arc::new(ForeignJavaProvider::new(provider)?);
+        self.java_change(JavaChange::Provider(provider, true))
+    }
+
+    /// Adds a Java provider described in TOML, in the format of coblet's
+    /// data Java providers.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed definition and after `build`.
+    pub fn add_java_provider_toml(&self, definition: &str) -> Result<(), CobletError> {
+        let provider =
+            Self::data_java_provider(coblet::java::DataJavaProvider::from_toml(definition))?;
+        self.java_change(JavaChange::Provider(provider, false))
+    }
+
+    /// Adds a Java provider described in JSON, with the keys of the TOML
+    /// form of [`add_java_provider_toml`](Self::add_java_provider_toml).
+    ///
+    /// # Errors
+    ///
+    /// Fails like [`add_java_provider_toml`](Self::add_java_provider_toml).
+    pub fn add_java_provider_json(&self, definition: &str) -> Result<(), CobletError> {
+        let provider =
+            Self::data_java_provider(coblet::java::DataJavaProvider::from_json(definition))?;
+        self.java_change(JavaChange::Provider(provider, false))
+    }
+
+    /// Removes a Java provider, such as `coblet:mojang`; an unknown ID is ignored.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`.
+    pub fn remove_java_provider(&self, id: &str) -> Result<(), CobletError> {
+        let id = extension_id("java provider", id)?;
+        self.java_change(JavaChange::RemoveProvider(id))
+    }
+
+    /// Adds a place to look for installed Java, written in this language,
+    /// searched after the built-in places.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`; `build` fails when the
+    /// ID is already registered.
+    pub fn add_java_locator(&self, locator: Arc<dyn JavaLocator>) -> Result<(), CobletError> {
+        let locator = Arc::new(ForeignJavaLocator::new(locator)?);
+        self.java_change(JavaChange::Locator(locator, false))
+    }
+
+    /// Puts a Java locator written in this language in place of the one
+    /// with the same ID, keeping its place; appends it when the ID is free.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`.
+    pub fn replace_java_locator(&self, locator: Arc<dyn JavaLocator>) -> Result<(), CobletError> {
+        let locator = Arc::new(ForeignJavaLocator::new(locator)?);
+        self.java_change(JavaChange::Locator(locator, true))
+    }
+
+    /// Removes a Java locator, such as `coblet:path` to ignore `PATH`; an
+    /// unknown ID is ignored.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`.
+    pub fn remove_java_locator(&self, id: &str) -> Result<(), CobletError> {
+        let id = extension_id("java locator", id)?;
+        self.java_change(JavaChange::RemoveLocator(id))
+    }
+
+    /// Adds a `java` executable chosen by the user, searched before every other place.
+    ///
+    /// # Errors
+    ///
+    /// Fails after `build`.
+    pub fn add_java_executable(&self, executable: String) -> Result<(), CobletError> {
+        self.java_change(JavaChange::Executable(executable))
+    }
+
+    /// Adds a folder holding one Java per child, such as another launcher's
+    /// runtime folder; `home` leads from each child to its Java home, like
+    /// `Contents/Home` on macOS or `""`.
+    ///
+    /// # Errors
+    ///
+    /// Fails after `build`.
+    pub fn add_java_directory(&self, dir: String, home: String) -> Result<(), CobletError> {
+        self.java_change(JavaChange::Directory(dir, home))
+    }
+
     /// Creates the `Coblet`.
     ///
     /// # Errors
     ///
-    /// Fails when called twice or when the transport cannot start.
+    /// Fails when called twice, when the transport cannot start, and when
+    /// two Java providers or two Java locators share an ID.
     pub fn build(&self) -> Result<Arc<Coblet>, CobletError> {
         let settings = self
             .settings
@@ -504,6 +647,18 @@ impl CobletBuilder {
                 builder.replace_loader(loader)
             } else {
                 builder.loader(loader)
+            };
+        }
+        for change in settings.java {
+            builder = match change {
+                JavaChange::Provider(provider, false) => builder.java_provider(provider),
+                JavaChange::Provider(provider, true) => builder.replace_java_provider(provider),
+                JavaChange::RemoveProvider(id) => builder.without_java_provider(id),
+                JavaChange::Locator(locator, false) => builder.java_locator(locator),
+                JavaChange::Locator(locator, true) => builder.replace_java_locator(locator),
+                JavaChange::RemoveLocator(id) => builder.without_java_locator(id),
+                JavaChange::Executable(path) => builder.java_executable(path),
+                JavaChange::Directory(dir, home) => builder.java_directory(dir, home),
             };
         }
         match settings.secrets {

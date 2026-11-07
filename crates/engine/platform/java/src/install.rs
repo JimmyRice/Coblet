@@ -1,7 +1,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use coblet_types::Arch;
+use coblet_types::{Arch, ExtensionId};
 
 /// Where an installation was found.
 #[non_exhaustive]
@@ -15,13 +15,28 @@ pub enum InstallSource {
     Sdkman,
     /// A system directory such as `/Library/Java/JavaVirtualMachines` or `/usr/lib/jvm`.
     SystemDirectory,
-    /// A Mojang runtime installed by coblet.
+    /// A Mojang runtime coblet installed before Java providers, named
+    /// after its component folder.
     MojangRuntime {
         /// Runtime component, such as `jre-legacy`.
         component: String,
     },
     /// A path given by the application or the user.
     Configured,
+    /// A folder the application added to the search, holding one Java per child.
+    Directory(PathBuf),
+    /// A third-party [`JavaLocator`](crate::JavaLocator).
+    Located {
+        /// The locator.
+        locator: ExtensionId,
+    },
+    /// A runtime a Java provider installed.
+    Provider {
+        /// The provider.
+        provider: ExtensionId,
+        /// The package ID.
+        package: String,
+    },
 }
 
 /// Java installation whose version was probed.

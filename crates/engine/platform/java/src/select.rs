@@ -2,17 +2,21 @@ use coblet_platform::JavaRequirement;
 
 use crate::JavaInstall;
 
-/// Picks the installation for a requirement: same major version and
-/// architecture, in discovery order.
-///
-/// The major version must match exactly: launchwrapper versions break on
-/// Java 9 and later, and newer game versions are tested on one Java line.
+/// Picks the installation for a requirement, in discovery order: one with
+/// the required major version and architecture, or, when the requirement's
+/// [`JavaMatch`](coblet_platform::JavaMatch) allows newer versions, the
+/// oldest accepted newer one.
 #[must_use]
 pub fn select<'a>(
     installs: &'a [JavaInstall],
     requirement: &JavaRequirement,
 ) -> Option<&'a JavaInstall> {
-    installs
-        .iter()
-        .find(|install| install.major == requirement.major && install.arch == requirement.arch)
+    let accepted = || {
+        installs
+            .iter()
+            .filter(|install| requirement.accepts(install.major, &install.arch))
+    };
+    accepted()
+        .find(|install| install.major == requirement.major)
+        .or_else(|| accepted().min_by_key(|install| install.major))
 }

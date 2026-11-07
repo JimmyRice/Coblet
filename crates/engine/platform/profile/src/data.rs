@@ -8,8 +8,8 @@ use coblet_types::{Arch, ExtensionId, MavenCoordinate};
 use serde::Deserialize;
 
 use crate::{
-    Draft, EffectiveLibrary, EnvValue, FileSource, JavaSource, LibraryFile, NativesSource,
-    PlatformProfile, ProfileArg, ProfileError, ProfileLayer, RuleSettings, Target,
+    Draft, EffectiveLibrary, EnvValue, FileSource, JavaMatch, JavaSource, LibraryFile,
+    NativesSource, PlatformProfile, ProfileArg, ProfileError, ProfileLayer, RuleSettings, Target,
     compare_versions, glob_matches,
 };
 
@@ -246,6 +246,15 @@ struct JavaSpec {
     runtime: Option<String>,
     #[serde(default)]
     arch: Option<String>,
+    #[serde(default, rename = "match")]
+    matching: Option<JavaMatchSpec>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum JavaMatchSpec {
+    Exact,
+    AtLeast,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -525,6 +534,12 @@ fn apply_java(draft: &mut Draft<'_>, spec: &JavaSpec) {
     }
     if let Some(runtime) = &spec.runtime {
         draft.set_java_runtime(runtime.clone());
+    }
+    if let Some(matching) = spec.matching {
+        draft.set_java_match(match matching {
+            JavaMatchSpec::Exact => JavaMatch::Exact,
+            JavaMatchSpec::AtLeast => JavaMatch::AtLeast,
+        });
     }
     if let Some(arch) = &spec.arch
         && let Ok(name) = coblet_types::ArchName::new(arch)

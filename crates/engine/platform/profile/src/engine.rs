@@ -6,7 +6,7 @@ use coblet_types::{Arch, ExtensionId, Platform};
 
 use crate::effective::explain;
 use crate::{
-    Change, ChangeSource, Draft, EffectiveLaunchProfile, EffectiveLibrary, FileSource,
+    Change, ChangeSource, Draft, EffectiveLaunchProfile, EffectiveLibrary, FileSource, JavaMatch,
     JavaRequirement, JavaSource, LibraryFile, Missing, NativeJar, Natives, PipelineStep,
     PlatformProfile, ProfileArg, ProfileError, ProfileWarning, ResolvedProfile, RuleSettings,
     Target, auth_argument_change, is_auth_argument,
@@ -453,6 +453,8 @@ fn evaluate_profile(
             runtime_platform: None,
             source: JavaSource::Any,
             arch: platform.arch().clone(),
+            matching: JavaMatch::Exact,
+            compatible: profile.compatible_java_majors.clone(),
         },
         asset_index: profile.asset_index.clone(),
         assets: profile.assets.clone(),
@@ -629,6 +631,34 @@ mod tests {
         let plain = resolve("1.12.2", &mac_arm()).unwrap();
         assert_eq!(plain.java.major, 8);
         assert_eq!(plain.java.component.as_deref(), Some("jre-legacy"));
+    }
+
+    #[test]
+    fn data_profiles_can_accept_newer_java() {
+        let relaxed = crate::DataProfile::from_toml(
+            r#"
+            id = "acme:newer-java"
+            display_name = "Newer Java"
+            [match]
+            os = ["macos"]
+            [java]
+            match = "at-least"
+            "#,
+            crate::ProfileLayer::ThirdParty,
+        )
+        .unwrap();
+        let mut engine = ProfileEngine::builtin();
+        engine.register(Arc::new(relaxed)).unwrap();
+        let profile = engine.resolve(&resolved("1.20.1"), &mac_arm()).unwrap();
+        let java = &profile.java;
+        assert_eq!(java.matching, crate::JavaMatch::AtLeast);
+        assert!(java.accepts(21, &Arch::Aarch64));
+        assert!(java.accepts(17, &Arch::Aarch64));
+        assert!(!java.accepts(11, &Arch::Aarch64));
+        assert!(!java.accepts(21, &Arch::X86_64));
+
+        let strict = resolve("1.20.1", &mac_arm()).unwrap();
+        assert!(!strict.java.accepts(21, &Arch::Aarch64));
     }
 
     fn ids(profile: &EffectiveLaunchProfile) -> Vec<&str> {

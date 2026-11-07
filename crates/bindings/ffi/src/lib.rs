@@ -18,7 +18,12 @@
 //! a `CobletLoaderCtx` handle, or TOML and JSON definitions
 //! (`coblet_builder_add_loader_toml`); `coblet_loader_*` lists their
 //! versions and recipes, `coblet_plan_launch_json` resolves a version with
-//! one and `coblet_launch_loader` starts it. Events (launch steps, file transfers, game
+//! one and `coblet_launch_loader` starts it. Java providers and locators
+//! are callback tables (`CobletJavaProvider`, `CobletJavaLocator`) that
+//! answer through a `CobletJavaCtx` handle, or TOML and JSON provider
+//! definitions (`coblet_builder_add_java_provider_toml`); built-in ones are
+//! removed with `coblet_builder_remove_java_provider`, and `coblet_java_*`
+//! lists installs, providers and packages. Events (launch steps, file transfers, game
 //! starts, logs and exits) are read with `coblet_events_next` as fixed
 //! layout `CobletEvent` structs. The header `include/coblet.h` is generated with
 //! `cargo xtask gen-header`.
@@ -31,6 +36,7 @@ mod customize;
 mod events;
 mod game;
 mod guard;
+mod java;
 mod loaders;
 mod login;
 mod profile;
@@ -75,6 +81,16 @@ pub use game::{
     coblet_game_wait, coblet_generate_operation_id, coblet_launch, coblet_launch_account,
     coblet_launch_customized, coblet_launch_loader,
 };
+pub use java::{
+    COBLET_JAVA_REPLACE, CobletJavaCtx, CobletJavaLocator, CobletJavaProvider,
+    coblet_builder_add_java_directory, coblet_builder_add_java_executable,
+    coblet_builder_add_java_locator, coblet_builder_add_java_provider,
+    coblet_builder_add_java_provider_json, coblet_builder_add_java_provider_toml,
+    coblet_builder_remove_java_locator, coblet_builder_remove_java_provider, coblet_install_java,
+    coblet_java_ctx_fail, coblet_java_ctx_fetch, coblet_java_ctx_set_result,
+    coblet_java_installs_json, coblet_java_locators_json, coblet_java_packages_json,
+    coblet_java_providers_json,
+};
 pub use loaders::{
     COBLET_LOADER_REPLACE, CobletLoaderCtx, CobletModLoader, coblet_builder_add_loader,
     coblet_builder_add_loader_json, coblet_builder_add_loader_toml, coblet_loader_ctx_fail,
@@ -86,14 +102,15 @@ pub use login::{
     coblet_login_finish, coblet_login_free, coblet_login_prompt_json, coblet_login_submit_redirect,
 };
 pub use profile::{
-    CobletJavaSource, CobletMatchFailure, CobletNatives, CobletPlatformProfile, CobletProfileDraft,
-    CobletRule, CobletRules, coblet_draft_add_library, coblet_draft_add_native_path,
-    coblet_draft_append_arg, coblet_draft_fail, coblet_draft_handle_natives,
-    coblet_draft_info_json, coblet_draft_prepend_env_paths, coblet_draft_refuse,
-    coblet_draft_remove_args, coblet_draft_remove_libraries, coblet_draft_set_env,
-    coblet_draft_set_java_arch, coblet_draft_set_java_major, coblet_draft_set_java_runtime,
-    coblet_draft_set_java_source, coblet_draft_warn, coblet_match_fail, coblet_rules_fail,
-    coblet_rules_set, coblet_rules_set_native,
+    CobletJavaMatch, CobletJavaSource, CobletMatchFailure, CobletNatives, CobletPlatformProfile,
+    CobletProfileDraft, CobletRule, CobletRules, coblet_draft_add_library,
+    coblet_draft_add_native_path, coblet_draft_append_arg, coblet_draft_fail,
+    coblet_draft_handle_natives, coblet_draft_info_json, coblet_draft_prepend_env_paths,
+    coblet_draft_refuse, coblet_draft_remove_args, coblet_draft_remove_libraries,
+    coblet_draft_set_env, coblet_draft_set_java_arch, coblet_draft_set_java_major,
+    coblet_draft_set_java_match, coblet_draft_set_java_runtime, coblet_draft_set_java_source,
+    coblet_draft_warn, coblet_match_fail, coblet_rules_fail, coblet_rules_set,
+    coblet_rules_set_native,
 };
 pub use secrets::{
     COBLET_SECRET_KEY_LEN, CobletSecretCall, CobletSecretStore, coblet_generate_secret_key,

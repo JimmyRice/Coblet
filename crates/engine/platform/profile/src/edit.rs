@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use coblet_types::{Arch, ExtensionId, MavenCoordinate};
 
 use crate::{
-    Draft, EffectiveLaunchProfile, EffectiveLibrary, EnvValue, FileSource, JavaSource, LibraryFile,
-    Natives, ProfileArg, ProfileError, glob_matches,
+    Draft, EffectiveLaunchProfile, EffectiveLibrary, EnvValue, FileSource, JavaMatch, JavaSource,
+    LibraryFile, Natives, ProfileArg, ProfileError, glob_matches,
 };
 
 /// Where the native code of a library comes from, set by
@@ -71,6 +71,8 @@ pub enum ProfileEdit {
     JavaRuntime(String),
     /// [`Draft::set_java_arch`].
     JavaArch(Arch),
+    /// [`Draft::set_java_match`].
+    JavaMatch(JavaMatch),
     /// [`Draft::warn`].
     Warn(String),
     /// [`Draft::refuse`].
@@ -152,6 +154,7 @@ impl Draft<'_> {
             ProfileEdit::JavaSource(source) => self.set_java_source(source),
             ProfileEdit::JavaRuntime(runtime) => self.set_java_runtime(runtime),
             ProfileEdit::JavaArch(arch) => self.set_java_arch(arch),
+            ProfileEdit::JavaMatch(matching) => self.set_java_match(matching),
             ProfileEdit::Warn(message) => self.warn(message),
             ProfileEdit::Refuse(reason) => self.refuse(reason),
         }
@@ -265,6 +268,12 @@ impl Draft<'_> {
             format!("Mojang runtime platform set to `{runtime}`"),
         );
         self.profile.java.runtime_platform = Some(runtime);
+    }
+
+    /// Sets which installed Java versions are accepted.
+    pub fn set_java_match(&mut self, matching: JavaMatch) {
+        self.profile.java.matching = matching;
+        self.note("java", format!("matching set to {matching:?}"));
     }
 
     /// Sets the architecture the Java runtime must be built for.
