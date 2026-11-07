@@ -162,10 +162,13 @@ impl Coblet {
     ///
     /// A launch's events carry the ID of its `LaunchRequest`; choose it
     /// with `LaunchRequest::with_operation` to follow one launch among
-    /// several. Events nobody
-    /// subscribes to are not built, and a subscriber that falls behind
-    /// receives [`Received::Missed`](coblet_runtime::Received::Missed)
-    /// instead of slowing the work down.
+    /// several. Events nobody subscribes to are not built. Every
+    /// subscriber has its own queue: a newer transfer or step progress
+    /// replaces the queued one of the same batch, and a subscriber that
+    /// still falls behind loses game log copies first, then progress, and
+    /// only then other events, learning how many with
+    /// [`Received::Missed`](coblet_runtime::Received::Missed) instead of
+    /// slowing the work down.
     #[must_use]
     pub fn subscribe(&self) -> EventSubscription {
         self.inner.events.subscribe()

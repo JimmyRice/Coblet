@@ -225,8 +225,12 @@ pub struct CobletEvents {
 /// `coblet_events_free`.
 ///
 /// Events are built only while a subscription exists, and progress is
-/// throttled to 30 events per second per batch. A reader that falls behind
-/// gets a `COBLET_EVENT_KIND_MISSED` event instead of slowing coblet down.
+/// throttled to 30 events per second per batch; a newer transfer or step
+/// progress replaces the unread one of the same batch. A reader that still
+/// falls behind loses game log copies first, then progress, and only then
+/// other events, and gets a `COBLET_EVENT_KIND_MISSED` event with the
+/// count instead of slowing coblet down. Read on a thread of your own while
+/// a blocking call such as `coblet_launch` runs.
 ///
 /// # Safety
 ///
