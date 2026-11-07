@@ -225,8 +225,18 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn publishes_throttled_progress_and_the_final_totals() {
         let bus = EventBus::new(256);
-        let mut events = bus.subscribe();
         let op = OperationId::random();
+        // One reader keeps up; the other reads only at the end and gets the
+        // latest totals instead of a backlog.
+        let mut late = bus.subscribe();
+        let mut events = bus.subscribe();
+        let reader = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            while let Some(Received::Event(event)) = events.recv().await {
+                seen.push(event);
+            }
+            seen
+        });
         let progress = TransferProgress::new();
         let work = {
             let progress = progress.clone();
@@ -249,7 +259,7 @@ mod tests {
         assert_eq!(output, 42);
         drop(bus);
         let mut seen = Vec::new();
-        while let Some(Received::Event(event)) = events.recv().await {
+        for event in reader.await.unwrap() {
             let Event::Transfer {
                 op: from,
                 kind,
@@ -266,6 +276,11 @@ mod tests {
         let last = seen.last().unwrap();
         assert_eq!((last.files_done, last.bytes_done), (100, 100));
         assert_eq!(last.bytes_total, Some(100));
+        let Some(Received::Event(Event::Transfer { progress, .. })) = late.recv().await else {
+            panic!("the late reader got no transfer");
+        };
+        assert_eq!(&progress, last);
+        assert_eq!(late.recv().await, None);
     }
 
     #[tokio::test]

@@ -2,12 +2,15 @@
  * Smoke test of the coblet C ABI: list versions, launch one with a TOML
  * Platform Profile, a C Platform Profile and a customizer that each add a
  * JVM property, plus an extra step, print their lines of the launch
- * report and the launch events (steps, download totals, game start), stop
- * the game once a log message contains a marker.
+ * report and the launch events (steps, download totals, game start), read
+ * on a thread of their own while the launch blocks, stop the game once a
+ * log message contains a marker.
  *
- *   cc -I include examples/smoke.c -L <target dir> -lcoblet_ffi -o smoke
+ *   cc -pthread -I include examples/smoke.c -L <target dir> -lcoblet_ffi -o smoke
  *   ./smoke <data root> <version> <offline|demo> <marker>
  */
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -62,16 +65,34 @@ static int fail(const char *what, CobletError *err) {
     return 1;
 }
 
-/* Prints the events of one launch that arrived so far, without waiting. */
-static void print_launch_events(CobletEvents *events, const char *launch_id) {
+/* Reads the events of one launch on its own thread while the launch blocks. */
+typedef struct {
+    CobletEvents *events;
+    const char *launch_id;
+    atomic_bool launch_returned;
+} LaunchReader;
+
+static void *read_launch_events(void *arg) {
+    LaunchReader *reader = arg;
     CobletEvent event = {0};
     CobletError *err = NULL;
     unsigned transfers = 0;
-    while (coblet_events_next(events, 0, &event, &err) == COBLET_STATUS_OK) {
+    bool finished = false;
+    while (!finished) {
+        CobletStatus status = coblet_events_next(reader->events, 100, &event, &err);
+        if (status == COBLET_STATUS_TIMEOUT) {
+            /* Events published before the launch returned are already queued. */
+            if (atomic_load(&reader->launch_returned)) {
+                break;
+            }
+            continue;
+        }
+        if (status != COBLET_STATUS_OK) {
+            break;
+        }
         if (event.kind == COBLET_EVENT_KIND_MISSED) {
-            /* Read after the launch, a cold download can outgrow the buffer. */
             printf("event: missed %llu\n", (unsigned long long)event.missed);
-        } else if (strcmp(event.op, launch_id) == 0) {
+        } else if (strcmp(event.op, reader->launch_id) == 0) {
             if (event.kind == COBLET_EVENT_KIND_TRANSFER) {
                 transfers++;
                 if (event.files_done == event.files_total) {
@@ -82,11 +103,13 @@ static void print_launch_events(CobletEvents *events, const char *launch_id) {
             } else if (event.kind != COBLET_EVENT_KIND_GAME_LOG && event.json.ptr != NULL) {
                 printf("event %d: %s\n", event.kind, event.json.ptr);
             }
+            finished = event.kind == COBLET_EVENT_KIND_OPERATION_FINISHED;
         }
         coblet_event_clear(&event);
     }
     coblet_error_free(err);
     printf("event: %u transfer updates\n", transfers);
+    return NULL;
 }
 
 int main(int argc, char **argv) {
@@ -141,15 +164,22 @@ int main(int argc, char **argv) {
         coblet_generate_operation_id(launch_id, &err) != COBLET_STATUS_OK) {
         return fail("coblet_events_subscribe", err);
     }
+    LaunchReader reader = {events, launch_id, false};
+    pthread_t reader_thread;
+    if (pthread_create(&reader_thread, NULL, read_launch_events, &reader) != 0) {
+        fprintf(stderr, "cannot start the event reader\n");
+        return 1;
+    }
     CobletGame *game = NULL;
     const char *chosen[] = {"coblet-smoke:marker"};
     CobletStatus launched = coblet_launch_customized(coblet, argv[2], "Steve", mode, NULL, chosen,
                                                      1, launch_id, &game, &err);
+    atomic_store(&reader.launch_returned, true);
+    pthread_join(reader_thread, NULL);
+    coblet_events_free(events);
     if (launched != COBLET_STATUS_OK) {
         return fail("coblet_launch_customized", err);
     }
-    print_launch_events(events, launch_id);
-    coblet_events_free(events);
     CobletString report = {0};
     if (coblet_game_report(game, &report, &err) != COBLET_STATUS_OK) {
         return fail("coblet_game_report", err);

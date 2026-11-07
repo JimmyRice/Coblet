@@ -261,8 +261,10 @@ fn convert(event: Event) -> Option<CobletEvent> {
 ///
 /// Reading is pulled by the caller: wrap `next` in an async iterator, a
 /// Flow or an `AsyncSequence`. Progress is throttled to 30 events per
-/// second per batch, and a reader that falls behind gets a `Missed` event
-/// instead of slowing coblet down.
+/// second per batch, and a newer transfer or step progress replaces the
+/// unread one of the same batch. A reader that still falls behind loses
+/// game log copies first, then progress, and only then other events, and
+/// gets a `Missed` event with the count instead of slowing coblet down.
 #[derive(uniffi::Object)]
 pub struct EventStream {
     inner: tokio::sync::Mutex<EventSubscription>,
