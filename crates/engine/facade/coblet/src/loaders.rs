@@ -262,6 +262,99 @@ mod tests {
             .platform(Platform::new(OsFamily::Linux, Arch::X86_64))
     }
 
+    const NIGHTLY: &str = r#"
+        id = "test:nightly"
+        name = "Nightly builds"
+        [versions]
+        format = "static"
+        list = [{ id = "2.1", type = "beta" }, { id = "1.4.2", type = "beta" }]
+    "#;
+
+    fn sourced(versions: &[LoaderVersion]) -> Vec<(&str, &str)> {
+        versions
+            .iter()
+            .map(|version| {
+                let source = version.source.as_ref().map_or("", ExtensionId::as_str);
+                (version.id.as_str(), source)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn loader_version_sources_merge_after_the_loader() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = ExtensionId::new("test:fake-data").unwrap();
+        let game: GameVersionId = "1.20.1".parse().unwrap();
+        let pinned = r#"{"id": "test:pinned", "name": "Pinned",
+            "versions": {"format": "static", "list": [{"id": "1.0"}]}}"#;
+        let coblet = builder(dir.path())
+            .loader_version_source_toml(id.clone(), NIGHTLY)
+            .loader_toml(FAKE_DATA)
+            .loader_version_source_json(id.clone(), pinned)
+            .build()
+            .unwrap();
+        // The loader's own 1.4.2 wins over the nightly copy.
+        assert_eq!(
+            sourced(&coblet.loader_versions(&id, &game).await.unwrap()),
+            [
+                ("2.0", "test:fake-data"),
+                ("1.4.2", "test:fake-data"),
+                ("2.1", "test:nightly"),
+                ("1.0", "test:pinned")
+            ]
+        );
+
+        let swapped = r#"{"id": "test:nightly", "name": "Nightly builds",
+            "versions": {"format": "static", "list": [{"id": "2.2"}]}}"#;
+        let changed = builder(dir.path())
+            .loader_toml(FAKE_DATA)
+            .loader_version_source_toml(id.clone(), NIGHTLY)
+            .loader_version_source_json(id.clone(), pinned)
+            .replace_loader_version_source(
+                id.clone(),
+                Arc::new(coblet_loader::DataLoaderVersions::from_json(swapped).unwrap()),
+            )
+            .without_loader_version_source(id.clone(), ExtensionId::new("test:pinned").unwrap())
+            .build()
+            .unwrap();
+        let ids: Vec<&str> = changed
+            .loaders()
+            .version_sources(&id)
+            .unwrap()
+            .iter()
+            .map(|source| source.id().as_str())
+            .collect();
+        assert_eq!(ids, ["test:nightly"]);
+        assert_eq!(
+            sourced(&changed.loader_versions(&id, &game).await.unwrap())[2],
+            ("2.2", "test:nightly")
+        );
+
+        let bad = builder(dir.path())
+            .loader_toml(FAKE_DATA)
+            .loader_version_source_toml(id.clone(), "id = \"test:x\"")
+            .build()
+            .unwrap_err();
+        assert!(
+            matches!(bad, Error::Loader(LoaderError::InvalidDefinition { .. })),
+            "{bad}"
+        );
+        let twice = builder(dir.path())
+            .loader_toml(FAKE_DATA)
+            .loader_version_source_toml(id.clone(), NIGHTLY)
+            .loader_version_source_toml(id.clone(), NIGHTLY)
+            .build()
+            .unwrap_err();
+        assert!(matches!(twice, Error::Registry(_)), "{twice}");
+        let posing = NIGHTLY.replace("test:nightly", "test:fake-data");
+        let posing = builder(dir.path())
+            .loader_toml(FAKE_DATA)
+            .loader_version_source_toml(id, &posing)
+            .build()
+            .unwrap_err();
+        assert!(matches!(posing, Error::Registry(_)), "{posing}");
+    }
+
     #[tokio::test]
     async fn selects_installs_and_builds_the_command_of_a_data_loader() {
         let dir = tempfile::tempdir().unwrap();

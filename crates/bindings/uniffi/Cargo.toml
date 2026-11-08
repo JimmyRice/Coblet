@@ -20,6 +20,7 @@ required-features = ["cli"]
 cli = ["uniffi/cli"]
 
 [dependencies]
+bytes.workspace = true
 coblet = { workspace = true, default-features = true, features = ["auth-msa", "auth-loopback", "encrypted-secrets"] }
 serde_json.workspace = true
 thiserror.workspace = true

@@ -72,7 +72,7 @@ enum LoaderChange {
     Replace(Arc<dyn coblet_loader::ModLoader>),
     Source(
         coblet_types::ExtensionId,
-        Arc<dyn coblet_catalog::CatalogSource<coblet_loader::LoaderVersion>>,
+        Change<Arc<dyn coblet_catalog::CatalogSource<coblet_loader::LoaderVersion>>>,
     ),
 }
 
@@ -92,7 +92,7 @@ struct JavaSettings {
 }
 
 /// One change to an ordered extension list.
-#[cfg(any(feature = "java", feature = "mojang"))]
+#[cfg(any(feature = "java", feature = "mojang", feature = "loaders"))]
 enum Change<T> {
     Register(T),
     Replace(T),
@@ -103,8 +103,9 @@ enum Change<T> {
 #[cfg(feature = "mojang")]
 #[derive(Default)]
 pub(crate) struct VersionSettings {
-    pub(crate) mojang: Option<coblet_mojang::MojangVersions>,
-    pub(crate) sources: Vec<Arc<dyn coblet_catalog::CatalogSource<coblet_mojang::GameVersion>>>,
+    mojang: Option<coblet_mojang::MojangVersions>,
+    /// Changes applied in order to the built-in version sources.
+    sources: Vec<Change<Arc<dyn coblet_catalog::CatalogSource<coblet_mojang::GameVersion>>>>,
     /// Changes applied in order to the built-in trait sources.
     traits: Vec<Change<Arc<dyn coblet_mojang::TraitSource>>>,
     /// The first trait table that failed to parse.
@@ -113,8 +114,56 @@ pub(crate) struct VersionSettings {
 
 #[cfg(feature = "mojang")]
 impl VersionSettings {
+    /// Builds the version catalog with the sources and trait sources
+    /// after the builder's changes.
+    pub(crate) fn catalog(
+        &mut self,
+        meta: MetaCache,
+        events: EventBus,
+    ) -> Result<crate::versions::VersionCatalog, Error> {
+        let traits = self.trait_sources()?;
+        let (sources, mojang) = self.version_sources()?;
+        Ok(crate::versions::version_catalog(
+            meta, events, sources, mojang, traits,
+        ))
+    }
+
+    /// Applies the version source changes to the built-in list, and
+    /// returns the Mojang source when it is still in the list.
+    fn version_sources(
+        &mut self,
+    ) -> Result<
+        (
+            coblet_catalog::CatalogSources<coblet_mojang::GameVersion>,
+            Option<Arc<coblet_mojang::MojangVersions>>,
+        ),
+        Error,
+    > {
+        let mojang = Arc::new(self.mojang.take().unwrap_or_default());
+        let mut sources = coblet_catalog::CatalogSources::new();
+        sources.register(Arc::clone(&mojang) as _)?;
+        for change in std::mem::take(&mut self.sources) {
+            match change {
+                Change::Register(source) => sources.register(source)?,
+                Change::Replace(source) => {
+                    sources.replace(source);
+                }
+                Change::Remove(id) => {
+                    sources.remove(&id);
+                }
+            }
+        }
+        if sources.is_empty() {
+            return Err(Error::Config("every game version source was removed"));
+        }
+        let kept = sources
+            .iter()
+            .any(|source| std::ptr::addr_eq(Arc::as_ptr(source), Arc::as_ptr(&mojang)));
+        Ok((sources, kept.then_some(mojang)))
+    }
+
     /// Applies the trait source changes to the built-in list.
-    pub(crate) fn trait_sources(&mut self) -> Result<coblet_mojang::TraitSources, Error> {
+    fn trait_sources(&mut self) -> Result<coblet_mojang::TraitSources, Error> {
         if let Some(error) = self.traits_error.take() {
             return Err(error.into());
         }
@@ -332,26 +381,62 @@ impl<State> CobletBuilder<State> {
     }
 
     /// Uses this Mojang version source, for example one with another
-    /// manifest address.
+    /// manifest address. It keeps its place first in the list unless
+    /// [`without_version_source`](Self::without_version_source) removes it.
     #[cfg(feature = "mojang")]
     pub fn mojang_versions(mut self, source: coblet_mojang::MojangVersions) -> Self {
         self.versions.mojang = Some(source);
         self
     }
 
-    /// Adds a game version source after the Mojang manifest, such as one
-    /// listing experimental versions.
+    /// Adds a game version source after the Mojang manifest and the
+    /// sources already added, such as one listing experimental versions.
     ///
     /// When two sources list the same version ID, the earlier one wins.
     /// Launching a version fetches its version file from the address the
     /// source gave, checked against the source's SHA-1.
+    /// [`build`](CobletBuilder::build) fails when the ID is taken; use
+    /// [`replace_version_source`](Self::replace_version_source) to swap one
+    /// on purpose.
     #[cfg(feature = "mojang")]
     pub fn version_source(
         mut self,
         source: Arc<dyn coblet_catalog::CatalogSource<coblet_mojang::GameVersion>>,
     ) -> Self {
-        self.versions.sources.push(source);
+        self.versions.sources.push(Change::Register(source));
         self
+    }
+
+    /// Puts a game version source in place of the one with the same ID,
+    /// keeping its place in the order, such as `coblet:mojang`; appends it
+    /// when the ID is free.
+    #[cfg(feature = "mojang")]
+    pub fn replace_version_source(
+        mut self,
+        source: Arc<dyn coblet_catalog::CatalogSource<coblet_mojang::GameVersion>>,
+    ) -> Self {
+        self.versions.sources.push(Change::Replace(source));
+        self
+    }
+
+    /// Removes a game version source, such as `coblet:mojang` for a
+    /// launcher that lists only its own versions; an unknown ID is ignored.
+    /// [`build`](CobletBuilder::build) fails when no source is left.
+    #[cfg(feature = "mojang")]
+    pub fn without_version_source(mut self, id: coblet_types::ExtensionId) -> Self {
+        self.versions.sources.push(Change::Remove(id));
+        self
+    }
+
+    /// Adds a game version source that reads a manifest in the format of
+    /// Mojang's `version_manifest_v2.json` from `url`, under the ID `id`.
+    #[cfg(feature = "mojang")]
+    pub fn version_manifest(
+        self,
+        id: coblet_types::ExtensionId,
+        url: coblet_runtime::HttpUrl,
+    ) -> Self {
+        self.version_source(Arc::new(coblet_mojang::MojangVersions::other(id, url)))
     }
 
     /// Adds a version trait source after the built-in table and the
@@ -678,9 +763,15 @@ impl<State> CobletBuilder<State> {
         }
     }
 
-    /// Adds a version source for a Mod Loader, asked after the loader itself,
-    /// such as a mirror listing or Prism's metadata server.
-    /// [`build`](CobletBuilder::build) fails when no loader has the ID.
+    /// Adds a version source for a Mod Loader, asked after the loader itself
+    /// and the sources already added, such as a mirror listing or Prism's
+    /// metadata server. For the same version string the earlier entry wins,
+    /// so the loader's own entry always does.
+    ///
+    /// [`build`](CobletBuilder::build) fails when no loader has the ID, or
+    /// the loader already has a source with the source's ID; use
+    /// [`replace_loader_version_source`](Self::replace_loader_version_source)
+    /// to swap one on purpose.
     #[cfg(feature = "loaders")]
     pub fn loader_version_source(
         mut self,
@@ -689,8 +780,75 @@ impl<State> CobletBuilder<State> {
     ) -> Self {
         self.loaders
             .changes
-            .push(LoaderChange::Source(loader, source));
+            .push(LoaderChange::Source(loader, Change::Register(source)));
         self
+    }
+
+    /// Puts a version source of a Mod Loader in place of the one with the
+    /// same ID, keeping its place in the order; appends it when the ID is free.
+    #[cfg(feature = "loaders")]
+    pub fn replace_loader_version_source(
+        mut self,
+        loader: coblet_types::ExtensionId,
+        source: Arc<dyn coblet_catalog::CatalogSource<coblet_loader::LoaderVersion>>,
+    ) -> Self {
+        self.loaders
+            .changes
+            .push(LoaderChange::Source(loader, Change::Replace(source)));
+        self
+    }
+
+    /// Removes a version source of a Mod Loader; an unknown ID is ignored.
+    #[cfg(feature = "loaders")]
+    pub fn without_loader_version_source(
+        mut self,
+        loader: coblet_types::ExtensionId,
+        id: coblet_types::ExtensionId,
+    ) -> Self {
+        self.loaders
+            .changes
+            .push(LoaderChange::Source(loader, Change::Remove(id)));
+        self
+    }
+
+    /// Adds a version source for a Mod Loader described in TOML, in the
+    /// format of [`DataLoaderVersions`](coblet_loader::DataLoaderVersions).
+    /// A malformed definition makes [`build`](CobletBuilder::build) fail.
+    #[cfg(feature = "loaders")]
+    pub fn loader_version_source_toml(
+        self,
+        loader: coblet_types::ExtensionId,
+        definition: &str,
+    ) -> Self {
+        let parsed = coblet_loader::DataLoaderVersions::from_toml(definition);
+        self.data_loader_version_source(loader, parsed)
+    }
+
+    /// Adds a version source for a Mod Loader described in JSON, with the
+    /// keys of [`loader_version_source_toml`](Self::loader_version_source_toml).
+    #[cfg(feature = "loaders")]
+    pub fn loader_version_source_json(
+        self,
+        loader: coblet_types::ExtensionId,
+        definition: &str,
+    ) -> Self {
+        let parsed = coblet_loader::DataLoaderVersions::from_json(definition);
+        self.data_loader_version_source(loader, parsed)
+    }
+
+    #[cfg(feature = "loaders")]
+    fn data_loader_version_source(
+        mut self,
+        loader: coblet_types::ExtensionId,
+        parsed: Result<coblet_loader::DataLoaderVersions, coblet_loader::LoaderError>,
+    ) -> Self {
+        match parsed {
+            Ok(source) => self.loader_version_source(loader, Arc::new(source)),
+            Err(error) => {
+                self.loaders.error.get_or_insert(error);
+                self
+            }
+        }
     }
 
     /// Adds a Java provider written as code, asked after the providers
@@ -865,11 +1023,19 @@ impl CobletBuilder<WithRoot> {
                 LoaderChange::Source(id, source) => sources.push((id, source)),
             }
         }
-        for (id, source) in sources {
+        for (id, change) in sources {
             if registry.get(&id).is_none() {
                 return Err(coblet_loader::LoaderError::UnknownLoader(id).into());
             }
-            registry.add_version_source(id, source);
+            match change {
+                Change::Register(source) => registry.add_version_source(id, source)?,
+                Change::Replace(source) => {
+                    registry.replace_version_source(id, source)?;
+                }
+                Change::Remove(source) => {
+                    registry.remove_version_source(&id, &source);
+                }
+            }
         }
         Ok(registry)
     }
@@ -971,11 +1137,10 @@ impl CobletBuilder<WithRoot> {
     /// it returns [`Error::Registry`] when two Java providers or two Java
     /// locators share an ID and [`Error::Java`] for a malformed provider
     /// definition. With the `mojang` feature it returns
-    /// [`Error::Registry`] when two version trait sources share an ID and
-    /// [`Error::Traits`] for a malformed trait table.
+    /// [`Error::Registry`] when two version trait sources or two game
+    /// version sources share an ID, [`Error::Traits`] for a malformed trait
+    /// table and [`Error::Config`] when every game version source was removed.
     pub fn build(mut self) -> Result<Coblet, Error> {
-        #[cfg(feature = "mojang")]
-        let traits = self.versions.trait_sources()?;
         #[cfg(feature = "loaders")]
         let loaders = self.loader_registry()?;
         #[cfg(feature = "launch")]
@@ -1041,29 +1206,12 @@ impl CobletBuilder<WithRoot> {
             coblet_player::Player::new(Arc::clone(&transport)),
             data_root.join("skins"),
         );
+        #[cfg(feature = "mojang")]
+        let versions = self.versions.catalog(meta.clone(), events.clone())?;
         Ok(Coblet::from_inner(Inner {
             accounts,
             #[cfg(feature = "auth-msa")]
             skins,
-            #[cfg(feature = "mojang")]
-            versions: crate::versions::version_catalog(
-                meta.clone(),
-                events.clone(),
-                std::mem::take(&mut self.versions),
-                traits,
-            ),
-            #[cfg(feature = "launch")]
-            launcher,
-            #[cfg(feature = "launch")]
-            profiles,
-            #[cfg(feature = "loaders")]
-            loaders,
-            #[cfg(feature = "loaders")]
-            loader_catalogs: std::sync::Mutex::default(),
-            #[cfg(feature = "java")]
-            java,
-            #[cfg(feature = "java")]
-            java_locators,
             data_root,
             transport,
             storage,
@@ -1072,6 +1220,20 @@ impl CobletBuilder<WithRoot> {
             events,
             meta,
             downloader,
+            #[cfg(feature = "mojang")]
+            versions,
+            #[cfg(feature = "launch")]
+            launcher,
+            #[cfg(feature = "launch")]
+            profiles,
+            #[cfg(feature = "loaders")]
+            loaders,
+            #[cfg(feature = "java")]
+            java,
+            #[cfg(feature = "java")]
+            java_locators,
+            #[cfg(feature = "loaders")]
+            loader_catalogs: std::sync::Mutex::default(),
         }))
     }
 }

@@ -3,7 +3,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use coblet_catalog::{
-    Catalog, CatalogContext, CatalogError, CatalogPage, CatalogQuery, CatalogSource, MetaCache,
+    Catalog, CatalogContext, CatalogError, CatalogPage, CatalogQuery, CatalogSource,
+    CatalogSources, MetaCache,
 };
 use coblet_platform::ComponentRef;
 use coblet_runtime::{BoxFuture, Extension, Registry, RegistryError};
@@ -57,7 +58,7 @@ use crate::{InstallRecipe, LoaderContext, LoaderError, LoaderVersion, ModLoader}
 #[derive(Clone, Default)]
 pub struct LoaderRegistry {
     loaders: Registry<dyn ModLoader>,
-    sources: BTreeMap<ExtensionId, Vec<Arc<dyn CatalogSource<LoaderVersion>>>>,
+    sources: BTreeMap<ExtensionId, CatalogSources<LoaderVersion>>,
 }
 
 /// A Mod Loader found in a component stack.
@@ -120,23 +121,60 @@ impl LoaderRegistry {
         self.loaders.is_empty()
     }
 
-    /// Adds a version source for a Mod Loader, asked after the loader itself;
-    /// for items with the same version string the loader's own entry wins.
+    /// Adds a version source for a Mod Loader, asked after the loader itself
+    /// and the sources already added; for items with the same version
+    /// string the earlier entry wins, so the loader's own entry always does.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError::Duplicate`] when the loader already has a
+    /// source with this ID, or the source uses the loader's own ID.
     pub fn add_version_source(
         &mut self,
         loader: ExtensionId,
         source: Arc<dyn CatalogSource<LoaderVersion>>,
-    ) {
-        self.sources.entry(loader).or_default().push(source);
+    ) -> Result<(), RegistryError> {
+        if source.id() == &loader {
+            return Err(RegistryError::Duplicate(loader));
+        }
+        self.sources.entry(loader).or_default().register(source)
     }
 
-    /// Returns the extra version sources of a Mod Loader.
-    #[must_use]
-    pub fn version_sources(
-        &self,
+    /// Puts a version source of a Mod Loader in place of the one with the
+    /// same ID, keeping its place, or appends it; returns the source it
+    /// replaced.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError::Duplicate`] when the source uses the
+    /// loader's own ID.
+    pub fn replace_version_source(
+        &mut self,
+        loader: ExtensionId,
+        source: Arc<dyn CatalogSource<LoaderVersion>>,
+    ) -> Result<Option<Arc<dyn CatalogSource<LoaderVersion>>>, RegistryError> {
+        if source.id() == &loader {
+            return Err(RegistryError::Duplicate(loader));
+        }
+        Ok(self.sources.entry(loader).or_default().replace(source))
+    }
+
+    /// Removes and returns a version source of a Mod Loader.
+    pub fn remove_version_source(
+        &mut self,
         loader: &ExtensionId,
-    ) -> &[Arc<dyn CatalogSource<LoaderVersion>>] {
-        self.sources.get(loader).map_or(&[], Vec::as_slice)
+        id: &ExtensionId,
+    ) -> Option<Arc<dyn CatalogSource<LoaderVersion>>> {
+        self.sources.get_mut(loader)?.remove(id)
+    }
+
+    /// Returns the extra version sources of a Mod Loader, in the order they
+    /// are asked; `None` when it has none.
+    #[must_use]
+    pub fn version_sources(&self, loader: &ExtensionId) -> Option<&CatalogSources<LoaderVersion>> {
+        self.sources
+            .get(loader)
+            .filter(|sources| !sources.is_empty())
     }
 
     /// Returns the Mod Loader whose identifying component has this UID.
@@ -179,13 +217,13 @@ impl LoaderRegistry {
         meta: MetaCache,
     ) -> Result<Catalog<LoaderVersion>, LoaderError> {
         let loader = self.loader(id)?;
-        let mut catalog = Catalog::new(meta).with_source(Arc::new(LoaderSource {
+        let catalog = Catalog::new(meta).with_source(Arc::new(LoaderSource {
             loader: Arc::clone(loader),
         }));
-        for source in self.version_sources(id) {
-            catalog = catalog.with_source(Arc::clone(source));
-        }
-        Ok(catalog)
+        Ok(match self.version_sources(id) {
+            Some(sources) => catalog.with_sources(sources),
+            None => catalog,
+        })
     }
 
     /// Asks a Mod Loader what installing a version adds, and checks that the
@@ -396,6 +434,40 @@ mod tests {
         assert!(dir.path().join("loaders/acme/loader/1.20.1.json").is_file());
         assert_eq!(served.asked(), ["https://mirror.example/1.20.1.json"]);
 
+        assert!(
+            versions
+                .iter()
+                .all(|version| version.source.as_ref() == Some(&id))
+        );
+
+        let extra = ExtensionId::new("acme:extra").unwrap();
+        loaders
+            .add_version_source(id.clone(), Arc::new(Extra(extra.clone())))
+            .unwrap();
+        let merged = loaders
+            .catalog(&id, meta.clone())
+            .unwrap()
+            .list(&Filter::new().compatible_with(game.clone()))
+            .await
+            .unwrap();
+        let sources: Vec<(&str, &str)> = merged
+            .iter()
+            .map(|version| {
+                (
+                    version.id.as_str(),
+                    version.source.as_ref().unwrap().as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            sources,
+            [
+                ("2.0", "acme:loader"),
+                ("1.0", "acme:loader"),
+                ("0.9", "acme:extra")
+            ]
+        );
+
         let unlisted = catalog.list(&Filter::new()).await.unwrap_err();
         assert!(
             unlisted.to_string().contains("per game version"),
@@ -461,10 +533,33 @@ mod tests {
         assert_eq!(found[0].version, "1.0");
 
         let id = ExtensionId::new("acme:loader").unwrap();
-        loaders.add_version_source(id.clone(), Arc::new(Extra(id.clone())));
-        assert_eq!(loaders.version_sources(&id).len(), 1);
+        // A source cannot pose as the loader itself, nor share an ID.
+        assert!(
+            loaders
+                .add_version_source(id.clone(), Arc::new(Extra(id.clone())))
+                .is_err()
+        );
+        let extra = ExtensionId::new("acme:extra").unwrap();
+        loaders
+            .add_version_source(id.clone(), Arc::new(Extra(extra.clone())))
+            .unwrap();
+        assert!(
+            loaders
+                .add_version_source(id.clone(), Arc::new(Extra(extra.clone())))
+                .is_err()
+        );
+        let swapped = loaders
+            .replace_version_source(id.clone(), Arc::new(Extra(extra.clone())))
+            .unwrap();
+        assert!(swapped.is_some());
+        assert_eq!(loaders.version_sources(&id).unwrap().len(), 1);
+        assert!(loaders.remove_version_source(&id, &extra).is_some());
+        assert!(loaders.version_sources(&id).is_none());
+        loaders
+            .add_version_source(id.clone(), Arc::new(Extra(extra)))
+            .unwrap();
         assert!(loaders.remove(&id).is_some());
-        assert!(loaders.version_sources(&id).is_empty());
+        assert!(loaders.version_sources(&id).is_none());
         assert!(loaders.is_empty());
     }
 }

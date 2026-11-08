@@ -6,7 +6,7 @@ use coblet_types::VersionType;
 
 use crate::{
     CachePolicy, CatalogContext, CatalogError, CatalogItem, CatalogQuery, CatalogSource,
-    CatalogStage, Filter, MetaCache,
+    CatalogSources, CatalogStage, Filter, MetaCache,
 };
 
 /// Warning code published when one of several sources fails and the others still answered.
@@ -61,6 +61,13 @@ impl<Item: CatalogItem> Catalog<Item> {
     #[must_use]
     pub fn with_source(mut self, source: Arc<dyn CatalogSource<Item>>) -> Self {
         self.sources.push(source);
+        self
+    }
+
+    /// Adds every source of `sources` after the existing ones, in order.
+    #[must_use]
+    pub fn with_sources(mut self, sources: &CatalogSources<Item>) -> Self {
+        self.sources.extend(sources.iter().cloned());
         self
     }
 

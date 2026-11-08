@@ -3,8 +3,8 @@ use coblet_catalog::{
     CatalogContext, CatalogError, CatalogItem, CatalogPage, CatalogQuery, CatalogSource,
     MetaRequest, Timestamp,
 };
-use coblet_runtime::{BoxFuture, Extension, HttpUrl, RelPath};
-use coblet_types::{ExtensionId, FileHash, GameVersionId, Sha1Digest, VersionType};
+use coblet_runtime::{BoxFuture, Extension, HttpUrl, RelPath, StreamHasher};
+use coblet_types::{ExtensionId, FileHash, GameVersionId, HashAlgorithm, Sha1Digest, VersionType};
 use serde::{Deserialize, Serialize};
 
 use crate::{AssetIndex, AssetIndexRef, RawVersionJson, VersionTraits};
@@ -319,6 +319,28 @@ impl CatalogSource<GameVersion> for MojangVersions {
     }
 }
 
+/// Fetches a document for a game version source written as code, such as
+/// its own version list, cached under
+/// `sources/<namespace>/<name>/<file>` next to the manifests of
+/// [`MojangVersions::other`].
+///
+/// The request goes through the context's metadata cache, so mirror rules,
+/// fallback to the original address and offline caching apply.
+///
+/// # Errors
+///
+/// Returns [`CatalogError`] for a malformed address or file name, and when
+/// the document is unavailable and not cached.
+pub async fn fetch_for_source(
+    cx: &CatalogContext,
+    source: &ExtensionId,
+    address: &str,
+    file: &str,
+) -> Result<Bytes, CatalogError> {
+    let path = format!("sources/{}/{}/{file}", source.namespace(), source.name());
+    cx.fetch(&MetaRequest::new(url(address)?, key(path)?)).await
+}
+
 /// Fetches the version JSON of a listed version, checked against the manifest's SHA-1.
 ///
 /// The document is cached under `mojang/versions/<sha1>.json`, so later
@@ -332,15 +354,55 @@ pub async fn fetch_version_json(
     cx: &CatalogContext,
     version: &GameVersion,
 ) -> Result<Document<RawVersionJson>, CatalogError> {
-    let request = MetaRequest::new(
-        version.url.clone(),
-        key(format!("mojang/versions/{}.json", version.sha1))?,
-    )
-    .with_hash(FileHash::Sha1(version.sha1));
-    let bytes = cx.fetch(&request).await?;
+    let bytes = cx.fetch(&version_request(version)?).await?;
     let value = RawVersionJson::from_slice(&bytes)
         .map_err(|error| CatalogError::parse(version.url.as_str(), error))?;
     Ok(Document { value, bytes })
+}
+
+/// Keeps the documents a game version source downloaded that are the
+/// version JSON of versions it listed, matched by SHA-1, where
+/// [`fetch_version_json`] looks for them, so launching those versions
+/// does not download them again.
+///
+/// A source that hashes version JSON to list it, such as one written in
+/// another language through the bindings, passes what it fetched.
+/// Returns how many documents were kept.
+///
+/// # Errors
+///
+/// Returns [`CatalogError`] when the cache cannot be written.
+pub async fn keep_version_json(
+    cx: &CatalogContext,
+    versions: &[GameVersion],
+    documents: &[Bytes],
+) -> Result<usize, CatalogError> {
+    let mut kept = 0;
+    for document in documents {
+        let mut hasher = StreamHasher::new([&HashAlgorithm::Sha1]);
+        hasher.update(document);
+        let computed = hasher.finish();
+        let Some(FileHash::Sha1(sha1)) = computed.get(&HashAlgorithm::Sha1) else {
+            continue;
+        };
+        if let Some(version) = versions.iter().find(|version| version.sha1 == *sha1)
+            && cx
+                .meta()
+                .keep(&version_request(version)?, document.clone())
+                .await?
+        {
+            kept += 1;
+        }
+    }
+    Ok(kept)
+}
+
+fn version_request(version: &GameVersion) -> Result<MetaRequest, CatalogError> {
+    Ok(MetaRequest::new(
+        version.url.clone(),
+        key(format!("mojang/versions/{}.json", version.sha1))?,
+    )
+    .with_hash(FileHash::Sha1(version.sha1)))
 }
 
 /// Fetches the asset index a version JSON refers to, checked against its SHA-1.
@@ -375,7 +437,12 @@ mod tests {
     };
     use coblet_types::{ExtensionId, VersionType};
 
-    use super::{MojangVersions, VersionManifest, fetch_asset_index, fetch_version_json};
+    use bytes::Bytes;
+
+    use super::{
+        GameVersion, MojangVersions, VersionManifest, fetch_asset_index, fetch_for_source,
+        fetch_version_json, keep_version_json,
+    };
     use crate::version::tests::fixture_bytes;
     use crate::{AssetIndex, TraitSources, TraitTable, VersionTrait};
 
@@ -508,6 +575,19 @@ mod tests {
         fetch_version_json(&cx, &entry("b1.7.3")).await.unwrap();
         assert_eq!(files.requested.lock().unwrap().len(), before);
 
+        let source = coblet_types::ExtensionId::new("acme:copy").unwrap();
+        let address = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+        let copied = fetch_for_source(&cx, &source, address, "list.json")
+            .await
+            .unwrap();
+        assert!(!copied.is_empty());
+        assert!(dir.path().join("sources/acme/copy/list.json").is_file());
+        assert!(
+            fetch_for_source(&cx, &source, address, "../escape.json")
+                .await
+                .is_err()
+        );
+
         let tampered = fetch_version_json(&cx, &entry("1.12.2")).await.unwrap_err();
         assert!(
             matches!(tampered, CatalogError::Verify { .. }),
@@ -524,6 +604,41 @@ mod tests {
         let modern = AssetIndex::from_slice(&fixture_bytes("assets/1.12.json")).unwrap();
         assert!(!modern.map_to_resources && !modern.is_virtual);
         assert!(modern.total_size() > 0);
+    }
+
+    #[tokio::test]
+    async fn keeps_version_json_a_source_already_downloaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_bytes = fixture_bytes("version_manifest_v2.json");
+        let (files, meta) = meta(
+            Files {
+                routes: vec![("version_manifest_v2.json", manifest_bytes.clone())],
+                ..Files::default()
+            },
+            &dir,
+        );
+        let cx = CatalogContext::new(meta, CachePolicy::Revalidate);
+        let manifest = MojangVersions::new().manifest(&cx).await.unwrap();
+        let latest = manifest.latest.release.clone();
+        let listed: Vec<GameVersion> = manifest
+            .versions
+            .into_iter()
+            .map(|entry| MojangVersions::entry(entry, &latest))
+            .collect();
+        let documents = [
+            Bytes::from(manifest_bytes),
+            Bytes::from(fixture_bytes("b1.7.3.json")),
+        ];
+        assert_eq!(
+            keep_version_json(&cx, &listed, &documents).await.unwrap(),
+            1
+        );
+
+        let before = files.requested.lock().unwrap().len();
+        let beta = listed.iter().find(|v| v.id.as_str() == "b1.7.3").unwrap();
+        let kept = fetch_version_json(&cx, beta).await.unwrap();
+        assert_eq!(kept.value.id.as_str(), "b1.7.3");
+        assert_eq!(files.requested.lock().unwrap().len(), before);
     }
 
     #[tokio::test]

@@ -1,18 +1,13 @@
-use std::fmt::Write as _;
-
-use coblet_catalog::Timestamp;
 use coblet_mojang::RawVersionJson;
-use coblet_platform::{Component, ComponentPatch, glob_matches};
+use coblet_platform::{Component, ComponentPatch};
 use coblet_runtime::{BoxFuture, Extension};
 use coblet_types::{ExtensionId, GameVersionId, VersionType};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::kit::{MavenMetadata, SplitRule, VersionJsonImport, metadata_url};
+use crate::kit::{SplitRule, VersionJsonImport};
+use crate::listing::{Versions, encode, fill};
 use crate::{InstallRecipe, LoaderContext, LoaderError, LoaderVersion, ModLoader};
-
-/// Channel given to versions a data loader marks as not stable.
-const UNSTABLE: &str = "beta";
 
 /// Mod Loader described by data instead of code: where its versions are
 /// listed and what a version adds to an Instance.
@@ -104,61 +99,6 @@ struct Definition {
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(tag = "format", rename_all = "kebab-case")]
-enum Versions {
-    Json(JsonListing),
-    MavenMetadata(MavenListing),
-    Static(StaticListing),
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JsonListing {
-    url: String,
-    #[serde(default)]
-    items: String,
-    id: String,
-    #[serde(default)]
-    stable: Option<String>,
-    #[serde(default)]
-    recommended: Option<String>,
-    #[serde(default)]
-    game: Option<String>,
-    #[serde(default)]
-    released: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MavenListing {
-    repository: String,
-    group: String,
-    artifact: String,
-    #[serde(default)]
-    pattern: Option<String>,
-    #[serde(default)]
-    unstable: Vec<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StaticListing {
-    list: Vec<StaticVersion>,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StaticVersion {
-    id: String,
-    #[serde(default)]
-    game: Option<String>,
-    #[serde(default, rename = "type")]
-    version_type: Option<String>,
-    #[serde(default)]
-    recommended: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "format", rename_all = "kebab-case", deny_unknown_fields)]
 enum Profile {
     VersionJson {
@@ -177,25 +117,6 @@ enum Profile {
     },
 }
 
-/// Percent-encodes everything but unreserved characters, for addresses and cache keys.
-fn encode(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            out.push(char::from(byte));
-        } else {
-            let _ = write!(out, "%{byte:02X}");
-        }
-    }
-    out
-}
-
-fn fill(template: &str, game: &str, version: &str) -> String {
-    template
-        .replace("{game}", game)
-        .replace("{version}", version)
-}
-
 fn fill_value(value: &mut Value, game: &str, version: &str) {
     match value {
         Value::String(text) => *text = fill(text, game, version),
@@ -206,112 +127,6 @@ fn fill_value(value: &mut Value, game: &str, version: &str) {
             .values_mut()
             .for_each(|item| fill_value(item, game, version)),
         _ => {}
-    }
-}
-
-fn unstable(entry: LoaderVersion) -> LoaderVersion {
-    entry.with_type(VersionType::Other(UNSTABLE.to_owned()))
-}
-
-impl JsonListing {
-    async fn versions(
-        &self,
-        cx: &LoaderContext<'_>,
-        game: &GameVersionId,
-    ) -> Result<Vec<LoaderVersion>, LoaderError> {
-        let game = game.as_str();
-        let address = fill(&self.url, &encode(game), "");
-        let document: Value = cx
-            .fetch_json(&address, &format!("versions/{}.json", encode(game)))
-            .await?;
-        let invalid =
-            |message: String| LoaderError::invalid(cx.loader(), format!("{address}: {message}"));
-        let list = document
-            .pointer(&self.items)
-            .and_then(Value::as_array)
-            .ok_or_else(|| invalid(format!("no array at `{}`", self.items)))?;
-        let mut versions = Vec::new();
-        for item in list {
-            let text = |pointer: &Option<String>| {
-                pointer
-                    .as_deref()
-                    .and_then(|pointer| item.pointer(pointer))
-                    .and_then(Value::as_str)
-            };
-            let flag = |pointer: &Option<String>| {
-                pointer
-                    .as_deref()
-                    .and_then(|pointer| item.pointer(pointer))
-                    .and_then(Value::as_bool)
-            };
-            if self.game.is_some() && text(&self.game) != Some(game) {
-                continue;
-            }
-            let id = item
-                .pointer(&self.id)
-                .and_then(Value::as_str)
-                .ok_or_else(|| invalid(format!("an item has no `{}`", self.id)))?;
-            let mut entry = LoaderVersion::new(id);
-            if flag(&self.stable) == Some(false) {
-                entry = unstable(entry);
-            }
-            entry.recommended = flag(&self.recommended) == Some(true);
-            entry.released = text(&self.released).and_then(|time| time.parse::<Timestamp>().ok());
-            versions.push(entry);
-        }
-        Ok(versions)
-    }
-}
-
-impl MavenListing {
-    async fn versions(
-        &self,
-        cx: &LoaderContext<'_>,
-        game: &GameVersionId,
-    ) -> Result<Vec<LoaderVersion>, LoaderError> {
-        let address = metadata_url(&self.repository, &self.group, &self.artifact);
-        let body = cx.fetch(&address, "maven-metadata.xml").await?;
-        let metadata = MavenMetadata::parse(&String::from_utf8_lossy(&body))
-            .map_err(|error| LoaderError::invalid(cx.loader(), format!("{address}: {error}")))?;
-        let pattern = self
-            .pattern
-            .as_deref()
-            .map(|pattern| fill(pattern, game.as_str(), ""));
-        Ok(metadata
-            .versions
-            .iter()
-            .rev()
-            .filter(|version| {
-                pattern
-                    .as_deref()
-                    .is_none_or(|pattern| glob_matches(pattern, version))
-            })
-            .map(|version| {
-                let entry = LoaderVersion::new(version.as_str());
-                if self.unstable.iter().any(|glob| glob_matches(glob, version)) {
-                    unstable(entry)
-                } else {
-                    entry
-                }
-            })
-            .collect())
-    }
-}
-
-impl StaticListing {
-    fn versions(&self, game: &GameVersionId) -> Vec<LoaderVersion> {
-        self.list
-            .iter()
-            .filter(|entry| entry.game.as_deref().is_none_or(|own| own == game.as_str()))
-            .map(|entry| LoaderVersion {
-                recommended: entry.recommended,
-                version_type: entry
-                    .version_type
-                    .as_deref()
-                    .map_or(VersionType::Release, VersionType::from),
-                ..LoaderVersion::new(entry.id.as_str())
-            })
-            .collect()
     }
 }
 
@@ -373,17 +188,7 @@ impl DataLoader {
         cx: &LoaderContext<'_>,
         game: &GameVersionId,
     ) -> Result<Vec<LoaderVersion>, LoaderError> {
-        let (mut versions, flagged) = match &self.definition.versions {
-            Versions::Json(listing) => (
-                listing.versions(cx, game).await?,
-                listing.recommended.is_some(),
-            ),
-            Versions::MavenMetadata(listing) => (listing.versions(cx, game).await?, false),
-            Versions::Static(listing) => (
-                listing.versions(game),
-                listing.list.iter().any(|entry| entry.recommended),
-            ),
-        };
+        let (mut versions, flagged) = self.definition.versions.list(cx, game).await?;
         if !flagged
             && let Some(first) = versions
                 .iter_mut()
@@ -494,7 +299,8 @@ mod tests {
 
     use coblet_platform::Component;
 
-    use super::{DataLoader, encode};
+    use super::DataLoader;
+    use crate::listing::encode;
     use crate::mock::Served;
     use crate::{LoaderContext, LoaderError, LoaderVersion, ModLoader};
 

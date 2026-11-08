@@ -403,6 +403,27 @@ impl MetaCache {
         })
     }
 
+    /// Stores a document obtained another way under the request's key, so
+    /// a later [`fetch`](Self::fetch) of that request finds it.
+    ///
+    /// When the request expects a hash and `body` does not match it,
+    /// nothing is stored and `false` is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError`] when the cache cannot be written.
+    pub async fn keep(&self, request: &MetaRequest, body: Bytes) -> Result<bool, CatalogError> {
+        if let Some(expect) = &request.expect
+            && check(&body, expect).is_err()
+        {
+            return Ok(false);
+        }
+        let path = self.path_of(&request.key);
+        self.store(&request.key, &path, body, &Validators::default())
+            .await?;
+        Ok(true)
+    }
+
     /// Requests the document from one address, repeating transient failures.
     async fn attempt(
         &self,
@@ -556,6 +577,7 @@ fn unverified_warning(url: &HttpUrl, expected: &FileHash, actual: &FileHash) -> 
 mod tests {
     use std::sync::Arc;
 
+    use bytes::Bytes;
     use coblet_runtime::{HttpUrl, RelPath, TokioStorage};
     use coblet_types::FileHash;
 
@@ -696,6 +718,20 @@ mod tests {
             assert_eq!(cached.origin, Origin::Cache);
         }
         assert_eq!(transport.count(), 2);
+    }
+
+    #[tokio::test]
+    async fn keeps_documents_obtained_elsewhere_that_match_the_hash() {
+        let (_dir, transport, cache, request) = setup(Vec::new());
+        let request = request.with_hash(FileHash::new("sha1", ABC_SHA1).unwrap());
+        assert!(!cache.keep(&request, Bytes::from("abd")).await.unwrap());
+        assert!(cache.keep(&request, Bytes::from("abc")).await.unwrap());
+        let cached = cache.fetch(&request, CachePolicy::Refresh).await.unwrap();
+        assert_eq!(
+            (cached.origin, &cached.body[..]),
+            (Origin::Cache, &b"abc"[..])
+        );
+        assert_eq!(transport.count(), 0);
     }
 
     #[tokio::test]

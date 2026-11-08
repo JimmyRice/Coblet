@@ -13,10 +13,15 @@
 //! and `coblet_login_*`; a secret store written in C is a callback table
 //! (`CobletSecretStore`). Mirrors are prefix rules
 //! (`coblet_builder_add_mirror`) or callback tables (`CobletUrlRewriter`),
-//! and `coblet_builder_add_version_manifest` adds game version sources.
-//! Mod Loaders are callback tables (`CobletModLoader`) that fetch through
-//! a `CobletLoaderCtx` handle, or TOML and JSON definitions
-//! (`coblet_builder_add_loader_toml`); `coblet_loader_*` lists their
+//! and game versions come from Mojang's manifest, other manifests
+//! (`coblet_builder_add_version_manifest`) and callback tables
+//! (`CobletVersionSource`, `coblet_builder_add_version_source`) that fetch
+//! through a `CobletSourceCtx` handle; `coblet_builder_remove_version_source`
+//! drops one, Mojang's included. Mod Loaders are callback tables
+//! (`CobletModLoader`) that fetch through a `CobletLoaderCtx` handle, or
+//! TOML and JSON definitions (`coblet_builder_add_loader_toml`), and get
+//! versions from more places with `coblet_builder_add_loader_version_source`
+//! and its TOML and JSON forms; `coblet_loader_*` lists their
 //! versions and recipes, `coblet_plan_launch_json` resolves a version with
 //! one and `coblet_launch_loader` starts it. Java providers and locators
 //! are callback tables (`CobletJavaProvider`, `CobletJavaLocator`) that
@@ -48,6 +53,7 @@ mod secrets;
 mod sources;
 mod traits;
 mod types;
+mod version_sources;
 
 pub use accounts::{
     CobletSkinModel, coblet_account_add_offline, coblet_account_assign, coblet_account_refresh,
@@ -131,4 +137,12 @@ pub use traits::{
 };
 pub use types::{
     COBLET_ABI_VERSION, CobletBytes, CobletError, CobletErrorKind, CobletStatus, CobletString,
+};
+pub use version_sources::{
+    COBLET_SOURCE_REPLACE, CobletSourceCtx, CobletVersionSource,
+    coblet_builder_add_loader_version_source, coblet_builder_add_loader_version_source_json,
+    coblet_builder_add_loader_version_source_toml, coblet_builder_add_version_source,
+    coblet_builder_remove_loader_version_source, coblet_builder_remove_version_source,
+    coblet_loader_version_sources_json, coblet_source_ctx_fail, coblet_source_ctx_fetch,
+    coblet_source_ctx_set_result, coblet_version_sources_json,
 };

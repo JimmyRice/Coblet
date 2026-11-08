@@ -7,11 +7,14 @@ use coblet::types::{ExtensionId, Platform};
 
 use crate::customize::ForeignCustomizer;
 use crate::java::{ForeignJavaLocator, ForeignJavaProvider, extension_id};
-use crate::loaders::ForeignLoader;
+use crate::loaders::{ForeignLoader, loader_id};
 use crate::profile::ForeignProfile;
 use crate::secrets::{ForeignSecrets, encryption_key};
 use crate::sources::ForeignRewriter;
 use crate::traits::ForeignTraitSource;
+use crate::version_sources::{
+    ForeignGameVersions, ForeignLoaderVersions, GameVersionSource, LoaderVersionSource,
+};
 use crate::{
     ArtifactKind, Coblet, CobletError, ErrorKind, JavaLocator, JavaProvider, LaunchCustomizer,
     ModLoader, PlatformInfo, PlatformProfile, SecretStore, TraitSource, UrlRewriter,
@@ -35,10 +38,27 @@ struct Settings {
     secrets: Secrets,
     rewriters: Vec<Arc<dyn coblet::runtime::UrlRewriter>>,
     mirror_fallback: bool,
-    version_sources: Vec<coblet::mojang::MojangVersions>,
+    version_sources: Vec<VersionChange>,
     loaders: Vec<(Arc<dyn coblet::loader::ModLoader>, bool)>,
+    loader_sources: Vec<LoaderSourceChange>,
     java: Vec<JavaChange>,
     traits: Vec<TraitChange>,
+}
+
+type GameSource = Arc<dyn coblet::catalog::CatalogSource<coblet::mojang::GameVersion>>;
+type LoaderSource = Arc<dyn coblet::catalog::CatalogSource<coblet::loader::LoaderVersion>>;
+
+/// One game version source change, applied in order on top of `coblet:mojang`.
+enum VersionChange {
+    Add(GameSource),
+    Replace(GameSource),
+    Remove(ExtensionId),
+}
+
+/// One Mod Loader version source change: the loader, then the change.
+enum LoaderSourceChange {
+    Add(ExtensionId, LoaderSource, bool),
+    Remove(ExtensionId, ExtensionId),
 }
 
 /// One version trait source change, applied in order on top of the built-in list.
@@ -129,6 +149,36 @@ impl CobletBuilder {
         ))
     }
 
+    fn version_change(&self, change: VersionChange) -> Result<(), CobletError> {
+        self.with(|settings| {
+            settings.version_sources.push(change);
+            Ok(())
+        })
+    }
+
+    fn loader_source(
+        &self,
+        loader: &str,
+        source: LoaderSource,
+        replace: bool,
+    ) -> Result<(), CobletError> {
+        let loader = loader_id(loader)?;
+        self.with(|settings| {
+            settings
+                .loader_sources
+                .push(LoaderSourceChange::Add(loader, source, replace));
+            Ok(())
+        })
+    }
+
+    fn data_versions(
+        parsed: Result<coblet::loader::DataLoaderVersions, coblet::loader::LoaderError>,
+    ) -> Result<LoaderSource, CobletError> {
+        Ok(Arc::new(
+            parsed.map_err(|error| invalid(error.to_string()))?,
+        ))
+    }
+
     fn java_change(&self, change: JavaChange) -> Result<(), CobletError> {
         self.with(|settings| {
             settings.java.push(change);
@@ -198,6 +248,7 @@ impl CobletBuilder {
                 mirror_fallback: true,
                 version_sources: Vec::new(),
                 loaders: Vec::new(),
+                loader_sources: Vec::new(),
                 java: Vec::new(),
                 traits: Vec::new(),
             })),
@@ -419,29 +470,178 @@ impl CobletBuilder {
 
     /// Adds a game version source that reads a manifest in the format of
     /// Mojang's `version_manifest_v2.json` from `url`, such as a list of
-    /// experimental versions. It comes after the official manifest; when
-    /// both list an ID, the official entry wins.
+    /// experimental versions. It comes after the official manifest and the
+    /// sources added before it; when two list an ID, the earlier one wins.
     ///
     /// # Errors
     ///
-    /// Fails for a malformed or already used `id`, an address that is not
-    /// HTTP or HTTPS, and after `build`.
+    /// Fails for a malformed `id`, an address that is not HTTP or HTTPS,
+    /// and after `build`; `build` fails when the ID is already used.
     pub fn add_version_manifest(&self, id: &str, url: String) -> Result<(), CobletError> {
         let id = ExtensionId::new(id).map_err(|error| invalid(format!("source id: {error}")))?;
         let url = coblet::runtime::HttpUrl::new(url)
             .map_err(|error| invalid(format!("manifest address: {error}")))?;
+        let source = Arc::new(coblet::mojang::MojangVersions::other(id, url));
+        self.version_change(VersionChange::Add(source))
+    }
+
+    /// Adds a game version source written in this language after the
+    /// Mojang manifest and the sources added before it.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`; `build` fails when the
+    /// ID is already used.
+    pub fn add_version_source(
+        &self,
+        source: Arc<dyn GameVersionSource>,
+    ) -> Result<(), CobletError> {
+        let source = Arc::new(ForeignGameVersions::new(source)?);
+        self.version_change(VersionChange::Add(source))
+    }
+
+    /// Puts a game version source written in this language in place of the
+    /// one with the same ID, such as `coblet:mojang`, keeping its place;
+    /// appends it when the ID is free.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`.
+    pub fn replace_version_source(
+        &self,
+        source: Arc<dyn GameVersionSource>,
+    ) -> Result<(), CobletError> {
+        let source = Arc::new(ForeignGameVersions::new(source)?);
+        self.version_change(VersionChange::Replace(source))
+    }
+
+    /// Removes a game version source, such as `coblet:mojang` for a
+    /// launcher that lists only its own versions; an unknown ID is ignored.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`; `build` fails when no
+    /// source is left.
+    pub fn remove_version_source(&self, id: &str) -> Result<(), CobletError> {
+        let id = extension_id("version source", id)?;
+        self.version_change(VersionChange::Remove(id))
+    }
+
+    /// Adds a version source written in this language to the Mod Loader
+    /// `loader`, asked after the loader itself and the sources added
+    /// before it.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`; `build` fails when no
+    /// loader has the ID or the loader already has a source with the ID.
+    pub fn add_loader_version_source(
+        &self,
+        loader: &str,
+        source: Arc<dyn LoaderVersionSource>,
+    ) -> Result<(), CobletError> {
+        let source = Arc::new(ForeignLoaderVersions::new(source)?);
+        self.loader_source(loader, source, false)
+    }
+
+    /// Puts a version source written in this language in place of the one
+    /// of `loader` with the same ID, keeping its place; appends it when the
+    /// ID is free.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`; `build` fails when no
+    /// loader has the ID.
+    pub fn replace_loader_version_source(
+        &self,
+        loader: &str,
+        source: Arc<dyn LoaderVersionSource>,
+    ) -> Result<(), CobletError> {
+        let source = Arc::new(ForeignLoaderVersions::new(source)?);
+        self.loader_source(loader, source, true)
+    }
+
+    /// Adds a version source described in TOML to the Mod Loader `loader`:
+    /// an `id`, a `name` and a `[versions]` table in the format of data
+    /// loaders, such as a mirror's listing.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed definition or ID and after `build`; `build`
+    /// fails like [`add_loader_version_source`](Self::add_loader_version_source).
+    pub fn add_loader_version_source_toml(
+        &self,
+        loader: &str,
+        definition: &str,
+    ) -> Result<(), CobletError> {
+        let source =
+            Self::data_versions(coblet::loader::DataLoaderVersions::from_toml(definition))?;
+        self.loader_source(loader, source, false)
+    }
+
+    /// Adds a version source described in JSON to the Mod Loader `loader`,
+    /// with the keys of the TOML form.
+    ///
+    /// # Errors
+    ///
+    /// Fails like [`add_loader_version_source_toml`](Self::add_loader_version_source_toml).
+    pub fn add_loader_version_source_json(
+        &self,
+        loader: &str,
+        definition: &str,
+    ) -> Result<(), CobletError> {
+        let source =
+            Self::data_versions(coblet::loader::DataLoaderVersions::from_json(definition))?;
+        self.loader_source(loader, source, false)
+    }
+
+    /// Puts a version source described in TOML in place of the one of
+    /// `loader` with the same ID, keeping its place; appends it when the ID
+    /// is free.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed definition or ID and after `build`.
+    pub fn replace_loader_version_source_toml(
+        &self,
+        loader: &str,
+        definition: &str,
+    ) -> Result<(), CobletError> {
+        let source =
+            Self::data_versions(coblet::loader::DataLoaderVersions::from_toml(definition))?;
+        self.loader_source(loader, source, true)
+    }
+
+    /// Puts a version source described in JSON in place of the one of
+    /// `loader` with the same ID, keeping its place; appends it when the ID
+    /// is free.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed definition or ID and after `build`.
+    pub fn replace_loader_version_source_json(
+        &self,
+        loader: &str,
+        definition: &str,
+    ) -> Result<(), CobletError> {
+        let source =
+            Self::data_versions(coblet::loader::DataLoaderVersions::from_json(definition))?;
+        self.loader_source(loader, source, true)
+    }
+
+    /// Removes a version source of the Mod Loader `loader`; an unknown ID
+    /// is ignored.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`.
+    pub fn remove_loader_version_source(&self, loader: &str, id: &str) -> Result<(), CobletError> {
+        let loader = loader_id(loader)?;
+        let id = extension_id("version source", id)?;
         self.with(|settings| {
-            let taken = id.as_str() == "coblet:mojang"
-                || settings
-                    .version_sources
-                    .iter()
-                    .any(|source| source.id() == &id);
-            if taken {
-                return Err(invalid(format!("version source `{id}` is already added")));
-            }
             settings
-                .version_sources
-                .push(coblet::mojang::MojangVersions::other(id, url));
+                .loader_sources
+                .push(LoaderSourceChange::Remove(loader, id));
             Ok(())
         })
     }
@@ -745,14 +945,31 @@ impl CobletBuilder {
             builder = builder.url_rewriter(rewriter);
         }
         builder = builder.mirror_fallback(settings.mirror_fallback);
-        for source in settings.version_sources {
-            builder = builder.version_source(Arc::new(source));
+        for change in settings.version_sources {
+            builder = match change {
+                VersionChange::Add(source) => builder.version_source(source),
+                VersionChange::Replace(source) => builder.replace_version_source(source),
+                VersionChange::Remove(id) => builder.without_version_source(id),
+            };
         }
         for (loader, replace) in settings.loaders {
             builder = if replace {
                 builder.replace_loader(loader)
             } else {
                 builder.loader(loader)
+            };
+        }
+        for change in settings.loader_sources {
+            builder = match change {
+                LoaderSourceChange::Add(loader, source, false) => {
+                    builder.loader_version_source(loader, source)
+                }
+                LoaderSourceChange::Add(loader, source, true) => {
+                    builder.replace_loader_version_source(loader, source)
+                }
+                LoaderSourceChange::Remove(loader, id) => {
+                    builder.without_loader_version_source(loader, id)
+                }
             };
         }
         for change in settings.java {
@@ -1022,14 +1239,24 @@ source = "system-only"
         builder
             .add_version_manifest("acme:experiments", url.clone())
             .unwrap();
-        for id in ["acme:experiments", "coblet:mojang", "no namespace"] {
-            let error = builder.add_version_manifest(id, url.clone()).unwrap_err();
-            assert_eq!(kind(&error), ErrorKind::InvalidArgument, "{id}");
-        }
+        let error = builder
+            .add_version_manifest("no namespace", url.clone())
+            .unwrap_err();
+        assert_eq!(kind(&error), ErrorKind::InvalidArgument);
         let error = builder
             .add_version_manifest("acme:other", "ftp://x".to_owned())
             .unwrap_err();
         assert_eq!(kind(&error), ErrorKind::InvalidArgument);
         builder.build().unwrap();
+
+        for id in ["acme:experiments", "coblet:mojang"] {
+            let builder = self::builder();
+            builder
+                .add_version_manifest("acme:experiments", url.clone())
+                .unwrap();
+            builder.add_version_manifest(id, url.clone()).unwrap();
+            let error = builder.build().unwrap_err();
+            assert_eq!(kind(&error), ErrorKind::InvalidArgument, "{id}");
+        }
     }
 }

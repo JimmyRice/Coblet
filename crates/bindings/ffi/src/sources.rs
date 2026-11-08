@@ -275,17 +275,6 @@ mod tests {
                 ),
                 CobletStatus::Ok
             );
-            assert_eq!(
-                coblet_builder_add_version_manifest(
-                    builder,
-                    id.as_ptr(),
-                    manifest.as_ptr(),
-                    &raw mut err
-                ),
-                CobletStatus::InvalidArgument
-            );
-            coblet_error_free(err);
-            err = std::ptr::null_mut();
 
             let mut coblet = std::ptr::null_mut();
             assert_eq!(

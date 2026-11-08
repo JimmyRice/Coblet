@@ -9,9 +9,13 @@
 //! `LaunchCustomizer` and `LaunchStep` to change single launches, and
 //! `SecretStore` to keep tokens in a system keychain, `UrlRewriter` to
 //! point requests at mirrors, `JavaProvider` and `JavaLocator` to add
-//! places Java is downloaded from and found in, and `ModLoader` to add a Mod Loader, as Rust
-//! code does with the traits of the same names. Mod Loaders can also be
-//! described as TOML or JSON data with `CobletBuilder.add_loader_toml`. Async methods run on tokio and
+//! places Java is downloaded from and found in, `ModLoader` to add a Mod
+//! Loader, and `GameVersionSource` and `LoaderVersionSource` to list game
+//! and Mod Loader versions from other places, as Rust code does with the
+//! traits of the same names. Mod Loaders can also be described as TOML or
+//! JSON data with `CobletBuilder.add_loader_toml`, and their extra version
+//! sources with `CobletBuilder.add_loader_version_source_toml`. Async
+//! methods run on tokio and
 //! appear as `async` in Swift, `suspend` in Kotlin and `asyncio` coroutines
 //! in Python. Errors are a single `CobletError` with a kind and a message.
 
@@ -32,6 +36,7 @@ mod profile;
 mod secrets;
 mod sources;
 mod traits;
+mod version_sources;
 
 pub use account::{
     AccountInfo, AccountState, CapeInfo, GameLicense, LoginInteraction, LoginPrompt, PlayerInfo,
@@ -60,4 +65,7 @@ pub use sources::{ArtifactKind, UrlRewriter};
 pub use traits::{
     TraitChangeInfo, TraitReportInfo, TraitSource, TraitSourceContext, TraitSourceInfo,
     TraitVersionInfo, builtin_version_traits_toml,
+};
+pub use version_sources::{
+    GameVersionEntry, GameVersionSource, LoaderVersionSource, SourceContext, VersionSourceInfo,
 };

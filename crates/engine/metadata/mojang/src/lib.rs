@@ -37,7 +37,7 @@ mod version;
 pub use assets::{AssetIndex, AssetObject, RESOURCES_URL};
 pub use manifest::{
     Document, GameVersion, Latest, MANIFEST_URL, ManifestEntry, MojangVersions, VersionManifest,
-    fetch_asset_index, fetch_version_json,
+    fetch_asset_index, fetch_for_source, fetch_version_json, keep_version_json,
 };
 pub use traits::{
     BUILTIN_TRAITS_TOML, FnTraitSource, LAUNCHWRAPPER_MAIN, TRAIT_SOURCE_FAILED, TraitAction,

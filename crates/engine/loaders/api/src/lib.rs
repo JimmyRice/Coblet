@@ -13,13 +13,18 @@
 //!
 //! Loaders that only read metadata can be written as data with
 //! [`DataLoader`]; [`kit`] holds building blocks for loaders written as code.
+//! A loader can also get versions from extra sources, such as a mirror's
+//! listing, asked after the loader itself: any `CatalogSource` of
+//! [`LoaderVersion`], or one written as data with [`DataLoaderVersions`].
 
 #![forbid(unsafe_code)]
 
 mod context;
 mod data;
+mod data_versions;
 mod error;
 pub mod kit;
+mod listing;
 mod loader;
 #[cfg(test)]
 mod mock;
@@ -29,6 +34,7 @@ mod version;
 
 pub use context::LoaderContext;
 pub use data::DataLoader;
+pub use data_versions::DataLoaderVersions;
 pub use error::LoaderError;
 pub use loader::ModLoader;
 pub use recipe::InstallRecipe;

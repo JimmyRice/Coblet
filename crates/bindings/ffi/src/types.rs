@@ -5,7 +5,7 @@ use coblet::platform::ProfileError;
 use coblet::player::PlayerError;
 
 /// Version of the C ABI; it grows with every incompatible change.
-pub const COBLET_ABI_VERSION: u32 = 14;
+pub const COBLET_ABI_VERSION: u32 = 15;
 
 /// Result of a call.
 #[repr(C)]
