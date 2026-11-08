@@ -1,10 +1,12 @@
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 
 use coblet::catalog::{
     CatalogContext, CatalogError, CatalogPage, CatalogQuery, CatalogSource, Timestamp,
 };
 use coblet::loader::LoaderVersion;
-use coblet::mojang::{GameVersion, VersionTrait, VersionTraits, fetch_for_source};
+use coblet::mojang::{
+    GameVersion, VersionTrait, VersionTraits, fetch_for_source, keep_version_json,
+};
 use coblet::runtime::{BoxFuture, Extension, HttpUrl};
 use coblet::types::{ExtensionId, GameVersionId, Sha1Digest, VersionType};
 
@@ -95,6 +97,9 @@ pub struct SourceContext {
     source: ExtensionId,
     fetches: Fetches,
     runtime: tokio::runtime::Handle,
+    /// Documents a game version source fetched, offered to the launch
+    /// cache once it has listed its versions.
+    fetched: Mutex<Vec<bytes::Bytes>>,
 }
 
 impl std::fmt::Debug for SourceContext {
@@ -109,7 +114,12 @@ impl SourceContext {
     async fn get(&self, url: &str, cache_name: &str) -> Result<Vec<u8>, coblet::Error> {
         let body = match self.fetches {
             Fetches::GameVersions => {
-                fetch_for_source(&self.catalog, &self.source, url, cache_name).await?
+                let body = fetch_for_source(&self.catalog, &self.source, url, cache_name).await?;
+                self.fetched
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(body.clone());
+                body
             }
             Fetches::LoaderVersions => {
                 coblet::loader::LoaderContext::new(&self.catalog, &self.source)
@@ -173,7 +183,9 @@ impl SourceContext {
 /// `versions` runs on a worker thread where blocking is fine, once each
 /// time the version list is loaded or refreshed. When two sources list the
 /// same version ID, the earlier one wins. Launching a version fetches its
-/// version JSON from the entry's `url` and checks it against `sha1`.
+/// version JSON from the entry's `url` and checks it against `sha1`; a
+/// version JSON the source already fetched through its context to hash it
+/// is kept for the launch, which then does not download it again.
 #[uniffi::export(foreign)]
 pub trait GameVersionSource: Send + Sync {
     /// Namespaced ID, such as `acme:experiments`.
@@ -219,26 +231,34 @@ pub trait LoaderVersionSource: Send + Sync {
 }
 
 /// Runs a call of a foreign source on a blocking thread with its own
-/// context, then hands the context's warnings to `cx`.
+/// context, then hands the context's warnings to `cx`; returns the answer
+/// and the documents a game version source fetched.
 async fn call<T: Send + 'static>(
     cx: &CatalogContext,
     source: &ExtensionId,
     fetches: Fetches,
     body: impl FnOnce(Arc<SourceContext>) -> Result<T, CobletError> + Send + 'static,
-) -> Result<T, CatalogError> {
+) -> Result<(T, Vec<bytes::Bytes>), CatalogError> {
     let context = Arc::new(SourceContext {
         catalog: CatalogContext::new(cx.meta().clone(), cx.policy()),
         source: source.clone(),
         fetches,
         runtime: tokio::runtime::Handle::current(),
+        fetched: Mutex::new(Vec::new()),
     });
     let given = Arc::clone(&context);
     let result = tokio::task::spawn_blocking(move || body(given)).await;
     for warning in context.catalog.take_warnings() {
         cx.warn(warning);
     }
+    let documents = std::mem::take(
+        &mut *context
+            .fetched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+    );
     match result {
-        Ok(Ok(value)) => Ok(value),
+        Ok(Ok(value)) => Ok((value, documents)),
         Ok(Err(error)) => Err(CatalogError::Failed(format!(
             "version source `{source}` failed: {error}"
         ))),
@@ -283,7 +303,7 @@ impl CatalogSource<GameVersion> for ForeignGameVersions {
     ) -> BoxFuture<'a, Result<CatalogPage<GameVersion>, CatalogError>> {
         Box::pin(async move {
             let source = Arc::clone(&self.source);
-            let entries = call(cx, &self.id, Fetches::GameVersions, move |context| {
+            let (entries, fetched) = call(cx, &self.id, Fetches::GameVersions, move |context| {
                 source.versions(context)
             })
             .await?;
@@ -299,6 +319,10 @@ impl CatalogSource<GameVersion> for ForeignGameVersions {
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            // A source that hashed version JSON to list it saves the launch a download.
+            if let Err(error) = keep_version_json(cx, &versions, &fetched).await {
+                tracing::warn!(source = %self.id, %error, "could not keep fetched version JSON");
+            }
             Ok(CatalogPage::new(versions))
         })
     }
@@ -345,7 +369,7 @@ impl CatalogSource<LoaderVersion> for ForeignLoaderVersions {
             };
             let source = Arc::clone(&self.source);
             let asked = game.as_str().to_owned();
-            let entries = call(cx, &self.id, Fetches::LoaderVersions, move |context| {
+            let (entries, _) = call(cx, &self.id, Fetches::LoaderVersions, move |context| {
                 source.versions(context, asked)
             })
             .await?;
@@ -441,7 +465,8 @@ mod tests {
         }
     }
 
-    /// Lists b1.7.3 from its own host, with the SHA-1 its manifest gives.
+    /// Lists b1.7.3 from its own host, with the SHA-1 its manifest gives,
+    /// after downloading the version JSON as a source that hashes it would.
     struct Own;
 
     impl GameVersionSource for Own {
@@ -455,7 +480,7 @@ mod tests {
 
         fn versions(&self, cx: Arc<SourceContext>) -> Result<Vec<GameVersionEntry>, CobletError> {
             assert_eq!(cx.source_id(), "test:own");
-            let text = cx.fetch_text(
+            let text = Arc::clone(&cx).fetch_text(
                 "https://own.fake.test/version_manifest_v2.json".to_owned(),
                 "manifest.json".to_owned(),
             )?;
@@ -466,6 +491,10 @@ mod tests {
                 .iter()
                 .find(|entry| entry["id"] == "b1.7.3")
                 .unwrap();
+            cx.fetch(
+                "https://own.fake.test/b1.7.3.json".to_owned(),
+                "b1.7.3.json".to_owned(),
+            )?;
             Ok(vec![GameVersionEntry {
                 id: "b1.7.3".to_owned(),
                 version_type: "old_beta".to_owned(),
@@ -608,7 +637,18 @@ mod tests {
                 .join("meta/sources/test/own/manifest.json")
                 .is_file()
         );
-        // The version JSON comes from the entry's address, checked by its SHA-1.
+        // The version JSON the source downloaded is kept for the launch.
+        let sha1 = coblet
+            .inner
+            .versions(&coblet::catalog::Filter::default())
+            .await
+            .unwrap()[0]
+            .sha1;
+        assert!(
+            dir.path()
+                .join(format!("meta/mojang/versions/{sha1}.json"))
+                .is_file()
+        );
         let report = coblet.version_traits("b1.7.3".to_owned()).await.unwrap();
         assert!(report.traits.contains(&"jre-legacy".to_owned()));
 

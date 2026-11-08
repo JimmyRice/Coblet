@@ -2,9 +2,10 @@
 manifest is removed and a game version source written in Python lists
 versions instead. The source reads Mojang's manifest through the SDK,
 hosts the chosen version's JSON on a local HTTP server and lists it from
-there, so the launch takes the version JSON from that server and its
-libraries and assets from Mojang. The version is launched until a log
-message contains the marker.
+there with the hash it computed. Because the source fetched that version
+JSON through its context, the SDK keeps it for the launch, which does not
+download it again; libraries and assets still come from Mojang. The
+version is launched until a log message contains the marker.
 
 The local server also stands in for a Mod Loader's metadata, so the
 example loader gets versions from itself, from a source described in TOML
