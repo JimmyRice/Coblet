@@ -1,13 +1,14 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use coblet_launch_command::UnknownPlaceholder;
 use coblet_runtime::{Event, EventBus, OperationOutcome, Registry, RegistryError};
 use coblet_types::ExtensionId;
 
 use crate::customize::Placement;
 use crate::{
     CustomizeCtx, GameSession, LaunchContext, LaunchCustomizer, LaunchError, LaunchStep,
-    builtin_steps, diff,
+    PlaceholderOrigin, builtin_steps, check_placeholder_name, diff,
 };
 
 /// Ordered chain of [`LaunchStep`]s that prepares and starts the game.
@@ -22,6 +23,8 @@ pub struct Launcher {
     steps: Vec<Arc<dyn LaunchStep>>,
     customizers: Registry<dyn LaunchCustomizer>,
     auth_grants: BTreeSet<ExtensionId>,
+    placeholders: BTreeMap<String, String>,
+    unknown: UnknownPlaceholder,
 }
 
 impl std::fmt::Debug for Launcher {
@@ -30,6 +33,8 @@ impl std::fmt::Debug for Launcher {
             .field("steps", &self.names())
             .field("customizers", &self.customizers)
             .field("auth_grants", &self.auth_grants)
+            .field("placeholders", &self.placeholders.keys())
+            .field("unknown", &self.unknown)
             .finish()
     }
 }
@@ -55,6 +60,8 @@ impl Launcher {
             steps: builtin_steps(),
             customizers: Registry::new(),
             auth_grants: BTreeSet::new(),
+            placeholders: BTreeMap::new(),
+            unknown: UnknownPlaceholder::Error,
         }
     }
 
@@ -65,6 +72,8 @@ impl Launcher {
             steps: Vec::new(),
             customizers: Registry::new(),
             auth_grants: BTreeSet::new(),
+            placeholders: BTreeMap::new(),
+            unknown: UnknownPlaceholder::Error,
         }
     }
 
@@ -183,6 +192,55 @@ impl Launcher {
         &self.customizers
     }
 
+    /// Sets `${name}` to `value` in every launch; the request, customizers
+    /// and steps can replace it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::InvalidPlaceholder`] when coblet fills that
+    /// placeholder itself or the name is not usable.
+    pub fn set_placeholder(
+        &mut self,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Result<(), LaunchError> {
+        let name = name.into();
+        check_placeholder_name(&name)?;
+        self.placeholders.insert(name, value.into());
+        Ok(())
+    }
+
+    /// Returns the values set with [`set_placeholder`](Self::set_placeholder).
+    #[must_use]
+    pub fn placeholders(&self) -> &BTreeMap<String, String> {
+        &self.placeholders
+    }
+
+    /// Sets what happens to placeholders nothing fills; an error by default.
+    pub fn set_unknown_placeholders(&mut self, policy: UnknownPlaceholder) {
+        self.unknown = policy;
+    }
+
+    /// Returns what happens to placeholders nothing fills.
+    #[must_use]
+    pub fn unknown_placeholders(&self) -> UnknownPlaceholder {
+        self.unknown
+    }
+
+    /// Puts the static and requested placeholder values into `cx`.
+    fn seed_placeholders(&self, cx: &mut LaunchContext) -> Result<(), LaunchError> {
+        cx.placeholders.set_unknown(self.unknown);
+        for (name, value) in &self.placeholders {
+            cx.placeholders
+                .set(name, value, PlaceholderOrigin::Static)?;
+        }
+        for (name, value) in &cx.request.placeholders {
+            cx.placeholders
+                .set(name, value, PlaceholderOrigin::Request)?;
+        }
+        Ok(())
+    }
+
     /// Runs the customizers the request names on the profile, records their
     /// changes and returns the steps of this launch.
     fn customize(&self, cx: &mut LaunchContext) -> Result<Vec<Arc<dyn LaunchStep>>, LaunchError> {
@@ -224,6 +282,13 @@ impl Launcher {
                 });
             }
             diff::record(&before, &mut cx.profile, customizer.id());
+            for (name, value) in ctx.take_placeholders() {
+                cx.placeholders.set(
+                    name,
+                    value,
+                    PlaceholderOrigin::Customizer(customizer.id().clone()),
+                )?;
+            }
         }
         for extra in ctx.into_steps() {
             let index = position(&steps, &extra.anchor)?;
@@ -275,6 +340,7 @@ impl Launcher {
         if cx.cancel.is_cancelled() {
             return Err(LaunchError::Cancelled);
         }
+        self.seed_placeholders(cx)?;
         let steps = self.customize(cx)?;
         let count = u32::try_from(steps.len()).unwrap_or(u32::MAX);
         for (index, step) in (0_u32..).zip(&steps) {
@@ -642,6 +708,169 @@ exit 3
         let main = args.iter().position(|arg| *arg == "acme.Wrapper");
         assert!(agent.is_some() && agent < main, "{args:?}");
         assert_eq!(args.last(), Some(&"--marked"));
+    }
+
+    struct Values(coblet_types::ExtensionId);
+
+    impl coblet_runtime::Extension for Values {
+        fn id(&self) -> &coblet_types::ExtensionId {
+            &self.0
+        }
+
+        fn display_name(&self) -> &'static str {
+            "Values"
+        }
+    }
+
+    impl crate::LaunchCustomizer for Values {
+        fn applies_to(&self, _traits: &coblet_mojang::VersionTraits) -> bool {
+            true
+        }
+
+        fn customize(
+            &self,
+            profile: &mut coblet_platform::EffectiveLaunchProfile,
+            ctx: &crate::CustomizeCtx,
+        ) -> Result<(), LaunchError> {
+            profile.jvm_args.push(coblet_platform::ProfileArg::always(
+                "-Dacme=${acme_a}/${acme_b}/${acme_c}/${acme_d}",
+            ));
+            ctx.set_placeholder("acme_c", "customizer")?;
+            ctx.set_placeholder("acme_d", "customizer")?;
+            assert!(ctx.set_placeholder("auth_access_token", "stolen").is_err());
+            Ok(())
+        }
+    }
+
+    struct SetD;
+
+    impl LaunchStep for SetD {
+        fn name(&self) -> &'static str {
+            "set-d"
+        }
+
+        fn run<'a>(&'a self, cx: &'a mut LaunchContext) -> BoxFuture<'a, Result<(), LaunchError>> {
+            Box::pin(async move {
+                cx.placeholders.set(
+                    "acme_d",
+                    "step",
+                    crate::PlaceholderOrigin::Step("set-d".to_owned()),
+                )
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn placeholder_values_come_from_launcher_request_customizers_and_steps() {
+        let id = coblet_types::ExtensionId::new("coblet-test:values").unwrap();
+        let mut launcher = Launcher::new();
+        launcher
+            .register_customizer(Arc::new(Values(id.clone())))
+            .unwrap();
+        launcher.set_placeholder("acme_a", "static").unwrap();
+        launcher.set_placeholder("acme_b", "static").unwrap();
+        assert!(launcher.set_placeholder("version_name", "x").is_err());
+        launcher
+            .insert_before("build-command", Arc::new(SetD))
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut cx = context(
+            dir.path(),
+            LaunchAuth::offline(PlayerName::new("Steve").unwrap()),
+        );
+        cx.request = cx
+            .request
+            .with_customizer(id.clone())
+            .with_placeholder("acme_b", "request");
+        let session = launcher.launch(cx).await.unwrap();
+        assert_eq!(
+            session.placeholders().explain(),
+            "placeholder acme_a from static\n\
+             placeholder acme_b from request\n\
+             placeholder acme_c from customizer coblet-test:values\n\
+             placeholder acme_d from step set-d\n"
+        );
+        session.wait().await.unwrap();
+        let args = std::fs::read_to_string(dir.path().join("game/args.txt")).unwrap();
+        assert!(
+            args.lines()
+                .any(|arg| arg == "-Dacme=static/request/customizer/step"),
+            "{args}"
+        );
+
+        launcher.remove("set-d").unwrap();
+        let mut cx = context(
+            dir.path(),
+            LaunchAuth::offline(PlayerName::new("Steve").unwrap()),
+        );
+        cx.request = cx
+            .request
+            .with_customizer(id)
+            .with_placeholder("auth_uuid", "forged");
+        assert!(matches!(
+            launcher.launch(cx).await,
+            Err(LaunchError::InvalidPlaceholder { .. })
+        ));
+    }
+
+    struct Unknown(coblet_types::ExtensionId);
+
+    impl coblet_runtime::Extension for Unknown {
+        fn id(&self) -> &coblet_types::ExtensionId {
+            &self.0
+        }
+
+        fn display_name(&self) -> &'static str {
+            "Unknown"
+        }
+    }
+
+    impl crate::LaunchCustomizer for Unknown {
+        fn applies_to(&self, _traits: &coblet_mojang::VersionTraits) -> bool {
+            true
+        }
+
+        fn customize(
+            &self,
+            profile: &mut coblet_platform::EffectiveLaunchProfile,
+            _ctx: &crate::CustomizeCtx,
+        ) -> Result<(), LaunchError> {
+            profile
+                .jvm_args
+                .push(coblet_platform::ProfileArg::always("-Dacme=${acme_nobody}"));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_placeholders_follow_the_launcher_policy() {
+        let id = coblet_types::ExtensionId::new("coblet-test:unknown").unwrap();
+        let mut launcher = Launcher::new();
+        launcher
+            .register_customizer(Arc::new(Unknown(id.clone())))
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let cx = || {
+            let mut cx = context(
+                dir.path(),
+                LaunchAuth::offline(PlayerName::new("Steve").unwrap()),
+            );
+            cx.request = cx.request.clone().with_customizer(id.clone());
+            cx
+        };
+        assert!(matches!(
+            launcher.launch(cx()).await,
+            Err(LaunchError::Command(
+                coblet_launch_command::CommandError::UnknownPlaceholder(name)
+            )) if name == "acme_nobody"
+        ));
+        launcher.set_unknown_placeholders(coblet_launch_command::UnknownPlaceholder::Keep);
+        launcher.launch(cx()).await.unwrap().wait().await.unwrap();
+        let args = std::fs::read_to_string(dir.path().join("game/args.txt")).unwrap();
+        assert!(
+            args.lines().any(|arg| arg == "-Dacme=${acme_nobody}"),
+            "{args}"
+        );
     }
 
     /// Collects the events published so far, waiting briefly for stragglers.

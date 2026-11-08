@@ -101,6 +101,14 @@ pub enum LaunchError {
         /// The argument it added or removed.
         argument: String,
     },
+    /// A placeholder name cannot be set.
+    #[error("placeholder `{name}` {reason}")]
+    InvalidPlaceholder {
+        /// The name.
+        name: String,
+        /// Why it cannot be set.
+        reason: &'static str,
+    },
     /// The launch was cancelled.
     #[error("launch was cancelled")]
     Cancelled,

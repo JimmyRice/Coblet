@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -72,6 +73,10 @@ pub struct LaunchRequest {
     pub launcher: Option<(String, String)>,
     /// Launch customizers to run, in order; none by default.
     pub customizers: Vec<ExtensionId>,
+    /// Values of placeholders coblet does not fill itself, such as
+    /// `acme_server` for `${acme_server}`; they replace the launcher's
+    /// static values.
+    pub placeholders: BTreeMap<String, String>,
     /// ID of the launch in events, random unless chosen with
     /// [`with_operation`](Self::with_operation).
     pub operation: OperationId,
@@ -96,6 +101,7 @@ impl LaunchRequest {
             log_capacity: DEFAULT_LOG_CAPACITY,
             launcher: None,
             customizers: Vec::new(),
+            placeholders: BTreeMap::new(),
             operation: OperationId::random(),
         }
     }
@@ -153,6 +159,17 @@ impl LaunchRequest {
     #[must_use]
     pub fn with_customizer(mut self, id: ExtensionId) -> Self {
         self.customizers.push(id);
+        self
+    }
+
+    /// Sets `${name}` to `value` in this launch.
+    ///
+    /// The launch fails with
+    /// [`LaunchError::InvalidPlaceholder`](crate::LaunchError::InvalidPlaceholder)
+    /// when coblet fills that placeholder itself.
+    #[must_use]
+    pub fn with_placeholder(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.placeholders.insert(name.into(), value.into());
         self
     }
 }

@@ -13,7 +13,7 @@ use coblet_runtime::{
 use tokio::task::JoinHandle;
 
 use crate::log::{LogParser, Redact};
-use crate::{LaunchError, LaunchHook, LogBuffer, LogStream};
+use crate::{LaunchError, LaunchHook, LogBuffer, LogStream, Placeholders};
 
 /// Longest partial line kept while waiting for its line break.
 const MAX_LINE_BYTES: usize = 1 << 20;
@@ -41,6 +41,7 @@ pub struct GameSession {
     pid: Option<u32>,
     command: LaunchCommand,
     profile: EffectiveLaunchProfile,
+    placeholders: Placeholders,
     logs: Arc<LogBuffer>,
     killer: GameKiller,
     monitor: JoinHandle<Result<GameExit, LaunchError>>,
@@ -273,6 +274,7 @@ impl GameSession {
     pub(crate) fn start(
         command: LaunchCommand,
         profile: EffectiveLaunchProfile,
+        placeholders: Placeholders,
         process: SpawnedProcess,
         monitor: Monitor,
     ) -> Self {
@@ -287,6 +289,7 @@ impl GameSession {
             pid,
             command,
             profile,
+            placeholders,
             logs,
             killer: GameKiller { kill, killed },
             monitor: task,
@@ -317,6 +320,13 @@ impl GameSession {
     #[must_use]
     pub fn profile(&self) -> &EffectiveLaunchProfile {
         &self.profile
+    }
+
+    /// Returns the values of the placeholders coblet does not fill itself;
+    /// [`Placeholders::explain`] tells where each came from.
+    #[must_use]
+    pub fn placeholders(&self) -> &Placeholders {
+        &self.placeholders
     }
 
     /// Subscribes to the log: kept lines first, then live ones.

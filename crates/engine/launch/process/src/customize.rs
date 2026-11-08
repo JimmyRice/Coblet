@@ -5,7 +5,7 @@ use coblet_platform::EffectiveLaunchProfile;
 use coblet_runtime::Extension;
 use coblet_types::Platform;
 
-use crate::{GameLayout, LaunchError, LaunchStep};
+use crate::{GameLayout, LaunchError, LaunchStep, check_placeholder_name};
 
 /// Downstream hook that edits the launch after the profile pipeline and
 /// before the command is built.
@@ -87,6 +87,7 @@ pub struct CustomizeCtx {
     /// Version traits as the profile pipeline left them.
     pub traits: VersionTraits,
     steps: Mutex<Vec<ExtraStep>>,
+    placeholders: Mutex<Vec<(String, String)>>,
 }
 
 impl std::fmt::Debug for CustomizeCtx {
@@ -108,6 +109,16 @@ impl std::fmt::Debug for CustomizeCtx {
             .field("layout", &self.layout)
             .field("traits", &self.traits)
             .field("steps", &names)
+            .field(
+                "placeholders",
+                &self
+                    .placeholders
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -121,6 +132,7 @@ impl CustomizeCtx {
             layout,
             traits,
             steps: Mutex::new(Vec::new()),
+            placeholders: Mutex::new(Vec::new()),
         }
     }
 
@@ -159,6 +171,37 @@ impl CustomizeCtx {
             .iter()
             .map(|extra| extra.step.name().to_owned())
             .collect()
+    }
+
+    /// Sets `${name}` to `value` in this launch, replacing the value of
+    /// the request or of an earlier customizer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::InvalidPlaceholder`] when coblet fills that
+    /// placeholder itself or the name is not usable.
+    pub fn set_placeholder(
+        &self,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Result<(), LaunchError> {
+        let name = name.into();
+        check_placeholder_name(&name)?;
+        self.placeholders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((name, value.into()));
+        Ok(())
+    }
+
+    /// Takes the placeholder values set since the last call.
+    pub(crate) fn take_placeholders(&self) -> Vec<(String, String)> {
+        std::mem::take(
+            &mut *self
+                .placeholders
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
     }
 
     pub(crate) fn into_steps(self) -> Vec<ExtraStep> {

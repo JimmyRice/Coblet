@@ -350,7 +350,7 @@ fn build_command(cx: &mut LaunchContext) -> Result<(), LaunchError> {
         step: "build-command",
         needs: "a java selected by select-java",
     })?;
-    let options = launch_options(&OptionsInput {
+    let mut options = launch_options(&OptionsInput {
         java: &java.executable,
         java_major: java.major,
         os: &cx.services.os,
@@ -361,6 +361,8 @@ fn build_command(cx: &mut LaunchContext) -> Result<(), LaunchError> {
         natives_directory: cx.natives_directory.as_deref(),
         jvm_args: &cx.jvm_args,
     });
+    options.resolvers.push(cx.placeholders.resolver());
+    options.unknown = cx.placeholders.unknown();
     cx.command = Some(LaunchCommand::from_profile(&profile, &options)?);
     Ok(())
 }
@@ -429,7 +431,13 @@ async fn spawn(cx: &mut LaunchContext) -> Result<(), LaunchError> {
         post_exit: cx.request.post_exit.clone(),
         op: cx.request.operation,
     };
-    let session = GameSession::start(command, cx.profile.clone(), process, monitor);
+    let session = GameSession::start(
+        command,
+        cx.profile.clone(),
+        cx.placeholders.clone(),
+        process,
+        monitor,
+    );
     if let Some(events) = cx
         .services
         .events

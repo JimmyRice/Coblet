@@ -10,7 +10,7 @@ use coblet_platform::EffectiveLaunchProfile;
 use coblet_runtime::{BoxFuture, CancellationToken, EventBus, ProcessSpawner, Storage};
 use coblet_types::OsFamily;
 
-use crate::{GameLayout, GameSession, LaunchError, LaunchRequest};
+use crate::{GameLayout, GameSession, LaunchError, LaunchRequest, Placeholders};
 
 /// One stage of a launch, such as selecting Java or extracting natives.
 ///
@@ -129,6 +129,9 @@ pub struct LaunchContext {
     pub client_jar: Option<PathBuf>,
     /// JVM arguments added by steps, such as the log configuration.
     pub jvm_args: Vec<String>,
+    /// Values of placeholders coblet does not fill itself; `build-command`
+    /// uses them.
+    pub placeholders: Placeholders,
     /// Command built by `build-command`.
     pub command: Option<LaunchCommand>,
     /// Session started by `spawn`.
@@ -155,6 +158,7 @@ impl LaunchContext {
             natives_directory: None,
             client_jar: None,
             jvm_args: Vec::new(),
+            placeholders: Placeholders::new(),
             command: None,
             session: None,
         }
