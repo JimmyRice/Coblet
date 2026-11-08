@@ -435,6 +435,7 @@ mod tests {
             customizers: Vec::new(),
             operation_id: Some("not-a-uuid".to_owned()),
             loader: None,
+            placeholders: std::collections::HashMap::new(),
         };
         let error = coblet(&dir)
             .launch_with("1.20.1".to_owned(), options)

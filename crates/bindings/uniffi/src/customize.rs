@@ -102,6 +102,7 @@ struct PendingStep {
 struct Edit {
     profile: EffectiveLaunchProfile,
     steps: Vec<PendingStep>,
+    placeholders: Vec<(String, String)>,
 }
 
 /// Launch profile handed to [`LaunchCustomizer::customize`].
@@ -199,6 +200,7 @@ impl ProfileEditor {
             edit: Mutex::new(Some(Edit {
                 profile,
                 steps: Vec::new(),
+                placeholders: Vec::new(),
             })),
         }
     }
@@ -435,6 +437,19 @@ impl ProfileEditor {
         self.with(|edit| edit.profile.java.major = major)
     }
 
+    /// Sets `${name}` to `value` in this launch, replacing the value of
+    /// `LaunchOptions.placeholders` or of an earlier customizer.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a name coblet fills itself, such as `auth_access_token`,
+    /// an empty name or one with `$`, `{` or `}`, and after `customize`
+    /// returned.
+    pub fn set_placeholder(&self, name: String, value: String) -> Result<(), CobletError> {
+        crate::placeholders::placeholder_name(&name)?;
+        self.with(|edit| edit.placeholders.push((name, value)))
+    }
+
     /// Runs `step` right before the launch step named `anchor`, such as `pre-launch`.
     ///
     /// # Errors
@@ -531,6 +546,9 @@ impl coblet::launch::LaunchCustomizer for ForeignCustomizer {
             return Ok(());
         };
         *profile = edit.profile;
+        for (name, value) in edit.placeholders {
+            ctx.set_placeholder(name, value)?;
+        }
         for pending in edit.steps {
             let step = Arc::new(ForeignStep {
                 name: pending.step.name(),

@@ -8,6 +8,7 @@ use coblet::types::{ExtensionId, Platform};
 use crate::customize::ForeignCustomizer;
 use crate::java::{ForeignJavaLocator, ForeignJavaProvider, extension_id};
 use crate::loaders::{ForeignLoader, loader_id};
+use crate::placeholders::{ForeignPlaceholderSource, placeholder_name};
 use crate::profile::ForeignProfile;
 use crate::secrets::{ForeignSecrets, encryption_key};
 use crate::sources::ForeignRewriter;
@@ -17,7 +18,8 @@ use crate::version_sources::{
 };
 use crate::{
     ArtifactKind, Coblet, CobletError, ErrorKind, JavaLocator, JavaProvider, LaunchCustomizer,
-    ModLoader, PlatformInfo, PlatformProfile, SecretStore, TraitSource, UrlRewriter,
+    ModLoader, PlaceholderSource, PlatformInfo, PlatformProfile, SecretStore, TraitSource,
+    UnknownPlaceholders, UrlRewriter,
 };
 
 /// Where tokens are kept.
@@ -43,6 +45,15 @@ struct Settings {
     loader_sources: Vec<LoaderSourceChange>,
     java: Vec<JavaChange>,
     traits: Vec<TraitChange>,
+    launch: Vec<LaunchChange>,
+}
+
+/// One launch step or placeholder change, applied in order.
+enum LaunchChange {
+    Placeholder(String, String),
+    Source(Arc<dyn coblet::launch::PlaceholderSource>, bool),
+    RemoveSource(ExtensionId),
+    Unknown(UnknownPlaceholders),
 }
 
 type GameSource = Arc<dyn coblet::catalog::CatalogSource<coblet::mojang::GameVersion>>;
@@ -209,6 +220,13 @@ impl CobletBuilder {
         ))
     }
 
+    fn launch_change(&self, change: LaunchChange) -> Result<(), CobletError> {
+        self.with(|settings| {
+            settings.launch.push(change);
+            Ok(())
+        })
+    }
+
     fn with<T>(
         &self,
         body: impl FnOnce(&mut Settings) -> Result<T, CobletError>,
@@ -251,6 +269,7 @@ impl CobletBuilder {
                 loader_sources: Vec::new(),
                 java: Vec::new(),
                 traits: Vec::new(),
+                launch: Vec::new(),
             })),
         }))
     }
@@ -907,6 +926,66 @@ impl CobletBuilder {
         self.trait_change(TraitChange::Remove(id))
     }
 
+    /// Sets `${name}` to `value` in every launch; `LaunchOptions.placeholders`,
+    /// customizers and steps can replace it.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a name coblet fills itself, such as `auth_access_token`,
+    /// an empty name or one with `$`, `{` or `}`, and after `build`.
+    pub fn add_placeholder(&self, name: String, value: String) -> Result<(), CobletError> {
+        placeholder_name(&name)?;
+        self.launch_change(LaunchChange::Placeholder(name, value))
+    }
+
+    /// Adds a source asked for placeholders nothing else set, after those
+    /// already added.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`; `build` fails when the
+    /// ID is taken.
+    pub fn add_placeholder_source(
+        &self,
+        source: Arc<dyn PlaceholderSource>,
+    ) -> Result<(), CobletError> {
+        let source = Arc::new(ForeignPlaceholderSource::new(source)?);
+        self.launch_change(LaunchChange::Source(source, false))
+    }
+
+    /// Puts a placeholder source in place of the one with the same ID,
+    /// keeping its place; appends it when the ID is free.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`.
+    pub fn replace_placeholder_source(
+        &self,
+        source: Arc<dyn PlaceholderSource>,
+    ) -> Result<(), CobletError> {
+        let source = Arc::new(ForeignPlaceholderSource::new(source)?);
+        self.launch_change(LaunchChange::Source(source, true))
+    }
+
+    /// Removes a placeholder source; an unknown ID is ignored.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`.
+    pub fn remove_placeholder_source(&self, id: &str) -> Result<(), CobletError> {
+        let id = extension_id("placeholder source", id)?;
+        self.launch_change(LaunchChange::RemoveSource(id))
+    }
+
+    /// Sets what happens to placeholders nothing fills; the launch fails by default.
+    ///
+    /// # Errors
+    ///
+    /// Fails after `build`.
+    pub fn set_unknown_placeholders(&self, policy: UnknownPlaceholders) -> Result<(), CobletError> {
+        self.launch_change(LaunchChange::Unknown(policy))
+    }
+
     /// Creates the `Coblet`.
     ///
     /// # Errors
@@ -989,6 +1068,15 @@ impl CobletBuilder {
                 TraitChange::Add(source) => builder.trait_source(source),
                 TraitChange::Replace(source) => builder.replace_trait_source(source),
                 TraitChange::Remove(id) => builder.without_trait_source(id),
+            };
+        }
+        for change in settings.launch {
+            builder = match change {
+                LaunchChange::Placeholder(name, value) => builder.placeholder(name, value),
+                LaunchChange::Source(source, false) => builder.placeholder_source(source),
+                LaunchChange::Source(source, true) => builder.replace_placeholder_source(source),
+                LaunchChange::RemoveSource(id) => builder.without_placeholder_source(id),
+                LaunchChange::Unknown(policy) => builder.unknown_placeholders(policy.into()),
             };
         }
         match settings.secrets {

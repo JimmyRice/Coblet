@@ -11,8 +11,9 @@
 //! point requests at mirrors, `JavaProvider` and `JavaLocator` to add
 //! places Java is downloaded from and found in, `ModLoader` to add a Mod
 //! Loader, and `GameVersionSource` and `LoaderVersionSource` to list game
-//! and Mod Loader versions from other places, as Rust code does with the
-//! traits of the same names. Mod Loaders can also be described as TOML or
+//! and Mod Loader versions from other places, and `PlaceholderSource` to
+//! fill `${name}` placeholders in launch arguments, as Rust code does with
+//! the traits of the same names. Mod Loaders can also be described as TOML or
 //! JSON data with `CobletBuilder.add_loader_toml`, and their extra version
 //! sources with `CobletBuilder.add_loader_version_source_toml`. Async
 //! methods run on tokio and
@@ -32,9 +33,12 @@ mod game;
 mod java;
 mod loaders;
 mod login;
+mod placeholders;
 mod profile;
 mod secrets;
 mod sources;
+#[cfg(test)]
+mod testing;
 mod traits;
 mod version_sources;
 
@@ -56,6 +60,9 @@ pub use loaders::{
     LaunchPlan, LoaderChoice, LoaderContext, LoaderInfo, LoaderVersionInfo, ModLoader,
 };
 pub use login::LoginFlow;
+pub use placeholders::{
+    PlaceholderInfo, PlaceholderSource, PlaceholderSourceInfo, UnknownPlaceholders,
+};
 pub use profile::{
     ComponentInfo, JavaMatchChoice, JavaSourceChoice, LibraryInfo, NativesChoice, PlatformProfile,
     ProfileDraft, ProfileTarget, RuleOverrides,
