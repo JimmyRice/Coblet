@@ -342,6 +342,7 @@ dependencies = [
 name = "coblet-ffi"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "coblet",
  "serde",
  "serde_json",
@@ -505,6 +506,7 @@ dependencies = [
 name = "coblet-uniffi"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "coblet",
  "serde_json",
  "tempfile",

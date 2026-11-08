@@ -633,7 +633,9 @@ typedef struct CobletTraitSource {
 // `coblet_source_ctx_set_result`: a JSON array of versions, newest first.
 // A game version is `{"id","type","url","sha1","released",
 // "latest_release","traits"}`: `url` and `sha1` name the version JSON in
-// Mojang's format, checked when the version is launched, `released` is
+// Mojang's format, checked when the version is launched (one the source
+// fetched through the handle to hash it is kept, so the launch does not
+// download it again), `released` is
 // RFC 3339, `type` defaults to `release`, `latest_release` to false and
 // `traits` (declared version traits) to none. A Mod Loader version is an
 // item of `coblet_loader_versions_json`: `{"id","game","type","released",

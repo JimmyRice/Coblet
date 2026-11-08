@@ -1,11 +1,14 @@
 use std::ffi::{CString, c_char, c_void};
 use std::sync::Arc;
 
+use bytes::Bytes;
 use coblet::catalog::{
     CatalogContext, CatalogError, CatalogPage, CatalogQuery, CatalogSource, Timestamp,
 };
 use coblet::loader::{DataLoaderVersions, LoaderVersion};
-use coblet::mojang::{GameVersion, VersionTrait, VersionTraits, fetch_for_source};
+use coblet::mojang::{
+    GameVersion, VersionTrait, VersionTraits, fetch_for_source, keep_version_json,
+};
 use coblet::runtime::{BoxFuture, Extension, HttpUrl};
 use coblet::types::{ExtensionId, GameVersionId, Sha1Digest, VersionType};
 use serde::Deserialize;
@@ -38,7 +41,9 @@ pub const COBLET_SOURCE_REPLACE: u32 = 1;
 /// `coblet_source_ctx_set_result`: a JSON array of versions, newest first.
 /// A game version is `{"id","type","url","sha1","released",
 /// "latest_release","traits"}`: `url` and `sha1` name the version JSON in
-/// Mojang's format, checked when the version is launched, `released` is
+/// Mojang's format, checked when the version is launched (one the source
+/// fetched through the handle to hash it is kept, so the launch does not
+/// download it again), `released` is
 /// RFC 3339, `type` defaults to `release`, `latest_release` to false and
 /// `traits` (declared version traits) to none. A Mod Loader version is an
 /// item of `coblet_loader_versions_json`: `{"id","game","type","released",
@@ -85,6 +90,9 @@ pub struct CobletSourceCtx {
     runtime: tokio::runtime::Handle,
     result: Option<String>,
     failure: Option<String>,
+    /// Documents a game version source fetched, offered to the launch
+    /// cache once it has listed its versions.
+    fetched: Vec<Bytes>,
 }
 
 impl std::fmt::Debug for CobletSourceCtx {
@@ -130,13 +138,14 @@ impl ForeignVersionSource {
         })
     }
 
-    /// Runs the callback on a blocking thread and returns its answer.
+    /// Runs the callback on a blocking thread and returns its answer with
+    /// the documents a game version source fetched.
     async fn ask(
         &self,
         cx: &CatalogContext,
         fetches: Fetches,
         game: Option<&GameVersionId>,
-    ) -> Result<Option<String>, CatalogError> {
+    ) -> Result<(Option<String>, Vec<Bytes>), CatalogError> {
         let query = serde_json::json!({ "schema": 1, "game": game.map(GameVersionId::as_str) });
         let argument = CString::new(query.to_string())
             .map_err(|_| CatalogError::Failed("query contains NUL".to_owned()))?;
@@ -147,6 +156,7 @@ impl ForeignVersionSource {
             runtime: tokio::runtime::Handle::current(),
             result: None,
             failure: None,
+            fetched: Vec::new(),
         };
         let (owned, callback) = (Arc::clone(&self.owned), self.callback);
         let (succeeded, ctx) = tokio::task::spawn_blocking(move || {
@@ -164,7 +174,7 @@ impl ForeignVersionSource {
                 .unwrap_or_else(|| "the callback failed".to_owned());
             return Err(self.failed(&reason));
         }
-        Ok(ctx.result)
+        Ok((ctx.result, ctx.fetched))
     }
 
     fn failed(&self, reason: &str) -> CatalogError {
@@ -253,7 +263,7 @@ impl CatalogSource<GameVersion> for ForeignVersionSource {
         _query: &'a CatalogQuery,
     ) -> BoxFuture<'a, Result<CatalogPage<GameVersion>, CatalogError>> {
         Box::pin(async move {
-            let Some(json) = self.ask(cx, Fetches::GameVersions, None).await? else {
+            let (Some(json), fetched) = self.ask(cx, Fetches::GameVersions, None).await? else {
                 return Ok(CatalogPage::new(Vec::new()));
             };
             let entries: Vec<GameEntry> = serde_json::from_str(&json)
@@ -267,6 +277,10 @@ impl CatalogSource<GameVersion> for ForeignVersionSource {
                         .map_err(|error| self.failed(&format!("`{id}` has a bad {error}")))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            // A source that hashed version JSON to list it saves the launch a download.
+            if let Err(error) = keep_version_json(cx, &versions, &fetched).await {
+                tracing::warn!(source = %self.id, %error, "could not keep fetched version JSON");
+            }
             Ok(CatalogPage::new(versions))
         })
     }
@@ -284,7 +298,7 @@ impl CatalogSource<LoaderVersion> for ForeignVersionSource {
                     "mod loader versions are listed per game version".to_owned(),
                 ));
             };
-            let Some(json) = self.ask(cx, Fetches::LoaderVersions, Some(game)).await? else {
+            let (Some(json), _) = self.ask(cx, Fetches::LoaderVersions, Some(game)).await? else {
                 return Ok(CatalogPage::new(Vec::new()));
             };
             let mut versions: Vec<LoaderVersion> = serde_json::from_str(&json)
@@ -355,7 +369,9 @@ pub unsafe extern "C" fn coblet_source_ctx_fetch(
             let body = ctx.runtime.block_on(async {
                 Ok::<_, coblet::Error>(match ctx.fetches {
                     Fetches::GameVersions => {
-                        fetch_for_source(&ctx.catalog, &ctx.source, url, name).await?
+                        let body = fetch_for_source(&ctx.catalog, &ctx.source, url, name).await?;
+                        ctx.fetched.push(body.clone());
+                        body
                     }
                     Fetches::LoaderVersions => {
                         coblet::loader::LoaderContext::new(&ctx.catalog, &ctx.source)
@@ -812,7 +828,8 @@ mod tests {
         unsafe { coblet_source_ctx_set_result(ctx, json.as_ptr()) == CobletStatus::Ok }
     }
 
-    /// Lists b1.7.3 from its own host with the SHA-1 its manifest gives.
+    /// Lists b1.7.3 from its own host with the SHA-1 its manifest gives,
+    /// after downloading the version JSON as a source that hashes it would.
     unsafe extern "C" fn own(
         _user_data: *mut c_void,
         ctx: *mut CobletSourceCtx,
@@ -846,6 +863,20 @@ mod tests {
             .iter()
             .find(|entry| entry["id"] == "b1.7.3")
             .unwrap();
+        let mut version = CobletBytes::empty();
+        // SAFETY: the running callback's handle, valid strings and out-pointers.
+        let status = unsafe {
+            coblet_source_ctx_fetch(
+                ctx,
+                c"https://own.fake.test/b1.7.3.json".as_ptr(),
+                c"b1.7.3.json".as_ptr(),
+                &raw mut version,
+                &raw mut err,
+            )
+        };
+        assert_eq!(status, CobletStatus::Ok);
+        // SAFETY: the bytes were just returned and are freed once.
+        unsafe { coblet_bytes_free(version) };
         answer(
             ctx,
             &serde_json::json!([{
@@ -989,7 +1020,11 @@ mod tests {
                     .join("meta/sources/test/own/manifest.json")
                     .is_file()
             );
-            // The version JSON comes from the entry's address, checked by its SHA-1.
+            // The version JSON the source downloaded is kept for the launch.
+            let kept = std::fs::read_dir(dir.path().join("meta/mojang/versions"))
+                .unwrap()
+                .count();
+            assert_eq!(kept, 1);
             assert_eq!(
                 coblet_version_traits_json(coblet, c"b1.7.3".as_ptr(), &raw mut out, &raw mut err),
                 CobletStatus::Ok
