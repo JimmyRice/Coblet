@@ -132,41 +132,62 @@ pub fn builtin_steps() -> Vec<Arc<dyn LaunchStep>> {
 }
 
 async fn select_java(cx: &mut LaunchContext) -> Result<(), LaunchError> {
+    if let Some(path) = cx.request.java.clone() {
+        return cx.use_java(&path).await;
+    }
     let services = &cx.services;
-    let requirement = &cx.profile.java;
-    let install = if let Some(path) = &cx.request.java {
-        let install = probe(&*services.spawner, path, InstallSource::Configured).await?;
+    let progress = TransferProgress::new();
+    let java = JavaContext {
+        progress: Some(&progress),
+        storage: &*services.storage,
+        spawner: &*services.spawner,
+        os: &services.os,
+        locators: &services.java_locators,
+        installer: services.java_installer.as_ref(),
+        catalog: &services.catalog,
+    };
+    let install = find_or_install(java, &cx.profile.java, &cx.cancel);
+    let install = progress
+        .track(
+            services.events.as_ref(),
+            cx.request.operation,
+            TransferKind::JavaRuntime,
+            install,
+        )
+        .await?;
+    tracing::info!(java = %install.executable.display(), version = %install.version, "selected java");
+    cx.java = Some(install);
+    Ok(())
+}
+
+impl LaunchContext {
+    /// Runs the `java` at `path`, checks that it meets the version's
+    /// requirement and makes it the Java of this launch.
+    ///
+    /// A step that replaces `select-java` can call this with a Java it
+    /// found or installed itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::Java`] when the executable does not run and
+    /// [`LaunchError::JavaMismatch`] when its version or architecture does
+    /// not fit.
+    pub async fn use_java(&mut self, path: &Path) -> Result<(), LaunchError> {
+        let install = probe(&*self.services.spawner, path, InstallSource::Configured).await?;
+        let requirement = &self.profile.java;
         if !requirement.accepts(install.major, &install.arch) {
             return Err(LaunchError::JavaMismatch {
-                executable: path.clone(),
+                executable: path.to_path_buf(),
                 found_major: install.major,
                 found_arch: install.arch.as_str().to_owned(),
                 major: requirement.major,
                 arch: requirement.arch.as_str().to_owned(),
             });
         }
-        install
-    } else {
-        let progress = TransferProgress::new();
-        let java = JavaContext {
-            progress: Some(&progress),
-            storage: &*services.storage,
-            spawner: &*services.spawner,
-            os: &services.os,
-            locators: &services.java_locators,
-            installer: services.java_installer.as_ref(),
-            catalog: &services.catalog,
-        };
-        let install = find_or_install(java, requirement, &cx.cancel);
-        let events = services.events.as_ref();
-        let op = cx.request.operation;
-        progress
-            .track(events, op, TransferKind::JavaRuntime, install)
-            .await?
-    };
-    tracing::info!(java = %install.executable.display(), version = %install.version, "selected java");
-    cx.java = Some(install);
-    Ok(())
+        tracing::info!(java = %install.executable.display(), version = %install.version, "selected java");
+        self.java = Some(install);
+        Ok(())
+    }
 }
 
 async fn verify_files(cx: &mut LaunchContext) -> Result<(), LaunchError> {
