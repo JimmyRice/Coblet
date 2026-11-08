@@ -10,7 +10,9 @@ use coblet_platform::EffectiveLaunchProfile;
 use coblet_runtime::{BoxFuture, CancellationToken, EventBus, ProcessSpawner, Storage};
 use coblet_types::OsFamily;
 
-use crate::{GameLayout, GameSession, LaunchError, LaunchRequest, Placeholders};
+use crate::{
+    GameLayout, GameSession, LaunchError, LaunchRequest, PlaceholderSources, Placeholders,
+};
 
 /// One stage of a launch, such as selecting Java or extracting natives.
 ///
@@ -44,6 +46,8 @@ pub struct LaunchServices {
     pub os: OsFamily,
     /// Event stream that receives game log lines.
     pub events: Option<EventBus>,
+    /// Sources `resolve-placeholders` asks for missing placeholder values.
+    pub placeholder_sources: PlaceholderSources,
 }
 
 impl LaunchServices {
@@ -65,6 +69,7 @@ impl LaunchServices {
             java_installer: None,
             os,
             events: None,
+            placeholder_sources: PlaceholderSources::new(),
         }
     }
 
@@ -86,6 +91,15 @@ impl LaunchServices {
         }
     }
 
+    /// Asks `sources` for placeholder values nothing else set.
+    #[must_use]
+    pub fn with_placeholder_sources(self, placeholder_sources: PlaceholderSources) -> Self {
+        Self {
+            placeholder_sources,
+            ..self
+        }
+    }
+
     /// Publishes game log lines to `events`.
     #[must_use]
     pub fn with_events(self, events: EventBus) -> Self {
@@ -101,6 +115,7 @@ impl fmt::Debug for LaunchServices {
         f.debug_struct("LaunchServices")
             .field("os", &self.os)
             .field("java_locators", &self.java_locators)
+            .field("placeholder_sources", &self.placeholder_sources)
             .finish_non_exhaustive()
     }
 }

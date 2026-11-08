@@ -15,6 +15,7 @@ use crate::files::{
     FileSet, asset_tasks, by_name_directory, check_existing, copy_by_name, fetch_all,
 };
 use crate::natives::extract_natives;
+use crate::placeholder_sources::resolve_placeholders;
 use crate::session::Monitor;
 use crate::{
     GameLayout, GameSession, LaunchContext, LaunchError, LaunchRequest, LaunchStep, LogBuffer,
@@ -94,6 +95,12 @@ step!(
     pre_launch
 );
 step!(
+    /// Asks the placeholder sources for placeholders nothing else set.
+    ResolvePlaceholders,
+    "resolve-placeholders",
+    resolve_placeholders
+);
+step!(
     /// Builds the launch command.
     BuildCommand,
     "build-command",
@@ -117,6 +124,7 @@ pub fn builtin_steps() -> Vec<Arc<dyn LaunchStep>> {
         Arc::new(LegacyFmlLibs),
         Arc::new(LoggingConfig),
         Arc::new(PreLaunch),
+        Arc::new(ResolvePlaceholders),
         Arc::new(BuildCommand),
         Arc::new(Spawn),
     ]

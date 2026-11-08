@@ -109,6 +109,14 @@ pub enum LaunchError {
         /// Why it cannot be set.
         reason: &'static str,
     },
+    /// A placeholder source failed.
+    #[error("placeholder source `{source_id}` failed: {message}")]
+    PlaceholderSource {
+        /// The source.
+        source_id: ExtensionId,
+        /// Why.
+        message: String,
+    },
     /// The launch was cancelled.
     #[error("launch was cancelled")]
     Cancelled,

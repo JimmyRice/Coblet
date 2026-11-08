@@ -625,6 +625,7 @@ exit 3
                 "legacy-fml-libs",
                 "logging-config",
                 "pre-launch",
+                "resolve-placeholders",
                 "build-command",
                 "spawn"
             ]
@@ -870,6 +871,121 @@ exit 3
         assert!(
             args.lines().any(|arg| arg == "-Dacme=${acme_nobody}"),
             "{args}"
+        );
+    }
+
+    /// Placeholder source that records what it was asked and answers from a table.
+    struct Table {
+        id: coblet_types::ExtensionId,
+        answers: Vec<(&'static str, &'static str)>,
+        fail: bool,
+        asked: std::sync::Mutex<Vec<Vec<String>>>,
+    }
+
+    impl Table {
+        fn new(id: &str, answers: Vec<(&'static str, &'static str)>) -> Arc<Self> {
+            Arc::new(Self {
+                id: coblet_types::ExtensionId::new(id).unwrap(),
+                answers,
+                fail: false,
+                asked: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    impl coblet_runtime::Extension for Table {
+        fn id(&self) -> &coblet_types::ExtensionId {
+            &self.id
+        }
+
+        fn display_name(&self) -> &'static str {
+            "Table"
+        }
+    }
+
+    impl crate::PlaceholderSource for Table {
+        fn resolve<'a>(
+            &'a self,
+            names: &'a [String],
+            cx: &'a crate::PlaceholderCtx,
+        ) -> BoxFuture<'a, Result<std::collections::BTreeMap<String, String>, LaunchError>>
+        {
+            assert_eq!(cx.game_version.as_str(), "t1");
+            self.asked.lock().unwrap().push(names.to_vec());
+            let fail = self.fail;
+            let answers = self
+                .answers
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect();
+            Box::pin(async move {
+                if fail {
+                    return Err(LaunchError::Step {
+                        step: "table".to_owned(),
+                        message: "offline".to_owned(),
+                    });
+                }
+                Ok(answers)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn sources_are_asked_in_order_for_the_missing_names_only() {
+        let id = coblet_types::ExtensionId::new("coblet-test:unknown").unwrap();
+        let mut launcher = Launcher::new();
+        launcher
+            .register_customizer(Arc::new(Unknown(id.clone())))
+            .unwrap();
+        let silent = Table::new("coblet-test:silent", vec![]);
+        let answering = Table::new(
+            "coblet-test:answering",
+            vec![("acme_nobody", "found"), ("acme_extra", "ignored")],
+        );
+        let last = Table::new("coblet-test:last", vec![("acme_nobody", "late")]);
+        let mut sources = crate::PlaceholderSources::new();
+        sources.register(silent.clone()).unwrap();
+        sources.register(answering.clone()).unwrap();
+        sources.register(last.clone()).unwrap();
+        assert!(sources.register(last.clone()).is_err());
+        let dir = tempfile::tempdir().unwrap();
+        let mut cx = context(
+            dir.path(),
+            LaunchAuth::offline(PlayerName::new("Steve").unwrap()),
+        );
+        cx.request = cx
+            .request
+            .with_customizer(id.clone())
+            .with_placeholder("acme_set", "x");
+        cx.request.jvm_args.push("-Dset=${acme_set}".to_owned());
+        cx.services.placeholder_sources = sources.clone();
+        let session = launcher.launch(cx).await.unwrap();
+        assert_eq!(
+            session.placeholders().explain(),
+            "placeholder acme_nobody from source coblet-test:answering\n\
+             placeholder acme_set from request\n"
+        );
+        session.wait().await.unwrap();
+        assert_eq!(*silent.asked.lock().unwrap(), [["acme_nobody"]]);
+        assert_eq!(*answering.asked.lock().unwrap(), [["acme_nobody"]]);
+        assert!(last.asked.lock().unwrap().is_empty());
+        let args = std::fs::read_to_string(dir.path().join("game/args.txt")).unwrap();
+        assert!(args.lines().any(|arg| arg == "-Dacme=found"), "{args}");
+
+        sources.replace(Arc::new(Table {
+            fail: true,
+            ..Arc::into_inner(Table::new("coblet-test:silent", vec![])).unwrap()
+        }));
+        let mut cx = context(
+            dir.path(),
+            LaunchAuth::offline(PlayerName::new("Steve").unwrap()),
+        );
+        cx.request = cx.request.with_customizer(id);
+        cx.services.placeholder_sources = sources;
+        let error = launcher.launch(cx).await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "placeholder source `coblet-test:silent` failed: step `table` failed: offline"
         );
     }
 
