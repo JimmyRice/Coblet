@@ -202,12 +202,16 @@ pub(crate) async fn resolve_placeholders(cx: &mut LaunchContext) -> Result<(), L
         if missing.is_empty() {
             break;
         }
-        let answers = source.resolve(&missing, &info).await.map_err(|error| {
-            LaunchError::PlaceholderSource {
-                source_id: source.id().clone(),
-                message: error.to_string(),
-            }
-        })?;
+        let answers = source
+            .resolve(&missing, &info)
+            .await
+            .map_err(|error| match error {
+                LaunchError::PlaceholderSource { .. } => error,
+                other => LaunchError::PlaceholderSource {
+                    source_id: source.id().clone(),
+                    message: other.to_string(),
+                },
+            })?;
         for (name, value) in answers {
             if !missing.contains(&name) {
                 tracing::debug!(source = %source.id(), %name, "ignoring a placeholder nobody asked for");
