@@ -615,21 +615,7 @@ exit 3
     #[tokio::test]
     async fn steps_can_be_inserted_replaced_and_removed() {
         let mut launcher = Launcher::new();
-        assert_eq!(
-            launcher.names(),
-            [
-                "select-java",
-                "verify-files",
-                "prepare-natives",
-                "client-jar",
-                "legacy-fml-libs",
-                "logging-config",
-                "pre-launch",
-                "resolve-placeholders",
-                "build-command",
-                "spawn"
-            ]
-        );
+        assert_eq!(launcher.names(), crate::step_names::BUILTIN);
         launcher
             .insert_before("build-command", Arc::new(Mark))
             .unwrap();

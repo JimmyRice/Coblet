@@ -23,6 +23,7 @@ mod placeholders;
 mod request;
 mod session;
 mod step;
+pub mod step_names;
 mod steps;
 
 pub use buffer::{DEFAULT_LOG_CAPACITY, LogBuffer, LogItem, LogStream};

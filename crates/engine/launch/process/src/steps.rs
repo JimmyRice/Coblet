@@ -17,25 +17,26 @@ use crate::files::{
 use crate::natives::extract_natives;
 use crate::placeholder_sources::resolve_placeholders;
 use crate::session::Monitor;
+use crate::step_names;
 use crate::{
     GameLayout, GameSession, LaunchContext, LaunchError, LaunchRequest, LaunchStep, LogBuffer,
     command_profile,
 };
 
 macro_rules! step {
-    ($(#[$doc:meta])* $ty:ident, $name:literal, infallible $run:ident) => {
+    ($(#[$doc:meta])* $ty:ident, $name:expr, infallible $run:ident) => {
         step!($(#[$doc])* $ty, $name, |cx| {
             $run(cx);
             std::future::ready(Ok(()))
         });
     };
-    ($(#[$doc:meta])* $ty:ident, $name:literal, sync $run:ident) => {
+    ($(#[$doc:meta])* $ty:ident, $name:expr, sync $run:ident) => {
         step!($(#[$doc])* $ty, $name, |cx| std::future::ready($run(cx)));
     };
-    ($(#[$doc:meta])* $ty:ident, $name:literal, $run:ident) => {
+    ($(#[$doc:meta])* $ty:ident, $name:expr, $run:ident) => {
         step!($(#[$doc])* $ty, $name, |cx| $run(cx));
     };
-    ($(#[$doc:meta])* $ty:ident, $name:literal, |$cx:ident| $body:expr) => {
+    ($(#[$doc:meta])* $ty:ident, $name:expr, |$cx:ident| $body:expr) => {
         $(#[$doc])*
         #[derive(Clone, Copy, Debug, Default)]
         pub struct $ty;
@@ -55,61 +56,61 @@ macro_rules! step {
 step!(
     /// Uses the configured Java after checking it, or finds or installs one that fits.
     SelectJava,
-    "select-java",
+    step_names::SELECT_JAVA,
     select_java
 );
 step!(
     /// Downloads missing or damaged game files and prepares assets.
     VerifyFiles,
-    "verify-files",
+    step_names::VERIFY_FILES,
     verify_files
 );
 step!(
     /// Extracts native jars into the natives directory.
     PrepareNatives,
-    "prepare-natives",
+    step_names::PREPARE_NATIVES,
     prepare_natives
 );
 step!(
     /// Chooses the client jar; refuses profiles with jar mods until merging is supported.
     ClientJar,
-    "client-jar",
+    step_names::CLIENT_JAR,
     sync client_jar
 );
 step!(
     /// Places the libraries old FML downloads at start; the Forge loader provides them.
     LegacyFmlLibs,
-    "legacy-fml-libs",
+    step_names::LEGACY_FML_LIBS,
     infallible legacy_fml_libs
 );
 step!(
     /// Adds the version's log4j configuration so the game logs structured events.
     LoggingConfig,
-    "logging-config",
+    step_names::LOGGING_CONFIG,
     infallible logging_config
 );
 step!(
     /// Runs the pre-launch command; a failure stops the launch.
     PreLaunch,
-    "pre-launch",
+    step_names::PRE_LAUNCH,
     pre_launch
 );
 step!(
     /// Asks the placeholder sources for placeholders nothing else set.
     ResolvePlaceholders,
-    "resolve-placeholders",
+    step_names::RESOLVE_PLACEHOLDERS,
     resolve_placeholders
 );
 step!(
     /// Builds the launch command.
     BuildCommand,
-    "build-command",
+    step_names::BUILD_COMMAND,
     sync build_command
 );
 step!(
     /// Starts the game, under the wrapper command when one is set, and monitors it.
     Spawn,
-    "spawn",
+    step_names::SPAWN,
     spawn
 );
 
@@ -355,7 +356,7 @@ fn build_command(cx: &mut LaunchContext) -> Result<(), LaunchError> {
         last.clone_from(jar);
     }
     let java = cx.java.as_ref().ok_or(LaunchError::MissingState {
-        step: "build-command",
+        step: step_names::BUILD_COMMAND,
         needs: "a java selected by select-java",
     })?;
     let mut options = launch_options(&OptionsInput {
@@ -409,7 +410,7 @@ fn process_spec(command: &LaunchCommand, wrapper: &[OsString]) -> ProcessSpec {
 
 async fn spawn(cx: &mut LaunchContext) -> Result<(), LaunchError> {
     let command = cx.command.clone().ok_or(LaunchError::MissingState {
-        step: "spawn",
+        step: step_names::SPAWN,
         needs: "a command built by build-command",
     })?;
     let storage = &cx.services.storage;
