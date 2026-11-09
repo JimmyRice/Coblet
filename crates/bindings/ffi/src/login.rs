@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::ffi::c_char;
 use std::sync::{Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -5,8 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use coblet::auth::{
     AuthFlow, CallbackSender, Interaction, LoginOptions, MICROSOFT_METHOD, Redirect,
 };
-use coblet::runtime::{AuthPrompt, CancellationToken};
+use coblet::runtime::{AuthPrompt, CancellationToken, Secret};
 use coblet::types::ExtensionId;
+use serde::Deserialize;
 
 use crate::accounts::account_value;
 use crate::context::Coblet;
@@ -30,7 +32,8 @@ pub enum CobletLoginInteraction {
     BrowserRedirect = 2,
 }
 
-/// Microsoft login in progress, from `coblet_login_begin`.
+/// Login in progress, from `coblet_login_begin` or
+/// `coblet_login_begin_with`.
 pub struct CobletLogin {
     runtime: tokio::runtime::Handle,
     coblet: coblet::Coblet,
@@ -113,20 +116,144 @@ pub unsafe extern "C" fn coblet_login_begin(
             }
             let method = ExtensionId::new(MICROSOFT_METHOD)
                 .map_err(|error| Failure::new(CobletErrorKind::Other, error.to_string()))?;
-            let flow = handle
-                .runtime
-                .block_on(handle.inner.begin_login(&method, &options))?;
-            let login = Box::new(CobletLogin {
-                runtime: handle.runtime.handle().clone(),
-                coblet: handle.inner.clone(),
-                method,
-                prompt: flow.prompt().clone(),
-                callback: flow.callback().cloned(),
-                flow: Mutex::new(Some(flow)),
-                cancel: CancellationToken::new(),
-            });
-            put(out_login, Box::into_raw(login), "out_login")?;
-            Ok(CobletStatus::Ok)
+            begin(handle, method, &options, out_login)
+        })
+    }
+}
+
+/// Starts a login and writes its handle.
+///
+/// # Safety
+///
+/// `out_login` must be NULL or writable.
+#[allow(unsafe_code, reason = "writes the out-parameter")]
+unsafe fn begin(
+    handle: &Coblet,
+    method: ExtensionId,
+    options: &LoginOptions,
+    out_login: *mut *mut CobletLogin,
+) -> Result<CobletStatus, Failure> {
+    let flow = handle
+        .runtime
+        .block_on(handle.inner.begin_login(&method, options))?;
+    let login = Box::new(CobletLogin {
+        runtime: handle.runtime.handle().clone(),
+        coblet: handle.inner.clone(),
+        method,
+        prompt: flow.prompt().clone(),
+        callback: flow.callback().cloned(),
+        flow: Mutex::new(Some(flow)),
+        cancel: CancellationToken::new(),
+    });
+    let login = Box::into_raw(login);
+    // SAFETY: forwarded from the caller's guarantee.
+    unsafe { put(out_login, login, "out_login") }.inspect_err(|_| {
+        // SAFETY: the handle was created above and never handed out.
+        drop(unsafe { Box::from_raw(login) });
+    })?;
+    Ok(CobletStatus::Ok)
+}
+
+/// Login options handed over as JSON.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OptionsJson {
+    #[serde(default)]
+    interaction: Option<InteractionJson>,
+    #[serde(default)]
+    login_hint: Option<String>,
+    #[serde(default)]
+    params: BTreeMap<String, String>,
+    #[serde(default)]
+    secrets: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum InteractionJson {
+    DeviceCode,
+    Browser,
+    BrowserLoopback {
+        host: String,
+        port: u16,
+        path: String,
+    },
+    BrowserRedirect {
+        redirect_uri: String,
+    },
+}
+
+impl OptionsJson {
+    fn into_options(self) -> LoginOptions {
+        let interaction = match self.interaction {
+            None | Some(InteractionJson::DeviceCode) => Interaction::DeviceCode,
+            Some(InteractionJson::Browser) => Interaction::Browser(Redirect::loopback()),
+            Some(InteractionJson::BrowserLoopback { host, port, path }) => {
+                Interaction::Browser(Redirect::Loopback { host, port, path })
+            }
+            Some(InteractionJson::BrowserRedirect { redirect_uri }) => {
+                Interaction::Browser(Redirect::External { redirect_uri })
+            }
+        };
+        let mut options = LoginOptions::new().with_interaction(interaction);
+        if let Some(hint) = self.login_hint {
+            options = options.with_hint(hint);
+        }
+        for (name, value) in self.params {
+            options = options.with_param(name, value);
+        }
+        for (name, value) in self.secrets {
+            options = options.with_secret(name, Secret::new(value));
+        }
+        options
+    }
+}
+
+/// Starts a login with any auth method, such as `coblet:microsoft` or one
+/// added with `coblet_builder_add_auth_method`.
+///
+/// `options_json` may be NULL or `{"interaction","login_hint","params",
+/// "secrets"}`, every field optional: `interaction` is
+/// `{"type":"device_code"}` (the default), `{"type":"browser"}`,
+/// `{"type":"browser_loopback","host","port","path"}` or
+/// `{"type":"browser_redirect","redirect_uri"}`; `params` and `secrets`
+/// are string maps the method defines, such as the address of a login
+/// server and a password. On success `*out_login` receives a handle as
+/// from `coblet_login_begin`. Fails with `COBLET_ERROR_KIND_NOT_FOUND` for
+/// an unknown method.
+///
+/// # Safety
+///
+/// `coblet` must be a live handle that outlives the login; strings must be
+/// NULL or NUL-terminated; `out_login` must be writable; `out_err` must be
+/// NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_login_begin_with(
+    coblet: *const Coblet,
+    method: *const c_char,
+    options_json: *const c_char,
+    out_login: *mut *mut CobletLogin,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let handle = coblet
+                .as_ref()
+                .ok_or_else(|| Failure::argument("coblet", "is NULL"))?;
+            if out_login.is_null() {
+                return Err(Failure::argument("out_login", "is NULL"));
+            }
+            let method = ExtensionId::new(text(method, "method")?)
+                .map_err(|error| Failure::argument("method", &error.to_string()))?;
+            let options = match optional_text(options_json, "options_json")? {
+                Some(json) => serde_json::from_str::<OptionsJson>(json)
+                    .map_err(|error| Failure::argument("options_json", &error.to_string()))?
+                    .into_options(),
+                None => LoginOptions::new(),
+            };
+            begin(handle, method, &options, out_login)
         })
     }
 }

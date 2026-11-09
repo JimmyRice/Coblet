@@ -19,8 +19,10 @@ launch = ["mojang", "java", "dep:coblet-launch", "dep:coblet-launch-command", "d
 loaders = ["launch", "dep:coblet-loader"]
 # Default transport: reqwest with rustls.
 tls-rustls = ["coblet-runtime/reqwest"]
-# Microsoft login, skins and capes. Launchers pass their own Client ID.
-auth-msa = ["coblet-auth/msa", "dep:coblet-player", "dep:coblet-launch-command"]
+# Skins and capes through appearance services: Minecraft services and authlib-injector compatible skin sites built in.
+appearance = ["dep:coblet-player", "dep:coblet-launch-command"]
+# Microsoft login, with skins and capes. Launchers pass their own Client ID.
+auth-msa = ["coblet-auth/msa", "appearance"]
 # Built-in 127.0.0.1 listener for the browser redirect of a Microsoft login.
 auth-loopback = ["auth-msa", "coblet-auth/loopback"]
 # EncryptedFileStore for tokens.

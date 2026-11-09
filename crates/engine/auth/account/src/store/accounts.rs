@@ -129,6 +129,13 @@ impl AccountStore {
         self.methods.register(method)
     }
 
+    /// Puts an auth method in place of the one with the same ID, such as a
+    /// patched `coblet:microsoft`, and returns the one it replaced. Saved
+    /// accounts of that ID use the new method from then on.
+    pub fn replace(&mut self, method: Arc<dyn AuthMethod>) -> Option<Arc<dyn AuthMethod>> {
+        self.methods.replace(method)
+    }
+
     /// Returns a registered method.
     #[must_use]
     pub fn method(&self, id: &ExtensionId) -> Option<&Arc<dyn AuthMethod>> {
@@ -1078,6 +1085,37 @@ mod tests {
             store.list().await,
             Err(AuthError::AccountFile { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn a_replaced_method_serves_the_saved_accounts() {
+        let fixture = Fixture::new();
+        let mut store = fixture.store_with(Scripted::new(Outcome::Ready));
+        let update = AccountUpdate::new(AccountState::Ready);
+        let account = store
+            .add(&ExtensionId::new("test:scripted").unwrap(), update)
+            .await
+            .unwrap();
+        let revoked = Scripted::new(Outcome::Revoked);
+        let old = store.replace(revoked.clone()).unwrap();
+        assert!(!Arc::ptr_eq(
+            &old,
+            &(revoked.clone() as Arc<dyn AuthMethod>)
+        ));
+        assert!(
+            store
+                .session(&account.id, RefreshMode::Force)
+                .await
+                .is_err()
+        );
+        assert_eq!(revoked.renewals.load(Ordering::SeqCst), 1);
+        let offline = ExtensionId::new(crate::OFFLINE_METHOD).unwrap();
+        assert!(
+            store
+                .replace(Arc::new(crate::OfflineMethod::new()))
+                .is_some()
+        );
+        assert!(store.method(&offline).is_some());
     }
 
     #[tokio::test]

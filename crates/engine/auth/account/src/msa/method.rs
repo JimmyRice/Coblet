@@ -141,6 +141,10 @@ impl Extension for MicrosoftMethod {
 }
 
 impl AuthMethod for MicrosoftMethod {
+    fn appearance_service(&self) -> Option<ExtensionId> {
+        ExtensionId::new(crate::MINECRAFT_SERVICES).ok()
+    }
+
     fn begin<'a>(
         &'a self,
         ctx: &'a AuthCtx,
@@ -355,6 +359,15 @@ mod tests {
 
     fn now() -> SystemTime {
         SystemTime::UNIX_EPOCH + NOW
+    }
+
+    #[test]
+    fn accounts_use_minecraft_services_for_skins_and_capes() {
+        assert_eq!(
+            method().appearance_service().unwrap().as_str(),
+            crate::MINECRAFT_SERVICES
+        );
+        assert!(crate::OfflineMethod::new().appearance_service().is_none());
     }
 
     fn method() -> MicrosoftMethod {

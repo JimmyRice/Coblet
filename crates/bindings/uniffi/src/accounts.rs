@@ -1,14 +1,16 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use coblet::auth::{LoginOptions, MICROSOFT_METHOD};
 use coblet::player::SkinSource;
-use coblet::runtime::HttpUrl;
+use coblet::runtime::{HttpUrl, Secret};
 use coblet::types::{ExtensionId, PlayerName};
 
 use crate::account::account_id;
+use crate::java::extension_id;
 use crate::{
-    AccountInfo, Coblet, CobletError, ErrorKind, GameHandle, LoginFlow, LoginInteraction,
-    PlayerInfo, SkinModel,
+    AccountInfo, AppearanceCapabilities, AppearanceServiceInfo, AuthMethodInfo, Coblet,
+    CobletError, ErrorKind, GameHandle, LoginFlow, LoginInteraction, PlayerInfo, SkinModel,
 };
 
 fn invalid(error: &dyn std::fmt::Display) -> CobletError {
@@ -197,8 +199,59 @@ impl Coblet {
         Ok(accounts.iter().map(AccountInfo::from).collect())
     }
 
-    /// Starts a Microsoft login. Signing in to an account already saved
+    /// Lists the auth methods, such as `coblet:offline`,
+    /// `coblet:microsoft` and those added with
+    /// `CobletBuilder.add_auth_method`.
+    #[must_use]
+    pub fn auth_methods(&self) -> Vec<AuthMethodInfo> {
+        self.inner
+            .auth_methods()
+            .iter()
+            .map(|method| AuthMethodInfo {
+                id: method.id().to_string(),
+                name: method.display_name().to_owned(),
+            })
+            .collect()
+    }
+
+    /// Starts a login with any auth method. Show the flow's prompt, then
+    /// call `LoginFlow.finish`. Signing in to an account already saved
     /// updates it instead of adding a second one.
+    ///
+    /// `params` and `secrets` are inputs the method defines, such as the
+    /// address of a login server and a password; coblet's own methods
+    /// ignore them.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `NotFound` for an unknown method, `Unsupported` for
+    /// Microsoft login without a Client ID, and with the method's own
+    /// error when it cannot start.
+    pub async fn begin_login(
+        &self,
+        method: String,
+        interaction: LoginInteraction,
+        login_hint: Option<String>,
+        params: HashMap<String, String>,
+        secrets: HashMap<String, String>,
+    ) -> Result<Arc<LoginFlow>, CobletError> {
+        let method = extension_id("auth method", &method)?;
+        let mut options = LoginOptions::new().with_interaction(interaction.into());
+        if let Some(hint) = login_hint {
+            options = options.with_hint(hint);
+        }
+        for (name, value) in params {
+            options = options.with_param(name, value);
+        }
+        for (name, value) in secrets {
+            options = options.with_secret(name, Secret::new(value));
+        }
+        let flow = self.inner.begin_login(&method, &options).await?;
+        Ok(Arc::new(LoginFlow::new(self.inner.clone(), method, flow)))
+    }
+
+    /// Starts a Microsoft login, like `begin_login` with
+    /// `coblet:microsoft`.
     ///
     /// `login_hint` pre-fills the e-mail address on the sign-in page.
     ///
@@ -212,13 +265,14 @@ impl Coblet {
         interaction: LoginInteraction,
         login_hint: Option<String>,
     ) -> Result<Arc<LoginFlow>, CobletError> {
-        let mut options = LoginOptions::new().with_interaction(interaction.into());
-        if let Some(hint) = login_hint {
-            options = options.with_hint(hint);
-        }
-        let method = ExtensionId::new(MICROSOFT_METHOD).map_err(|error| invalid(&error))?;
-        let flow = self.inner.begin_login(&method, &options).await?;
-        Ok(Arc::new(LoginFlow::new(self.inner.clone(), method, flow)))
+        self.begin_login(
+            MICROSOFT_METHOD.to_owned(),
+            interaction,
+            login_hint,
+            HashMap::new(),
+            HashMap::new(),
+        )
+        .await
     }
 
     /// Fetches the account's player profile (name, UUID, skins and capes)
@@ -254,6 +308,39 @@ impl Coblet {
         Ok(self.inner.download_texture(&url).await?)
     }
 
+    /// Lists the appearance services, such as
+    /// `coblet:minecraft-services` and those added with
+    /// `CobletBuilder.add_appearance_service`.
+    #[must_use]
+    pub fn appearance_services(&self) -> Vec<AppearanceServiceInfo> {
+        self.inner
+            .appearance_services()
+            .iter()
+            .map(|service| AppearanceServiceInfo {
+                id: service.id().to_string(),
+                name: service.display_name().to_owned(),
+            })
+            .collect()
+    }
+
+    /// Returns what the account's appearance service can change, so the
+    /// launcher shows only the controls that work; all off for accounts
+    /// without a service, such as offline ones.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `NotFound` for an unknown account.
+    pub async fn appearance_capabilities(
+        &self,
+        id: String,
+    ) -> Result<AppearanceCapabilities, CobletError> {
+        let caps = self
+            .inner
+            .appearance_capabilities(&account_id(&id)?)
+            .await?;
+        Ok(caps.into())
+    }
+
     /// Uploads a PNG skin, 64x64 or 64x32, and wears it. Like the other
     /// skin and cape calls it returns the new player profile and saves it.
     ///
@@ -273,7 +360,8 @@ impl Coblet {
         Ok(PlayerInfo::from(&profile))
     }
 
-    /// Wears the skin at a public URL, which Minecraft services download.
+    /// Wears the skin at a public URL, which the account's appearance
+    /// service downloads.
     ///
     /// # Errors
     ///

@@ -42,6 +42,9 @@ pub struct OnlineSession {
     pub xuid: Option<Credential>,
     /// Client ID passed to the game.
     pub client_id: Option<Credential>,
+    /// Value of `${user_type}`, such as `mojang` for an authlib-injector
+    /// compatible login; `msa` when `None`.
+    pub user_type: Option<String>,
 }
 
 impl OnlineSession {
@@ -54,7 +57,15 @@ impl OnlineSession {
             access_token,
             xuid: None,
             client_id: None,
+            user_type: None,
         }
+    }
+
+    /// Sets `${user_type}`.
+    #[must_use]
+    pub fn with_user_type(mut self, user_type: impl Into<String>) -> Self {
+        self.user_type = Some(user_type.into());
+        self
     }
 }
 

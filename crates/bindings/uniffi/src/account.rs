@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::SystemTime;
 
 use coblet::auth::{Account, AccountId, Cape, Interaction, PlayerProfile, Redirect, Skin};
@@ -29,6 +30,18 @@ impl From<coblet::auth::AccountState> for AccountState {
             State::NoLicense => Self::NoLicense,
             State::NoProfile => Self::NoProfile,
             _ => Self::Ready,
+        }
+    }
+}
+
+impl From<AccountState> for coblet::auth::AccountState {
+    fn from(state: AccountState) -> Self {
+        match state {
+            AccountState::Ready => Self::Ready,
+            AccountState::NeedsRefresh => Self::NeedsRefresh,
+            AccountState::NeedsReauth => Self::NeedsReauth,
+            AccountState::NoLicense => Self::NoLicense,
+            AccountState::NoProfile => Self::NoProfile,
         }
     }
 }
@@ -155,6 +168,33 @@ impl From<&PlayerProfile> for PlayerInfo {
     }
 }
 
+impl TryFrom<PlayerInfo> for PlayerProfile {
+    type Error = CobletError;
+
+    fn try_from(info: PlayerInfo) -> Result<Self, CobletError> {
+        let invalid = |error: &dyn std::fmt::Display| {
+            CobletError::new(ErrorKind::InvalidArgument, format!("player: {error}"))
+        };
+        let url = |url: String| coblet::runtime::HttpUrl::new(url).map_err(|error| invalid(&error));
+        let name = coblet::types::PlayerName::new(info.name).map_err(|error| invalid(&error))?;
+        let mut profile = Self::new(name, &info.uuid).map_err(|error| invalid(&error))?;
+        for skin in info.skins {
+            profile.skins.push(Skin::new(
+                skin.id,
+                url(skin.url)?,
+                skin.model.into(),
+                skin.active,
+            ));
+        }
+        for cape in info.capes {
+            profile
+                .capes
+                .push(Cape::new(cape.id, cape.alias, url(cape.url)?, cape.active));
+        }
+        Ok(profile)
+    }
+}
+
 /// Saved account.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct AccountInfo {
@@ -176,6 +216,9 @@ pub struct AccountInfo {
     /// Whether the last check found that the account bought the game, like
     /// Prism Launcher's "owns Minecraft". False for subscriptions.
     pub owns_game: bool,
+    /// Non-sensitive values its auth method keeps, such as the address of
+    /// a login server.
+    pub data: HashMap<String, String>,
 }
 
 impl From<&Account> for AccountInfo {
@@ -189,6 +232,7 @@ impl From<&Account> for AccountInfo {
             license: account.license.map(|check| check.license.into()),
             license_checked_at: account.license.map(|check| check.checked_at),
             owns_game: account.owns_game(),
+            data: account.data.clone().into_iter().collect(),
         }
     }
 }

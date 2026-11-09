@@ -685,7 +685,7 @@ pub unsafe extern "C" fn coblet_builder_add_java_directory(
 ///
 /// `coblet` must be NULL or a live handle.
 #[allow(unsafe_code, reason = "reads a handle argument")]
-unsafe fn handle<'a>(coblet: *const Coblet) -> Result<&'a Coblet, Failure> {
+pub(crate) unsafe fn handle<'a>(coblet: *const Coblet) -> Result<&'a Coblet, Failure> {
     // SAFETY: forwarded from the caller's guarantee.
     unsafe { coblet.as_ref() }.ok_or_else(|| Failure::argument("coblet", "is NULL"))
 }
@@ -696,7 +696,7 @@ unsafe fn handle<'a>(coblet: *const Coblet) -> Result<&'a Coblet, Failure> {
 ///
 /// `out_json` must be NULL or writable.
 #[allow(unsafe_code, reason = "writes the out-parameter")]
-unsafe fn put_json(
+pub(crate) unsafe fn put_json(
     out_json: *mut CobletString,
     mut json: serde_json::Value,
 ) -> Result<CobletStatus, Failure> {
@@ -708,7 +708,7 @@ unsafe fn put_json(
     Ok(CobletStatus::Ok)
 }
 
-fn extension_json(extension: &dyn Extension) -> serde_json::Value {
+pub(crate) fn extension_json(extension: &dyn Extension) -> serde_json::Value {
     serde_json::json!({ "id": extension.id().as_str(), "name": extension.display_name() })
 }
 

@@ -37,7 +37,7 @@
 #![forbid(unsafe_code)]
 
 mod accounts;
-#[cfg(feature = "auth-msa")]
+#[cfg(feature = "appearance")]
 mod appearance;
 mod builder;
 mod context;
@@ -70,7 +70,7 @@ pub use coblet_loader as loader;
 pub use coblet_mojang as mojang;
 #[cfg(feature = "launch")]
 pub use coblet_platform as platform;
-#[cfg(feature = "auth-msa")]
+#[cfg(feature = "appearance")]
 pub use coblet_player as player;
 pub use coblet_runtime as runtime;
 pub use coblet_types as types;

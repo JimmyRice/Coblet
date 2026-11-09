@@ -5,7 +5,7 @@ use coblet::platform::ProfileError;
 use coblet::player::PlayerError;
 
 /// Version of the C ABI; it grows with every incompatible change.
-pub const COBLET_ABI_VERSION: u32 = 16;
+pub const COBLET_ABI_VERSION: u32 = 17;
 
 /// Result of a call.
 #[repr(C)]
@@ -296,8 +296,10 @@ fn auth_kind(error: &AuthError) -> CobletErrorKind {
 fn player_kind(error: &PlayerError) -> CobletErrorKind {
     match error {
         PlayerError::Unauthorized => CobletErrorKind::Auth,
-        PlayerError::Offline => CobletErrorKind::Unsupported,
-        PlayerError::InvalidSkin(_) | PlayerError::CapeNotOwned(_) => {
+        PlayerError::Offline | PlayerError::Unsupported { .. } | PlayerError::NoService(_) => {
+            CobletErrorKind::Unsupported
+        }
+        PlayerError::Definition(_) | PlayerError::InvalidSkin(_) | PlayerError::CapeNotOwned(_) => {
             CobletErrorKind::InvalidArgument
         }
         PlayerError::NoSkin => CobletErrorKind::InvalidState,

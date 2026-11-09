@@ -7,7 +7,7 @@ use coblet_runtime::{Clock, HttpUrl, Storage, SystemClock};
 use coblet_types::PlayerName;
 use serde::{Deserialize, Serialize};
 
-use crate::{Player, PlayerError, check_skin_png};
+use crate::{MinecraftServices, PlayerError, check_skin_png};
 
 const INDEX: &str = "index.json";
 const FORMAT: u32 = 1;
@@ -49,7 +49,7 @@ pub struct LibrarySkin {
 /// UI draws previews.
 pub struct SkinLibrary {
     storage: Arc<dyn Storage>,
-    player: Player,
+    player: MinecraftServices,
     dir: PathBuf,
     clock: Arc<dyn Clock>,
     writer: tokio::sync::Mutex<()>,
@@ -82,7 +82,11 @@ enum RawOrigin {
 impl SkinLibrary {
     /// Opens the library in `dir`; nothing is created before the first import.
     #[must_use]
-    pub fn new(storage: Arc<dyn Storage>, player: Player, dir: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        storage: Arc<dyn Storage>,
+        player: MinecraftServices,
+        dir: impl Into<PathBuf>,
+    ) -> Self {
         Self {
             storage,
             player,
@@ -355,12 +359,12 @@ mod tests {
     use super::{SkinLibrary, SkinOrigin};
     use crate::mock::Mock;
     use crate::png::sample;
-    use crate::{Player, PlayerError};
+    use crate::{MinecraftServices, PlayerError};
 
     fn library(mock: &Arc<Mock>, dir: &tempfile::TempDir) -> SkinLibrary {
         SkinLibrary::new(
             Arc::new(TokioStorage::new()),
-            Player::new(mock.clone()),
+            MinecraftServices::new(mock.clone()),
             dir.path().join("skins"),
         )
     }

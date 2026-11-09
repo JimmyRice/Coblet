@@ -72,3 +72,17 @@ pub(crate) fn url(url: &str) -> Result<HttpUrl, PlayerError> {
         message: error.to_string(),
     })
 }
+
+/// Builds a `multipart/form-data` body with one text field and a PNG file
+/// named `skin.png` in the field `file`.
+pub(crate) fn multipart(boundary: &str, field: &str, value: &str, png: &[u8]) -> Vec<u8> {
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"\r\n\r\n{value}\r\n\
+         --{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"skin.png\"\r\n\
+         Content-Type: image/png\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(png);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}

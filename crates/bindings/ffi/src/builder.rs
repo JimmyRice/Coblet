@@ -39,6 +39,10 @@ pub struct CobletBuilder {
     pub(crate) traits: Vec<crate::traits::TraitChange>,
     /// Launch step and placeholder changes in order.
     pub(crate) launch: Vec<crate::steps::LaunchChange>,
+    /// Auth methods in order, with whether each replaces one of the same ID.
+    pub(crate) auth_methods: Vec<(Arc<dyn coblet::auth::AuthMethod>, bool)>,
+    /// Appearance service changes in order.
+    pub(crate) appearance: Vec<crate::appearance::AppearanceSetting>,
 }
 
 /// Flag of `coblet_builder_add_mirror`: metadata documents from the mirror
@@ -135,6 +139,8 @@ pub unsafe extern "C" fn coblet_builder_new(
                 java: Vec::new(),
                 traits: Vec::new(),
                 launch: Vec::new(),
+                auth_methods: Vec::new(),
+                appearance: Vec::new(),
             });
             put(out_builder, Box::into_raw(builder), "out_builder")?;
             Ok(CobletStatus::Ok)
@@ -648,6 +654,8 @@ pub unsafe extern "C" fn coblet_builder_build(
                 java,
                 traits,
                 launch,
+                auth_methods,
+                appearance,
             } = *builder;
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -671,6 +679,16 @@ pub unsafe extern "C" fn coblet_builder_build(
             }
             if let Some(client_id) = msa_client_id {
                 options = options.msa_client_id(client_id);
+            }
+            for (method, replace) in auth_methods {
+                options = if replace {
+                    options.replace_auth_method(method)
+                } else {
+                    options.auth_method(method)
+                };
+            }
+            for change in appearance {
+                options = change.apply(options);
             }
             for rewriter in rewriters {
                 options = options.url_rewriter(rewriter);

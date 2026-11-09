@@ -67,6 +67,6 @@ pub use msa::{
 };
 pub use offline::{OFFLINE_METHOD, OfflineMethod};
 pub use secrets::AccountSecrets;
-pub use services::ProfileJsonError;
+pub use services::{MINECRAFT_SERVICES, ProfileJsonError};
 pub use session::LaunchSession;
 pub use store::{ACCOUNTS_FILE, AccountStore};

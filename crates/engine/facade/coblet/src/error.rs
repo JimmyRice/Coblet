@@ -53,7 +53,7 @@ pub enum Error {
     #[error(transparent)]
     Auth(#[from] coblet_auth::AuthError),
     /// A skin or cape change failed.
-    #[cfg(feature = "auth-msa")]
+    #[cfg(feature = "appearance")]
     #[error(transparent)]
     Player(#[from] coblet_player::PlayerError),
 }

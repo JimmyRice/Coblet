@@ -4,6 +4,10 @@ use serde::Deserialize;
 
 use crate::{Cape, PlayerProfile, Skin, SkinModel};
 
+/// ID of the built-in appearance service for skins and capes on Minecraft
+/// services, the one Microsoft accounts use.
+pub const MINECRAFT_SERVICES: &str = "coblet:minecraft-services";
+
 /// Reason a Minecraft services profile document was rejected.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("invalid minecraft profile: {0}")]
