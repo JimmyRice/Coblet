@@ -123,6 +123,48 @@ impl AppearanceCaps {
         }
     }
 
+    /// Sets whether the service uploads skins from PNG bytes.
+    #[must_use]
+    pub fn with_upload_png(mut self, on: bool) -> Self {
+        self.upload_png = on;
+        self
+    }
+
+    /// Sets whether the service uploads skins from a public URL.
+    #[must_use]
+    pub fn with_upload_url(mut self, on: bool) -> Self {
+        self.upload_url = on;
+        self
+    }
+
+    /// Sets whether the service switches between the Classic and Slim models.
+    #[must_use]
+    pub fn with_set_model(mut self, on: bool) -> Self {
+        self.set_model = on;
+        self
+    }
+
+    /// Sets whether the service goes back to the default skin.
+    #[must_use]
+    pub fn with_reset_skin(mut self, on: bool) -> Self {
+        self.reset_skin = on;
+        self
+    }
+
+    /// Sets whether the service shows one of the capes the account owns.
+    #[must_use]
+    pub fn with_choose_cape(mut self, on: bool) -> Self {
+        self.choose_cape = on;
+        self
+    }
+
+    /// Sets whether the service hides the cape.
+    #[must_use]
+    pub fn with_hide_cape(mut self, on: bool) -> Self {
+        self.hide_cape = on;
+        self
+    }
+
     /// Returns whether a skin from `source` can be uploaded.
     #[must_use]
     pub fn uploads(&self, source: &SkinSource) -> bool {

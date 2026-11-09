@@ -20,6 +20,10 @@ pub enum PlayerError {
         /// What was asked, such as `reset skins`.
         operation: &'static str,
     },
+    /// The account's auth method has no appearance service, and none is
+    /// bound to it.
+    #[error("accounts of `{0}` have no appearance service")]
+    NoService(ExtensionId),
     /// An appearance service definition is malformed.
     #[error("invalid appearance service definition: {0}")]
     Definition(String),

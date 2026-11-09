@@ -213,7 +213,10 @@ impl VersionSettings {
 #[derive(Default)]
 struct AuthSettings {
     secrets: Option<Arc<dyn SecretStore>>,
-    methods: Vec<Arc<dyn AuthMethod>>,
+    /// Auth methods and whether each replaces one with the same ID.
+    methods: Vec<(Arc<dyn AuthMethod>, bool)>,
+    #[cfg(feature = "appearance")]
+    appearance: crate::appearance::AppearanceSettings,
     #[cfg(feature = "auth-msa")]
     msa: Option<coblet_auth::MsaConfig>,
 }
@@ -346,7 +349,86 @@ impl<State> CobletBuilder<State> {
 
     /// Registers an auth method, such as a third-party login server.
     pub fn auth_method(mut self, method: Arc<dyn AuthMethod>) -> Self {
-        self.auth.methods.push(method);
+        self.auth.methods.push((method, false));
+        self
+    }
+
+    /// Puts an auth method in place of the one with the same ID, such as
+    /// a patched `coblet:microsoft` or `coblet:offline`; accounts already
+    /// saved with that ID use it from then on.
+    pub fn replace_auth_method(mut self, method: Arc<dyn AuthMethod>) -> Self {
+        self.auth.methods.push((method, true));
+        self
+    }
+
+    /// Adds an appearance service for skins and capes, such as a skin
+    /// site; bind auth methods to it with
+    /// [`appearance_for`](Self::appearance_for) or let the methods name it.
+    #[cfg(feature = "appearance")]
+    pub fn appearance_service(
+        mut self,
+        service: Arc<dyn coblet_player::AppearanceService>,
+    ) -> Self {
+        self.auth
+            .appearance
+            .push(crate::appearance::AppearanceChange::Register(service));
+        self
+    }
+
+    /// Puts an appearance service in place of the one with the same ID,
+    /// such as the built-in `coblet:minecraft-services`.
+    #[cfg(feature = "appearance")]
+    pub fn replace_appearance_service(
+        mut self,
+        service: Arc<dyn coblet_player::AppearanceService>,
+    ) -> Self {
+        self.auth
+            .appearance
+            .push(crate::appearance::AppearanceChange::Replace(service));
+        self
+    }
+
+    /// Removes an appearance service; an unknown ID is ignored.
+    #[cfg(feature = "appearance")]
+    pub fn without_appearance_service(mut self, id: coblet_types::ExtensionId) -> Self {
+        self.auth
+            .appearance
+            .push(crate::appearance::AppearanceChange::Remove(id));
+        self
+    }
+
+    /// Adds an appearance service from a TOML definition, such as an
+    /// authlib-injector compatible skin site; see
+    /// [`YggdrasilAppearance`](coblet_player::YggdrasilAppearance).
+    #[cfg(feature = "appearance")]
+    pub fn appearance_service_toml(mut self, definition: impl Into<String>) -> Self {
+        self.auth
+            .appearance
+            .push(crate::appearance::AppearanceChange::Toml(definition.into()));
+        self
+    }
+
+    /// Adds an appearance service from a JSON definition with the fields
+    /// of the TOML form.
+    #[cfg(feature = "appearance")]
+    pub fn appearance_service_json(mut self, definition: impl Into<String>) -> Self {
+        self.auth
+            .appearance
+            .push(crate::appearance::AppearanceChange::Json(definition.into()));
+        self
+    }
+
+    /// Shows and changes the skins and capes of `method`'s accounts with
+    /// `service`, instead of the service the method names.
+    #[cfg(feature = "appearance")]
+    pub fn appearance_for(
+        mut self,
+        method: coblet_types::ExtensionId,
+        service: coblet_types::ExtensionId,
+    ) -> Self {
+        self.auth
+            .appearance
+            .push(crate::appearance::AppearanceChange::Bind(method, service));
         self
     }
 
@@ -1150,8 +1232,12 @@ impl CobletBuilder<WithRoot> {
         if let Some(config) = self.auth.msa.take() {
             store.register(Arc::new(coblet_auth::MicrosoftMethod::new(config)))?;
         }
-        for method in std::mem::take(&mut self.auth.methods) {
-            store.register(method)?;
+        for (method, replace) in std::mem::take(&mut self.auth.methods) {
+            if replace {
+                store.replace(method);
+            } else {
+                store.register(method)?;
+            }
         }
         Ok(store)
     }
@@ -1309,7 +1395,11 @@ impl CobletBuilder<WithRoot> {
     /// Returns [`Error::Config`] without a transport or User-Agent,
     /// [`Error::Transport`] when the default transport cannot start,
     /// [`Error::Platform`] when the platform cannot be detected and
-    /// [`Error::Registry`] when two customizers or two auth methods share an ID,
+    /// [`Error::Registry`] when two customizers, two auth methods or two
+    /// appearance services share an ID, [`Error::Player`] for a malformed
+    /// appearance service definition, [`Error::Unsupported`] when
+    /// [`appearance_for`](CobletBuilder::appearance_for) names a service
+    /// that is not registered,
     /// [`Error::Launch`] when [`allow_auth_changes`](CobletBuilder::allow_auth_changes)
     /// names a customizer that is not registered, [`Error::Profile`]
     /// when two Platform Profiles share an ID, and, with the `loaders`
@@ -1384,18 +1474,22 @@ impl CobletBuilder<WithRoot> {
         #[cfg(feature = "java")]
         let (java, java_locators) = self.java(&data_root, &downloader, &storage)?;
         let accounts = self.accounts(&data_root, &transport, &storage, &events)?;
-        #[cfg(feature = "auth-msa")]
+        #[cfg(feature = "appearance")]
         let skins = coblet_player::SkinLibrary::new(
             Arc::clone(&storage),
             coblet_player::MinecraftServices::new(Arc::clone(&transport)),
             data_root.join("skins"),
         );
+        #[cfg(feature = "appearance")]
+        let appearance = std::mem::take(&mut self.auth.appearance).build(&transport)?;
         #[cfg(feature = "mojang")]
         let versions = self.versions.catalog(meta.clone(), events.clone())?;
         Ok(Coblet::from_inner(Inner {
             accounts,
-            #[cfg(feature = "auth-msa")]
+            #[cfg(feature = "appearance")]
             skins,
+            #[cfg(feature = "appearance")]
+            appearance,
             data_root,
             transport,
             storage,

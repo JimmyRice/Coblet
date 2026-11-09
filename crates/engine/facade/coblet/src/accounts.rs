@@ -20,6 +20,13 @@ impl Coblet {
         &self.inner.accounts
     }
 
+    /// Returns the auth methods, such as `coblet:offline` and the ones
+    /// added with [`auth_method`](crate::CobletBuilder::auth_method).
+    #[must_use]
+    pub fn auth_methods(&self) -> &coblet_runtime::Registry<dyn coblet_auth::AuthMethod> {
+        self.inner.accounts.methods()
+    }
+
     /// Starts a login with `method`, such as `coblet:offline` or
     /// `coblet:microsoft`. Show the flow's prompt, then pass the flow to
     /// [`finish_login`](Self::finish_login).
@@ -353,12 +360,16 @@ mod tests {
                 id: ExtensionId::new("test:rotating").unwrap(),
                 forced: AtomicUsize::new(0),
             });
+            let id = ExtensionId::new("test:rotating").unwrap();
             let coblet = builder(dir.path())
                 .transport(services.clone())
                 .auth_method(method.clone())
+                .appearance_for(
+                    id.clone(),
+                    ExtensionId::new(coblet_auth::MINECRAFT_SERVICES).unwrap(),
+                )
                 .build()
                 .unwrap();
-            let id = ExtensionId::new("test:rotating").unwrap();
             let flow = coblet.begin_login(&id, &LoginOptions::new()).await.unwrap();
             let account = coblet.finish_login(&id, flow).await.unwrap();
             assert_eq!(account.profile.as_ref().unwrap().capes.len(), 0);
