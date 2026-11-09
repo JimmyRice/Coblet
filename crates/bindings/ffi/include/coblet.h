@@ -460,7 +460,8 @@ typedef struct CobletStep {
   // `info_json` is `{"schema":1,"game_version","traits":[],"data_root",
   // "game_dir","java","java_major","natives_dir","client_jar",
   // "game_assets","jvm_args":[],"placeholders":{}}`, with `null` for
-  // values not known yet. What the step sets with the
+  // values not known yet; `jvm_args` holds the JVM arguments earlier
+  // steps added, such as the log configuration. What the step sets with the
   // `coblet_step_ctx_*` functions takes effect for the later steps when
   // it returns true. Returning false stops the launch; call
   // `coblet_step_ctx_fail` first to give the reason.
