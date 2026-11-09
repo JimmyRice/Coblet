@@ -10,7 +10,9 @@ use coblet_platform::EffectiveLaunchProfile;
 use coblet_runtime::{BoxFuture, CancellationToken, EventBus, ProcessSpawner, Storage};
 use coblet_types::OsFamily;
 
-use crate::{GameLayout, GameSession, LaunchError, LaunchRequest};
+use crate::{
+    GameLayout, GameSession, LaunchError, LaunchRequest, PlaceholderSources, Placeholders,
+};
 
 /// One stage of a launch, such as selecting Java or extracting natives.
 ///
@@ -44,6 +46,8 @@ pub struct LaunchServices {
     pub os: OsFamily,
     /// Event stream that receives game log lines.
     pub events: Option<EventBus>,
+    /// Sources `resolve-placeholders` asks for missing placeholder values.
+    pub placeholder_sources: PlaceholderSources,
 }
 
 impl LaunchServices {
@@ -65,6 +69,7 @@ impl LaunchServices {
             java_installer: None,
             os,
             events: None,
+            placeholder_sources: PlaceholderSources::new(),
         }
     }
 
@@ -86,6 +91,15 @@ impl LaunchServices {
         }
     }
 
+    /// Asks `sources` for placeholder values nothing else set.
+    #[must_use]
+    pub fn with_placeholder_sources(self, placeholder_sources: PlaceholderSources) -> Self {
+        Self {
+            placeholder_sources,
+            ..self
+        }
+    }
+
     /// Publishes game log lines to `events`.
     #[must_use]
     pub fn with_events(self, events: EventBus) -> Self {
@@ -101,6 +115,7 @@ impl fmt::Debug for LaunchServices {
         f.debug_struct("LaunchServices")
             .field("os", &self.os)
             .field("java_locators", &self.java_locators)
+            .field("placeholder_sources", &self.placeholder_sources)
             .finish_non_exhaustive()
     }
 }
@@ -129,6 +144,9 @@ pub struct LaunchContext {
     pub client_jar: Option<PathBuf>,
     /// JVM arguments added by steps, such as the log configuration.
     pub jvm_args: Vec<String>,
+    /// Values of placeholders coblet does not fill itself; `build-command`
+    /// uses them.
+    pub placeholders: Placeholders,
     /// Command built by `build-command`.
     pub command: Option<LaunchCommand>,
     /// Session started by `spawn`.
@@ -155,6 +173,7 @@ impl LaunchContext {
             natives_directory: None,
             client_jar: None,
             jvm_args: Vec::new(),
+            placeholders: Placeholders::new(),
             command: None,
             session: None,
         }

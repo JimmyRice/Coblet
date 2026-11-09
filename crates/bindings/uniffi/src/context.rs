@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use coblet::catalog::Filter;
@@ -72,6 +73,10 @@ pub struct LaunchOptions {
     /// Mod Loader version to launch with; the plain game when absent.
     #[uniffi(default = None)]
     pub loader: Option<crate::LoaderChoice>,
+    /// Values of `${name}` placeholders coblet does not fill itself, for
+    /// this launch; they replace those of `CobletBuilder.add_placeholder`.
+    #[uniffi(default)]
+    pub placeholders: HashMap<String, String>,
 }
 
 /// Platform as Platform Profiles see it.
@@ -203,6 +208,7 @@ impl Coblet {
             customizers: Vec::new(),
             operation_id: None,
             loader: None,
+            placeholders: HashMap::new(),
         };
         self.launch_with(version_id, options).await
     }
@@ -233,6 +239,10 @@ impl Coblet {
         for id in options.customizers {
             request =
                 request.with_customizer(ExtensionId::new(id).map_err(|error| invalid(&error))?);
+        }
+        for (name, value) in options.placeholders {
+            crate::placeholders::placeholder_name(&name)?;
+            request = request.with_placeholder(name, value);
         }
         let game_dir = options.game_dir.map_or_else(
             || self.inner.data_root().join("games").join(&version_id),

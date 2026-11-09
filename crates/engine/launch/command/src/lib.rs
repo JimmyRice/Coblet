@@ -23,6 +23,9 @@ pub use builder::{
 pub use command::{ArgFile, Exposed, LaunchCommand};
 pub use error::CommandError;
 pub use options::LaunchOptions;
-pub use placeholder::{PlaceholderResolver, UnknownPlaceholder};
+pub use placeholder::{
+    BUILTIN_PLACEHOLDERS, PlaceholderResolver, UnknownPlaceholder, is_builtin_placeholder,
+    placeholder_names,
+};
 pub use profile::{CommandProfile, EnvChange, FeatureClause, FeatureCondition, TemplateArg};
 pub use values::{AssetsLocation, JavaExecutable, MainClass, Memory, QuickPlay, Resolution};

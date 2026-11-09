@@ -736,4 +736,25 @@ mod tests {
             .unwrap_err();
         assert_eq!(error, CommandError::Missing("game directory"));
     }
+
+    #[test]
+    fn every_filled_placeholder_is_listed_as_builtin() {
+        for quick_play in [
+            QuickPlay::Singleplayer("w".to_owned()),
+            QuickPlay::Multiplayer("s".to_owned()),
+            QuickPlay::Realms("r".to_owned()),
+        ] {
+            let builder = base(LaunchAuth::offline(steve()))
+                .assets(AssetsLocation::new("/assets", "5"))
+                .resolution(Resolution {
+                    width: 854,
+                    height: 480,
+                })
+                .quick_play(quick_play);
+            let (table, _) = builder.parts.table(&LaunchAuth::offline(steve()));
+            for name in table.keys() {
+                assert!(crate::is_builtin_placeholder(name), "{name}");
+            }
+        }
+    }
 }

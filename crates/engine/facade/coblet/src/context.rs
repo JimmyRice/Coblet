@@ -49,6 +49,9 @@ pub(crate) struct Inner {
     pub(crate) versions: crate::versions::VersionCatalog,
     #[cfg(feature = "launch")]
     pub(crate) launcher: coblet_launch::Launcher,
+    /// Sources asked for placeholders nothing else set.
+    #[cfg(feature = "launch")]
+    pub(crate) placeholder_sources: coblet_launch::PlaceholderSources,
     #[cfg(feature = "launch")]
     pub(crate) profiles: coblet_platform::ProfileEngine,
     #[cfg(feature = "loaders")]
@@ -168,6 +171,13 @@ impl Coblet {
     #[must_use]
     pub fn launcher(&self) -> &coblet_launch::Launcher {
         &self.inner.launcher
+    }
+
+    /// Returns the placeholder sources, in the order they are asked.
+    #[cfg(feature = "launch")]
+    #[must_use]
+    pub fn placeholder_sources(&self) -> &coblet_launch::PlaceholderSources {
+        &self.inner.placeholder_sources
     }
 
     /// Subscribes to events: Operation and launch progress, file transfer
@@ -639,5 +649,133 @@ source = "system-only"
         assert!(on.downloader().rewriters().falls_back());
         assert!(!off.meta().rewriters().falls_back());
         assert!(!off.downloader().rewriters().falls_back());
+    }
+
+    struct Named(&'static str);
+
+    impl coblet_launch::LaunchStep for Named {
+        fn name(&self) -> &str {
+            self.0
+        }
+
+        fn run<'a>(
+            &'a self,
+            _cx: &'a mut coblet_launch::LaunchContext,
+        ) -> coblet_runtime::BoxFuture<'a, Result<(), coblet_launch::LaunchError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    struct Brand(ExtensionId);
+
+    impl coblet_runtime::Extension for Brand {
+        fn id(&self) -> &ExtensionId {
+            &self.0
+        }
+
+        fn display_name(&self) -> &'static str {
+            "Brand"
+        }
+    }
+
+    impl coblet_launch::PlaceholderSource for Brand {
+        fn resolve<'a>(
+            &'a self,
+            _names: &'a [String],
+            _cx: &'a coblet_launch::PlaceholderCtx,
+        ) -> coblet_runtime::BoxFuture<
+            'a,
+            Result<std::collections::BTreeMap<String, String>, coblet_launch::LaunchError>,
+        > {
+            Box::pin(async { Ok(std::collections::BTreeMap::new()) })
+        }
+    }
+
+    #[test]
+    fn launch_steps_and_placeholders_apply_in_order() {
+        use coblet_launch::step_names;
+        let builder = || {
+            Coblet::builder()
+                .data_root("/tmp/x")
+                .transport(Arc::new(Fixtures))
+                .platform(Platform::new(OsFamily::Linux, Arch::X86_64))
+        };
+        let a = ExtensionId::new("acme:a").unwrap();
+        let b = ExtensionId::new("acme:b").unwrap();
+        let coblet = builder()
+            .launch_step_before(step_names::BUILD_COMMAND, Arc::new(Named("acme-proxy")))
+            .launch_step_after("acme-proxy", Arc::new(Named("acme-after")))
+            .replace_launch_step(step_names::CLIENT_JAR, Arc::new(Named("acme-jar")))
+            .without_launch_step(step_names::LOGGING_CONFIG)
+            .placeholder("acme_server", "play.acme.net")
+            .placeholder_source(Arc::new(Brand(a.clone())))
+            .placeholder_source(Arc::new(Brand(b.clone())))
+            .without_placeholder_source(a.clone())
+            .replace_placeholder_source(Arc::new(Brand(a.clone())))
+            .unknown_placeholders(coblet_launch_command::UnknownPlaceholder::Keep)
+            .build()
+            .unwrap();
+        let names = coblet.launcher().names();
+        assert_eq!(
+            names,
+            [
+                "select-java",
+                "verify-files",
+                "prepare-natives",
+                "acme-jar",
+                "legacy-fml-libs",
+                "pre-launch",
+                "resolve-placeholders",
+                "acme-proxy",
+                "acme-after",
+                "build-command",
+                "spawn"
+            ]
+        );
+        assert_eq!(
+            coblet.launcher().placeholders()["acme_server"],
+            "play.acme.net"
+        );
+        assert_eq!(
+            coblet.launcher().unknown_placeholders(),
+            coblet_launch_command::UnknownPlaceholder::Keep
+        );
+        let order: Vec<_> = coblet
+            .placeholder_sources()
+            .iter()
+            .map(|source| source.id().clone())
+            .collect();
+        assert_eq!(order, [b.clone(), a.clone()]);
+        let services = coblet.launch_services();
+        assert_eq!(services.placeholder_sources.iter().len(), 2);
+
+        let error = builder()
+            .without_launch_step("acme-missing")
+            .build()
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Launch(coblet_launch::LaunchError::UnknownStep(_))
+            ),
+            "{error}"
+        );
+        let error = builder()
+            .placeholder("auth_access_token", "x")
+            .build()
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Launch(coblet_launch::LaunchError::InvalidPlaceholder { .. })
+            ),
+            "{error}"
+        );
+        let error = builder()
+            .placeholder_source(Arc::new(Brand(b.clone())))
+            .placeholder_source(Arc::new(Brand(b)))
+            .build()
+            .unwrap_err();
+        assert!(matches!(error, Error::Registry(_)), "{error}");
     }
 }

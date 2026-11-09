@@ -41,6 +41,10 @@
 // place of the one registered under the same ID instead of failing.
 #define COBLET_LOADER_REPLACE 1
 
+// Flag of `coblet_builder_add_placeholder_source`: put the source in
+// place of the one with the same ID, keeping its place, instead of failing.
+#define COBLET_PLACEHOLDER_REPLACE 1
+
 // Size in bytes of a key for `coblet_builder_set_encrypted_secret_file`.
 #define COBLET_SECRET_KEY_LEN 32
 
@@ -50,7 +54,7 @@
 #define COBLET_TRAITS_REPLACE 1
 
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 15
+#define COBLET_ABI_VERSION 16
 
 // Flag of `coblet_builder_add_version_source`,
 // `coblet_builder_add_loader_version_source` and the data forms: put the
@@ -189,6 +193,16 @@ typedef enum CobletLoginInteraction {
   COBLET_LOGIN_INTERACTION_BROWSER_REDIRECT = 2,
 } CobletLoginInteraction;
 
+// What happens to a `${name}` placeholder nothing fills.
+typedef enum CobletUnknownPlaceholders {
+  // The launch fails.
+  COBLET_UNKNOWN_PLACEHOLDERS_ERROR = 0,
+  // `${name}` stays as written.
+  COBLET_UNKNOWN_PLACEHOLDERS_KEEP = 1,
+  // It is replaced with nothing.
+  COBLET_UNKNOWN_PLACEHOLDERS_EMPTY = 2,
+} CobletUnknownPlaceholders;
+
 // Rule setting a `coblet_rules_set` call changes; the names match the
 // `[rules]` table of TOML profiles.
 typedef enum CobletRule {
@@ -263,6 +277,9 @@ typedef struct CobletLogin CobletLogin;
 // Reason the `matches` callback cannot decide, given with `coblet_match_fail`.
 typedef struct CobletMatchFailure CobletMatchFailure;
 
+// One running placeholder source callback and its answer.
+typedef struct CobletPlaceholderCtx CobletPlaceholderCtx;
+
 // Profile under construction, handed to the `rewrite` callback.
 //
 // Each `coblet_draft_*` change applies at once, with the same checks and
@@ -289,8 +306,9 @@ typedef struct CobletSecretCall CobletSecretCall;
 // One running version source callback: its requests and its answer.
 typedef struct CobletSourceCtx CobletSourceCtx;
 
-// Reason a step failed, given with `coblet_step_fail`.
-typedef struct CobletStepFailure CobletStepFailure;
+// What a running C step set, applied to the launch when it returns true;
+// valid only during its `run` callback.
+typedef struct CobletStepCtx CobletStepCtx;
 
 // One running trait source callback: its requests and its answer.
 typedef struct CobletTraitCtx CobletTraitCtx;
@@ -427,20 +445,27 @@ typedef struct CobletSecretStore {
   void (*free)(void *user_data);
 } CobletSecretStore;
 
-// Callback table of an extra launch step written in C.
+// Callback table of a launch step written in C.
 //
-// The library owns `user_data` from the call that receives the table,
-// even when that call fails, and calls `free` once after the launch.
+// The library copies `name` and owns `user_data` from the call that
+// receives the table, even when that call fails, and calls `free` once
+// when it no longer needs it.
 typedef struct CobletStep {
   // Step name such as `acme-start-proxy`.
   const char *name;
   // Passed to every callback.
   void *user_data;
-  // Runs the step on a worker thread. `info_json` is
-  // `{"schema":1,"data_root","game_dir","java","natives_dir"}`, with
-  // `null` for values not known yet. Returning false stops the launch;
-  // call `coblet_step_fail` first to give the reason.
-  bool (*run)(void *user_data, const char *info_json, struct CobletStepFailure *failure);
+  // Runs the step on a library worker thread, where blocking is fine.
+  //
+  // `info_json` is `{"schema":1,"game_version","traits":[],"data_root",
+  // "game_dir","java","java_major","natives_dir","client_jar",
+  // "game_assets","jvm_args":[],"placeholders":{}}`, with `null` for
+  // values not known yet; `jvm_args` holds the JVM arguments earlier
+  // steps added, such as the log configuration. What the step sets with the
+  // `coblet_step_ctx_*` functions takes effect for the later steps when
+  // it returns true. Returning false stops the launch; call
+  // `coblet_step_ctx_fail` first to give the reason.
+  bool (*run)(void *user_data, struct CobletStepCtx *ctx, const char *info_json);
   // Releases `user_data`; may be NULL.
   void (*free)(void *user_data);
 } CobletStep;
@@ -583,6 +608,34 @@ typedef struct CobletModLoader {
   // Releases `user_data`; may be NULL.
   void (*free)(void *user_data);
 } CobletModLoader;
+
+// Callback table of a placeholder source written in C, asked for
+// `${name}` placeholders nothing else in a launch set.
+//
+// `id` and `name` are copied when the table is added. Sources are asked
+// in order, each only for the names still missing. `resolve` runs on a
+// library worker thread where blocking is fine, with a `CobletPlaceholderCtx`
+// handle valid only during the call and the request as JSON:
+// `{"schema":1,"names":[],"game_version","traits":[],"os","arch",
+// "data_root","game_dir","java_major"}` where `java_major` may be null.
+// It answers with `coblet_placeholder_ctx_set_result`, a JSON object of
+// the names it knows and their values; returning true without an answer
+// knows none. Returning false stops the launch; call
+// `coblet_placeholder_ctx_fail` first to give the reason. The library
+// owns `user_data` from the call that receives the table, even when it
+// fails, and calls `free` once when the `Coblet` is freed.
+typedef struct CobletPlaceholderSource {
+  // Passed to every callback.
+  void *user_data;
+  // Namespaced ID, such as `acme:server`.
+  const char *id;
+  // Name shown to users.
+  const char *name;
+  // Answers the request in `request_json`. Returns false on failure.
+  bool (*resolve)(void *user_data, struct CobletPlaceholderCtx *ctx, const char *request_json);
+  // Releases `user_data`; may be NULL.
+  void (*free)(void *user_data);
+} CobletPlaceholderSource;
 
 // Callback table of a version trait source written in C.
 //
@@ -1340,6 +1393,20 @@ enum CobletStatus coblet_edit_add_step(struct CobletProfileEdit *edit,
                                        struct CobletStep step,
                                        struct CobletError **out_err);
 
+// Sets `${name}` to `value` in this launch, replacing the value of an
+// earlier customizer. A name coblet fills itself, such as
+// `auth_access_token`, an empty name or one with `$`, `{` or `}` fails
+// with `COBLET_STATUS_INVALID_ARGUMENT`.
+//
+// # Safety
+//
+// `edit` must be the handle of the running `customize` callback; strings
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_edit_set_placeholder(struct CobletProfileEdit *edit,
+                                              const char *name,
+                                              const char *value,
+                                              struct CobletError **out_err);
+
 // Gives the reason the running `customize` callback is about to return false.
 //
 // # Safety
@@ -1347,14 +1414,6 @@ enum CobletStatus coblet_edit_add_step(struct CobletProfileEdit *edit,
 // `edit` must be the handle of the running `customize` callback;
 // `message` must be NULL or NUL-terminated.
 enum CobletStatus coblet_edit_fail(struct CobletProfileEdit *edit, const char *message);
-
-// Gives the reason the running step `run` callback is about to return false.
-//
-// # Safety
-//
-// `failure` must be the handle passed to the running `run` callback;
-// `message` must be NULL or NUL-terminated.
-enum CobletStatus coblet_step_fail(struct CobletStepFailure *failure, const char *message);
 
 // Starts receiving events published from now on: launch steps and file
 // transfers, game starts, log lines and exits, warnings and login
@@ -2019,6 +2078,90 @@ enum CobletStatus coblet_login_finish(const struct CobletLogin *login,
 // thread uses any more.
 void coblet_login_free(struct CobletLogin *login);
 
+// Hands the answer of the running placeholder source callback to the
+// library, which copies it: a JSON object of names and values, such as
+// `{"acme_server":"play.acme.net"}`.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `json` must be
+// NULL or NUL-terminated.
+enum CobletStatus coblet_placeholder_ctx_set_result(struct CobletPlaceholderCtx *ctx,
+                                                    const char *json);
+
+// Gives the reason the running placeholder source callback is about to
+// return false.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `message` must
+// be NULL or NUL-terminated.
+enum CobletStatus coblet_placeholder_ctx_fail(struct CobletPlaceholderCtx *ctx,
+                                              const char *message);
+
+// Sets `${name}` to `value` in every launch; a customizer or step can
+// replace it. A name coblet fills itself, such as `auth_access_token`,
+// an empty name or one with `$`, `{` or `}` fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; strings must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_placeholder(struct CobletBuilder *builder,
+                                                 const char *name,
+                                                 const char *value,
+                                                 struct CobletError **out_err);
+
+// Adds a placeholder source written in C, asked after those already added.
+//
+// `flags` is 0 or `COBLET_PLACEHOLDER_REPLACE`. The library owns the
+// table's `user_data` from this call on, even when it fails. A table
+// without its callback, a malformed ID or an unknown flag fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`; an ID already registered without the
+// flag fails `coblet_builder_build`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; the table's strings must be
+// NULL or NUL-terminated and its callbacks must stay valid until its
+// `free` runs; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_placeholder_source(struct CobletBuilder *builder,
+                                                        struct CobletPlaceholderSource source,
+                                                        uint32_t flags,
+                                                        struct CobletError **out_err);
+
+// Removes a placeholder source; an unknown ID is ignored.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `id` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_remove_placeholder_source(struct CobletBuilder *builder,
+                                                           const char *id,
+                                                           struct CobletError **out_err);
+
+// Sets what happens to placeholders nothing fills; the launch fails by default.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_set_unknown_placeholders(struct CobletBuilder *builder,
+                                                          enum CobletUnknownPlaceholders policy,
+                                                          struct CobletError **out_err);
+
+// Lists the placeholder sources, in the order they are asked, as JSON:
+// `{"schema":1,"sources":[{"id","name"}]}`. On success `*out_json`
+// receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `out_json` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_placeholder_sources_json(const struct Coblet *coblet,
+                                                  struct CobletString *out_json,
+                                                  struct CobletError **out_err);
+
 // Sets a rule setting; NULL `value` clears what earlier profiles set.
 //
 // # Safety
@@ -2297,6 +2440,142 @@ enum CobletStatus coblet_generate_secret_key(uint8_t *out_key,
 // `out` must be the handle passed to the running `rewrite` callback;
 // `url` must be NULL or NUL-terminated.
 enum CobletStatus coblet_rewrite_set_url(struct CobletRewrite *out, const char *url);
+
+// Uses the `java` at the absolute `path` for this launch, as a
+// replacement of `select-java` does. After the step returns the library
+// runs it and checks it fits the version; the launch fails otherwise.
+//
+// # Safety
+//
+// `ctx` must be the handle of the running `run` callback; `path` must be
+// NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_step_ctx_set_java(struct CobletStepCtx *ctx,
+                                           const char *path,
+                                           struct CobletError **out_err);
+
+// Sets the natives directory, an absolute path, as a replacement of
+// `prepare-natives` does.
+//
+// # Safety
+//
+// As for `coblet_step_ctx_set_java`.
+enum CobletStatus coblet_step_ctx_set_natives_dir(struct CobletStepCtx *ctx,
+                                                  const char *path,
+                                                  struct CobletError **out_err);
+
+// Starts the game from the client jar at the absolute `path`, as a
+// replacement of `client-jar` does.
+//
+// # Safety
+//
+// As for `coblet_step_ctx_set_java`.
+enum CobletStatus coblet_step_ctx_set_client_jar(struct CobletStepCtx *ctx,
+                                                 const char *path,
+                                                 struct CobletError **out_err);
+
+// Sets `${game_assets}` to the absolute `path`, as a replacement of
+// `verify-files` does for old asset indexes.
+//
+// # Safety
+//
+// As for `coblet_step_ctx_set_java`.
+enum CobletStatus coblet_step_ctx_set_game_assets(struct CobletStepCtx *ctx,
+                                                  const char *path,
+                                                  struct CobletError **out_err);
+
+// Adds a JVM argument after those of the version; it may use `${name}`
+// placeholders.
+//
+// # Safety
+//
+// `ctx` must be the handle of the running `run` callback; `value` must
+// be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_step_ctx_add_jvm_arg(struct CobletStepCtx *ctx,
+                                              const char *value,
+                                              struct CobletError **out_err);
+
+// Sets `${name}` to `value` for the rest of the launch. A name coblet
+// fills itself, such as `auth_access_token`, an empty name or one with
+// `$`, `{` or `}` fails with `COBLET_STATUS_INVALID_ARGUMENT`.
+//
+// # Safety
+//
+// `ctx` must be the handle of the running `run` callback; strings must be
+// NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_step_ctx_set_placeholder(struct CobletStepCtx *ctx,
+                                                  const char *name,
+                                                  const char *value,
+                                                  struct CobletError **out_err);
+
+// Gives the reason the running `run` callback is about to return false.
+//
+// # Safety
+//
+// `ctx` must be the handle of the running `run` callback; `message` must
+// be NULL or NUL-terminated.
+enum CobletStatus coblet_step_ctx_fail(struct CobletStepCtx *ctx, const char *message);
+
+// Runs `step` in every launch right before, or with `after` right after,
+// the step named `anchor`, such as `build-command`. Changes apply in the
+// order they are made; `coblet_builder_build` fails when no step has that
+// name.
+//
+// The library owns the table's `user_data` from this call on, even when
+// it fails.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; strings must be NULL or
+// NUL-terminated; the step's callbacks must stay valid until its `free`
+// runs; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_step(struct CobletBuilder *builder,
+                                          const char *anchor,
+                                          bool after,
+                                          struct CobletStep step,
+                                          struct CobletError **out_err);
+
+// Runs `step` instead of the step named `name`, such as `client-jar`;
+// the new step must leave what later steps read, through its
+// `CobletStepCtx`. `build-command` and `spawn` make the command and the
+// game process, which only Rust code can, so replacing them fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`; `coblet_builder_build` fails when no
+// step has that name.
+//
+// The library owns the table's `user_data` from this call on, even when
+// it fails.
+//
+// # Safety
+//
+// As for `coblet_builder_add_step`.
+enum CobletStatus coblet_builder_replace_step(struct CobletBuilder *builder,
+                                              const char *name,
+                                              struct CobletStep step,
+                                              struct CobletError **out_err);
+
+// Leaves out the step named `name`, such as `logging-config`. Removing
+// `build-command` or `spawn`, without which no game starts, fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`; `coblet_builder_build` fails when no
+// step has that name.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `name` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_remove_step(struct CobletBuilder *builder,
+                                             const char *name,
+                                             struct CobletError **out_err);
+
+// Lists the launch steps in the order they run as JSON:
+// `{"schema":1,"steps":["select-java",...]}`. On success `*out_json`
+// receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `out_json` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_launch_steps_json(const struct Coblet *coblet,
+                                           struct CobletString *out_json,
+                                           struct CobletError **out_err);
 
 // Fetches a document for the running trait source callback and caches it
 // under `cache_name`, a relative path such as `traits.json`; blocks until

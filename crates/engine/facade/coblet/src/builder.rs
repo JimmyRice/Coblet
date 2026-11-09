@@ -49,6 +49,8 @@ pub struct CobletBuilder<State> {
     profile_engine: Option<coblet_platform::ProfileEngine>,
     #[cfg(feature = "launch")]
     platform_profiles: Vec<Arc<dyn coblet_platform::PlatformProfile>>,
+    #[cfg(feature = "launch")]
+    launch: LaunchSettings,
     #[cfg(feature = "loaders")]
     loaders: LoaderSettings,
     #[cfg(feature = "java")]
@@ -91,8 +93,32 @@ struct JavaSettings {
     error: Option<coblet_java::JavaError>,
 }
 
+/// Launch step and placeholder changes collected by the builder, applied
+/// in order by [`CobletBuilder::build`].
+#[cfg(feature = "launch")]
+#[derive(Default)]
+struct LaunchSettings {
+    steps: Vec<StepChange>,
+    placeholders: Vec<(String, String)>,
+    sources: Vec<Change<Arc<dyn coblet_launch::PlaceholderSource>>>,
+    unknown: Option<coblet_launch_command::UnknownPlaceholder>,
+}
+
+#[cfg(feature = "launch")]
+enum StepChange {
+    Before(String, Arc<dyn coblet_launch::LaunchStep>),
+    After(String, Arc<dyn coblet_launch::LaunchStep>),
+    Replace(String, Arc<dyn coblet_launch::LaunchStep>),
+    Remove(String),
+}
+
 /// One change to an ordered extension list.
-#[cfg(any(feature = "java", feature = "mojang", feature = "loaders"))]
+#[cfg(any(
+    feature = "java",
+    feature = "mojang",
+    feature = "loaders",
+    feature = "launch"
+))]
 enum Change<T> {
     Register(T),
     Replace(T),
@@ -226,6 +252,8 @@ impl Coblet {
             profile_engine: None,
             #[cfg(feature = "launch")]
             platform_profiles: Vec::new(),
+            #[cfg(feature = "launch")]
+            launch: LaunchSettings::default(),
             #[cfg(feature = "loaders")]
             loaders: LoaderSettings::default(),
             #[cfg(feature = "java")]
@@ -262,6 +290,8 @@ impl CobletBuilder<NoRoot> {
             profile_engine: self.profile_engine,
             #[cfg(feature = "launch")]
             platform_profiles: self.platform_profiles,
+            #[cfg(feature = "launch")]
+            launch: self.launch,
             #[cfg(feature = "loaders")]
             loaders: self.loaders,
             #[cfg(feature = "java")]
@@ -668,6 +698,126 @@ impl<State> CobletBuilder<State> {
     #[cfg(feature = "launch")]
     pub fn customizer(mut self, customizer: Arc<dyn coblet_launch::LaunchCustomizer>) -> Self {
         self.customizers.push(customizer);
+        self
+    }
+
+    /// Runs `step` in every launch right before the step named `anchor`,
+    /// such as [`step_names::BUILD_COMMAND`](coblet_launch::step_names::BUILD_COMMAND).
+    ///
+    /// Step changes apply in the order they are made;
+    /// [`build`](CobletBuilder::build) fails when no step has that name.
+    #[cfg(feature = "launch")]
+    pub fn launch_step_before(
+        mut self,
+        anchor: impl Into<String>,
+        step: Arc<dyn coblet_launch::LaunchStep>,
+    ) -> Self {
+        self.launch
+            .steps
+            .push(StepChange::Before(anchor.into(), step));
+        self
+    }
+
+    /// Runs `step` in every launch right after the step named `anchor`;
+    /// [`build`](CobletBuilder::build) fails when no step has that name.
+    #[cfg(feature = "launch")]
+    pub fn launch_step_after(
+        mut self,
+        anchor: impl Into<String>,
+        step: Arc<dyn coblet_launch::LaunchStep>,
+    ) -> Self {
+        self.launch
+            .steps
+            .push(StepChange::After(anchor.into(), step));
+        self
+    }
+
+    /// Runs `step` instead of the step named `name`, such as a
+    /// `verify-files` that downloads from a peer-to-peer network.
+    ///
+    /// The new step must leave what later steps read; see
+    /// [`step_names`](coblet_launch::step_names).
+    /// [`build`](CobletBuilder::build) fails when no step has that name.
+    #[cfg(feature = "launch")]
+    pub fn replace_launch_step(
+        mut self,
+        name: impl Into<String>,
+        step: Arc<dyn coblet_launch::LaunchStep>,
+    ) -> Self {
+        self.launch
+            .steps
+            .push(StepChange::Replace(name.into(), step));
+        self
+    }
+
+    /// Leaves out the step named `name`, such as `logging-config`;
+    /// [`build`](CobletBuilder::build) fails when no step has that name.
+    #[cfg(feature = "launch")]
+    pub fn without_launch_step(mut self, name: impl Into<String>) -> Self {
+        self.launch.steps.push(StepChange::Remove(name.into()));
+        self
+    }
+
+    /// Sets `${name}` to `value` in every launch; a request, customizer or
+    /// step can replace it.
+    ///
+    /// [`build`](CobletBuilder::build) fails with
+    /// [`LaunchError::InvalidPlaceholder`](coblet_launch::LaunchError::InvalidPlaceholder)
+    /// when coblet fills that placeholder itself, such as `auth_access_token`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use coblet::Coblet;
+    /// use coblet::runtime::UserAgent;
+    ///
+    /// let coblet = Coblet::builder()
+    ///     .data_root("/path/to/launcher-data")
+    ///     .user_agent(UserAgent::new("MyLauncher/1.0 (contact@example.com)")?)
+    ///     .placeholder("acme_server", "play.acme.net")
+    ///     .build()?;
+    /// assert_eq!(coblet.launcher().placeholders()["acme_server"], "play.acme.net");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "launch")]
+    pub fn placeholder(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.launch.placeholders.push((name.into(), value.into()));
+        self
+    }
+
+    /// Adds a source asked for placeholders nothing else set, after those
+    /// already added; [`build`](CobletBuilder::build) fails when two share an ID.
+    #[cfg(feature = "launch")]
+    pub fn placeholder_source(mut self, source: Arc<dyn coblet_launch::PlaceholderSource>) -> Self {
+        self.launch.sources.push(Change::Register(source));
+        self
+    }
+
+    /// Puts a placeholder source in place of the one with the same ID,
+    /// keeping its position, or adds it.
+    #[cfg(feature = "launch")]
+    pub fn replace_placeholder_source(
+        mut self,
+        source: Arc<dyn coblet_launch::PlaceholderSource>,
+    ) -> Self {
+        self.launch.sources.push(Change::Replace(source));
+        self
+    }
+
+    /// Removes a placeholder source; an unknown ID is ignored.
+    #[cfg(feature = "launch")]
+    pub fn without_placeholder_source(mut self, id: coblet_types::ExtensionId) -> Self {
+        self.launch.sources.push(Change::Remove(id));
+        self
+    }
+
+    /// Sets what happens to placeholders nothing fills; the launch fails by default.
+    #[cfg(feature = "launch")]
+    pub fn unknown_placeholders(
+        mut self,
+        policy: coblet_launch_command::UnknownPlaceholder,
+    ) -> Self {
+        self.launch.unknown = Some(policy);
         self
     }
 
@@ -1100,7 +1250,39 @@ impl CobletBuilder<WithRoot> {
         for id in std::mem::take(&mut self.auth_grants) {
             launcher.allow_auth_changes(id)?;
         }
+        for change in std::mem::take(&mut self.launch.steps) {
+            match change {
+                StepChange::Before(anchor, step) => launcher.insert_before(&anchor, step)?,
+                StepChange::After(anchor, step) => launcher.insert_after(&anchor, step)?,
+                StepChange::Replace(name, step) => launcher.replace(&name, step)?,
+                StepChange::Remove(name) => launcher.remove(&name)?,
+            }
+        }
+        for (name, value) in std::mem::take(&mut self.launch.placeholders) {
+            launcher.set_placeholder(name, value)?;
+        }
+        if let Some(policy) = self.launch.unknown.take() {
+            launcher.set_unknown_placeholders(policy);
+        }
         Ok(launcher)
+    }
+
+    /// Returns the placeholder sources with the builder's changes applied.
+    #[cfg(feature = "launch")]
+    fn placeholder_sources(&mut self) -> Result<coblet_launch::PlaceholderSources, Error> {
+        let mut sources = coblet_launch::PlaceholderSources::new();
+        for change in std::mem::take(&mut self.launch.sources) {
+            match change {
+                Change::Register(source) => sources.register(source)?,
+                Change::Replace(source) => {
+                    sources.replace(source);
+                }
+                Change::Remove(id) => {
+                    sources.remove(&id);
+                }
+            }
+        }
+        Ok(sources)
     }
 
     fn transport_or_default(&mut self) -> Result<Arc<dyn Transport>, Error> {
@@ -1156,6 +1338,8 @@ impl CobletBuilder<WithRoot> {
         };
         #[cfg(feature = "launch")]
         let launcher = self.take_launcher()?;
+        #[cfg(feature = "launch")]
+        let placeholder_sources = self.placeholder_sources()?;
         let transport = self.transport_or_default()?;
         // The game and the Java runtime run with other working directories,
         // so every path derived from the data root must be absolute.
@@ -1224,6 +1408,8 @@ impl CobletBuilder<WithRoot> {
             versions,
             #[cfg(feature = "launch")]
             launcher,
+            #[cfg(feature = "launch")]
+            placeholder_sources,
             #[cfg(feature = "launch")]
             profiles,
             #[cfg(feature = "loaders")]

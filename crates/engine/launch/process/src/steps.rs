@@ -15,26 +15,28 @@ use crate::files::{
     FileSet, asset_tasks, by_name_directory, check_existing, copy_by_name, fetch_all,
 };
 use crate::natives::extract_natives;
+use crate::placeholder_sources::resolve_placeholders;
 use crate::session::Monitor;
+use crate::step_names;
 use crate::{
     GameLayout, GameSession, LaunchContext, LaunchError, LaunchRequest, LaunchStep, LogBuffer,
     command_profile,
 };
 
 macro_rules! step {
-    ($(#[$doc:meta])* $ty:ident, $name:literal, infallible $run:ident) => {
+    ($(#[$doc:meta])* $ty:ident, $name:expr, infallible $run:ident) => {
         step!($(#[$doc])* $ty, $name, |cx| {
             $run(cx);
             std::future::ready(Ok(()))
         });
     };
-    ($(#[$doc:meta])* $ty:ident, $name:literal, sync $run:ident) => {
+    ($(#[$doc:meta])* $ty:ident, $name:expr, sync $run:ident) => {
         step!($(#[$doc])* $ty, $name, |cx| std::future::ready($run(cx)));
     };
-    ($(#[$doc:meta])* $ty:ident, $name:literal, $run:ident) => {
+    ($(#[$doc:meta])* $ty:ident, $name:expr, $run:ident) => {
         step!($(#[$doc])* $ty, $name, |cx| $run(cx));
     };
-    ($(#[$doc:meta])* $ty:ident, $name:literal, |$cx:ident| $body:expr) => {
+    ($(#[$doc:meta])* $ty:ident, $name:expr, |$cx:ident| $body:expr) => {
         $(#[$doc])*
         #[derive(Clone, Copy, Debug, Default)]
         pub struct $ty;
@@ -54,55 +56,61 @@ macro_rules! step {
 step!(
     /// Uses the configured Java after checking it, or finds or installs one that fits.
     SelectJava,
-    "select-java",
+    step_names::SELECT_JAVA,
     select_java
 );
 step!(
     /// Downloads missing or damaged game files and prepares assets.
     VerifyFiles,
-    "verify-files",
+    step_names::VERIFY_FILES,
     verify_files
 );
 step!(
     /// Extracts native jars into the natives directory.
     PrepareNatives,
-    "prepare-natives",
+    step_names::PREPARE_NATIVES,
     prepare_natives
 );
 step!(
     /// Chooses the client jar; refuses profiles with jar mods until merging is supported.
     ClientJar,
-    "client-jar",
+    step_names::CLIENT_JAR,
     sync client_jar
 );
 step!(
     /// Places the libraries old FML downloads at start; the Forge loader provides them.
     LegacyFmlLibs,
-    "legacy-fml-libs",
+    step_names::LEGACY_FML_LIBS,
     infallible legacy_fml_libs
 );
 step!(
     /// Adds the version's log4j configuration so the game logs structured events.
     LoggingConfig,
-    "logging-config",
+    step_names::LOGGING_CONFIG,
     infallible logging_config
 );
 step!(
     /// Runs the pre-launch command; a failure stops the launch.
     PreLaunch,
-    "pre-launch",
+    step_names::PRE_LAUNCH,
     pre_launch
+);
+step!(
+    /// Asks the placeholder sources for placeholders nothing else set.
+    ResolvePlaceholders,
+    step_names::RESOLVE_PLACEHOLDERS,
+    resolve_placeholders
 );
 step!(
     /// Builds the launch command.
     BuildCommand,
-    "build-command",
+    step_names::BUILD_COMMAND,
     sync build_command
 );
 step!(
     /// Starts the game, under the wrapper command when one is set, and monitors it.
     Spawn,
-    "spawn",
+    step_names::SPAWN,
     spawn
 );
 
@@ -117,47 +125,69 @@ pub fn builtin_steps() -> Vec<Arc<dyn LaunchStep>> {
         Arc::new(LegacyFmlLibs),
         Arc::new(LoggingConfig),
         Arc::new(PreLaunch),
+        Arc::new(ResolvePlaceholders),
         Arc::new(BuildCommand),
         Arc::new(Spawn),
     ]
 }
 
 async fn select_java(cx: &mut LaunchContext) -> Result<(), LaunchError> {
+    if let Some(path) = cx.request.java.clone() {
+        return cx.use_java(&path).await;
+    }
     let services = &cx.services;
-    let requirement = &cx.profile.java;
-    let install = if let Some(path) = &cx.request.java {
-        let install = probe(&*services.spawner, path, InstallSource::Configured).await?;
+    let progress = TransferProgress::new();
+    let java = JavaContext {
+        progress: Some(&progress),
+        storage: &*services.storage,
+        spawner: &*services.spawner,
+        os: &services.os,
+        locators: &services.java_locators,
+        installer: services.java_installer.as_ref(),
+        catalog: &services.catalog,
+    };
+    let install = find_or_install(java, &cx.profile.java, &cx.cancel);
+    let install = progress
+        .track(
+            services.events.as_ref(),
+            cx.request.operation,
+            TransferKind::JavaRuntime,
+            install,
+        )
+        .await?;
+    tracing::info!(java = %install.executable.display(), version = %install.version, "selected java");
+    cx.java = Some(install);
+    Ok(())
+}
+
+impl LaunchContext {
+    /// Runs the `java` at `path`, checks that it meets the version's
+    /// requirement and makes it the Java of this launch.
+    ///
+    /// A step that replaces `select-java` can call this with a Java it
+    /// found or installed itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::Java`] when the executable does not run and
+    /// [`LaunchError::JavaMismatch`] when its version or architecture does
+    /// not fit.
+    pub async fn use_java(&mut self, path: &Path) -> Result<(), LaunchError> {
+        let install = probe(&*self.services.spawner, path, InstallSource::Configured).await?;
+        let requirement = &self.profile.java;
         if !requirement.accepts(install.major, &install.arch) {
             return Err(LaunchError::JavaMismatch {
-                executable: path.clone(),
+                executable: path.to_path_buf(),
                 found_major: install.major,
                 found_arch: install.arch.as_str().to_owned(),
                 major: requirement.major,
                 arch: requirement.arch.as_str().to_owned(),
             });
         }
-        install
-    } else {
-        let progress = TransferProgress::new();
-        let java = JavaContext {
-            progress: Some(&progress),
-            storage: &*services.storage,
-            spawner: &*services.spawner,
-            os: &services.os,
-            locators: &services.java_locators,
-            installer: services.java_installer.as_ref(),
-            catalog: &services.catalog,
-        };
-        let install = find_or_install(java, requirement, &cx.cancel);
-        let events = services.events.as_ref();
-        let op = cx.request.operation;
-        progress
-            .track(events, op, TransferKind::JavaRuntime, install)
-            .await?
-    };
-    tracing::info!(java = %install.executable.display(), version = %install.version, "selected java");
-    cx.java = Some(install);
-    Ok(())
+        tracing::info!(java = %install.executable.display(), version = %install.version, "selected java");
+        self.java = Some(install);
+        Ok(())
+    }
 }
 
 async fn verify_files(cx: &mut LaunchContext) -> Result<(), LaunchError> {
@@ -347,10 +377,10 @@ fn build_command(cx: &mut LaunchContext) -> Result<(), LaunchError> {
         last.clone_from(jar);
     }
     let java = cx.java.as_ref().ok_or(LaunchError::MissingState {
-        step: "build-command",
+        step: step_names::BUILD_COMMAND,
         needs: "a java selected by select-java",
     })?;
-    let options = launch_options(&OptionsInput {
+    let mut options = launch_options(&OptionsInput {
         java: &java.executable,
         java_major: java.major,
         os: &cx.services.os,
@@ -361,6 +391,8 @@ fn build_command(cx: &mut LaunchContext) -> Result<(), LaunchError> {
         natives_directory: cx.natives_directory.as_deref(),
         jvm_args: &cx.jvm_args,
     });
+    options.resolvers.push(cx.placeholders.resolver());
+    options.unknown = cx.placeholders.unknown();
     cx.command = Some(LaunchCommand::from_profile(&profile, &options)?);
     Ok(())
 }
@@ -399,7 +431,7 @@ fn process_spec(command: &LaunchCommand, wrapper: &[OsString]) -> ProcessSpec {
 
 async fn spawn(cx: &mut LaunchContext) -> Result<(), LaunchError> {
     let command = cx.command.clone().ok_or(LaunchError::MissingState {
-        step: "spawn",
+        step: step_names::SPAWN,
         needs: "a command built by build-command",
     })?;
     let storage = &cx.services.storage;
@@ -429,7 +461,13 @@ async fn spawn(cx: &mut LaunchContext) -> Result<(), LaunchError> {
         post_exit: cx.request.post_exit.clone(),
         op: cx.request.operation,
     };
-    let session = GameSession::start(command, cx.profile.clone(), process, monitor);
+    let session = GameSession::start(
+        command,
+        cx.profile.clone(),
+        cx.placeholders.clone(),
+        process,
+        monitor,
+    );
     if let Some(events) = cx
         .services
         .events

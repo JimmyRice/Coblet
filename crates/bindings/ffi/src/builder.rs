@@ -37,6 +37,8 @@ pub struct CobletBuilder {
     pub(crate) java: Vec<crate::java::JavaChange>,
     /// Version trait source changes in order.
     pub(crate) traits: Vec<crate::traits::TraitChange>,
+    /// Launch step and placeholder changes in order.
+    pub(crate) launch: Vec<crate::steps::LaunchChange>,
 }
 
 /// Flag of `coblet_builder_add_mirror`: metadata documents from the mirror
@@ -132,6 +134,7 @@ pub unsafe extern "C" fn coblet_builder_new(
                 loaders: Vec::new(),
                 java: Vec::new(),
                 traits: Vec::new(),
+                launch: Vec::new(),
             });
             put(out_builder, Box::into_raw(builder), "out_builder")?;
             Ok(CobletStatus::Ok)
@@ -644,6 +647,7 @@ pub unsafe extern "C" fn coblet_builder_build(
                 loaders,
                 java,
                 traits,
+                launch,
             } = *builder;
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -686,6 +690,9 @@ pub unsafe extern "C" fn coblet_builder_build(
                 options = change.apply(options);
             }
             for change in traits {
+                options = change.apply(options);
+            }
+            for change in launch {
                 options = change.apply(options);
             }
             match secrets {

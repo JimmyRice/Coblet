@@ -73,6 +73,7 @@ impl Coblet {
         .with_java_locators(inner.java_locators.clone())
         .with_java_installer(inner.java.clone())
         .with_events(inner.events.clone())
+        .with_placeholder_sources(inner.placeholder_sources.clone())
     }
 
     /// Prepares and starts a resolved profile.

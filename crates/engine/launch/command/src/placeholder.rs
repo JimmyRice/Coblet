@@ -4,6 +4,68 @@ use std::sync::Arc;
 
 use crate::CommandError;
 
+/// Names of the placeholders coblet fills itself.
+///
+/// Some only get a value in some launches, such as `resolution_width`
+/// without a window size; nothing else may supply them.
+pub const BUILTIN_PLACEHOLDERS: &[&str] = &[
+    "assets_index_name",
+    "assets_root",
+    "auth_access_token",
+    "auth_player_name",
+    "auth_session",
+    "auth_uuid",
+    "auth_xuid",
+    "classpath",
+    "classpath_separator",
+    "clientid",
+    "game_assets",
+    "game_directory",
+    "launcher_name",
+    "launcher_version",
+    "library_directory",
+    "natives_directory",
+    "quickPlayMultiplayer",
+    "quickPlayPath",
+    "quickPlayRealms",
+    "quickPlaySingleplayer",
+    "resolution_height",
+    "resolution_width",
+    "user_properties",
+    "user_type",
+    "version_name",
+    "version_type",
+];
+
+/// Tells whether coblet fills the placeholder `name` itself.
+#[must_use]
+pub fn is_builtin_placeholder(name: &str) -> bool {
+    BUILTIN_PLACEHOLDERS.binary_search(&name).is_ok()
+}
+
+/// Returns the names of the `${name}` placeholders in `template`, in order.
+///
+/// An unterminated `${` ends the list.
+///
+/// # Examples
+///
+/// ```
+/// use coblet_launch_command::placeholder_names;
+///
+/// let names: Vec<_> = placeholder_names("-Dport=${acme_port}:${version_name}").collect();
+/// assert_eq!(names, ["acme_port", "version_name"]);
+/// ```
+pub fn placeholder_names(template: &str) -> impl Iterator<Item = &str> {
+    let mut rest = template;
+    std::iter::from_fn(move || {
+        let start = rest.find("${")?;
+        let after = &rest[start + 2..];
+        let end = after.find('}')?;
+        rest = &after[end + 1..];
+        Some(&after[..end])
+    })
+}
+
 /// Supplies values for placeholders the built-in table does not know.
 ///
 /// Resolvers are asked in registration order after the built-in table.
@@ -74,7 +136,10 @@ mod tests {
     use std::ffi::OsString;
     use std::sync::Arc;
 
-    use super::{PlaceholderResolver, UnknownPlaceholder, Values};
+    use super::{
+        BUILTIN_PLACEHOLDERS, PlaceholderResolver, UnknownPlaceholder, Values,
+        is_builtin_placeholder, placeholder_names,
+    };
     use crate::CommandError;
 
     struct Brand;
@@ -111,5 +176,16 @@ mod tests {
         assert_eq!(values.substitute("a${nope}b").unwrap(), "a${nope}b");
         values.unknown = UnknownPlaceholder::Empty;
         assert_eq!(values.substitute("a${nope}b").unwrap(), "ab");
+    }
+
+    #[test]
+    fn lists_placeholder_names_and_knows_the_builtin_ones() {
+        assert!(BUILTIN_PLACEHOLDERS.is_sorted());
+        assert!(is_builtin_placeholder("auth_access_token"));
+        assert!(is_builtin_placeholder("resolution_width"));
+        assert!(!is_builtin_placeholder("acme_port"));
+        let names: Vec<_> = placeholder_names("a${x}b${}c${y}${open").collect();
+        assert_eq!(names, ["x", "", "y"]);
+        assert_eq!(placeholder_names("plain").count(), 0);
     }
 }

@@ -75,7 +75,7 @@ impl GameHandle {
         Self {
             op: session.operation().to_string(),
             pid: session.pid(),
-            report: session.profile().explain(),
+            report: session.profile().explain() + &session.placeholders().explain(),
             logs: tokio::sync::Mutex::new(session.logs()),
             killer: session.killer(),
             session: Mutex::new(Some(session)),

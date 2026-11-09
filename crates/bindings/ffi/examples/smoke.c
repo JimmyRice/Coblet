@@ -40,9 +40,9 @@ static bool profile_rewrite(void *user_data, CobletProfileDraft *draft) {
 
 static bool step_ran = false;
 
-static bool run_step(void *user_data, const char *info_json, CobletStepFailure *failure) {
+static bool run_step(void *user_data, CobletStepCtx *ctx, const char *info_json) {
     (void)user_data;
-    (void)failure;
+    (void)ctx;
     printf("extra step ran: %s\n", info_json);
     step_ran = true;
     return true;

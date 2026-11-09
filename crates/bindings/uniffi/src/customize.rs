@@ -1,15 +1,16 @@
 use std::path::{Component, Path};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use coblet::launch::{CustomizeCtx, LaunchContext, LaunchError};
+use coblet::launch::{CustomizeCtx, LaunchError};
 use coblet::mojang::VersionTraits;
 use coblet::platform::{
     EffectiveLaunchProfile, EffectiveLibrary, EnvValue, FileSource, LibraryFile, ProfileArg,
 };
-use coblet::runtime::{BoxFuture, Extension};
+use coblet::runtime::Extension;
 use coblet::types::{ExtensionId, MavenCoordinate, Sha1Digest};
 
-use crate::{CobletError, ErrorKind};
+use crate::steps::ForeignStep;
+use crate::{CobletError, ErrorKind, LaunchStep};
 
 /// Launch customizer written in Swift, Kotlin or Python.
 ///
@@ -35,35 +36,6 @@ pub trait LaunchCustomizer: Send + Sync {
     ///
     /// The error reaches the caller of the launch as a launch failure.
     fn customize(&self, editor: Arc<ProfileEditor>) -> Result<(), CobletError>;
-}
-
-/// Extra launch step written in Swift, Kotlin or Python.
-///
-/// It runs on a worker thread at the place a customizer registered it.
-#[uniffi::export(foreign)]
-pub trait LaunchStep: Send + Sync {
-    /// Returns the step name, such as `acme-start-proxy`.
-    fn name(&self) -> String;
-
-    /// Runs the step; an error stops the launch.
-    ///
-    /// # Errors
-    ///
-    /// The error reaches the caller of the launch as a launch failure.
-    fn run(&self, info: StepInfo) -> Result<(), CobletError>;
-}
-
-/// What an extra step can see of the launch so far.
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
-pub struct StepInfo {
-    /// Directory for shared game files.
-    pub data_root: String,
-    /// Working directory of the game.
-    pub game_dir: String,
-    /// Java executable, once `select-java` ran.
-    pub java: Option<String>,
-    /// Natives directory, once `prepare-natives` ran.
-    pub natives_dir: Option<String>,
 }
 
 /// Library added by a customizer.
@@ -102,6 +74,7 @@ struct PendingStep {
 struct Edit {
     profile: EffectiveLaunchProfile,
     steps: Vec<PendingStep>,
+    placeholders: Vec<(String, String)>,
 }
 
 /// Launch profile handed to [`LaunchCustomizer::customize`].
@@ -199,6 +172,7 @@ impl ProfileEditor {
             edit: Mutex::new(Some(Edit {
                 profile,
                 steps: Vec::new(),
+                placeholders: Vec::new(),
             })),
         }
     }
@@ -435,6 +409,19 @@ impl ProfileEditor {
         self.with(|edit| edit.profile.java.major = major)
     }
 
+    /// Sets `${name}` to `value` in this launch, replacing the value of
+    /// `LaunchOptions.placeholders` or of an earlier customizer.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a name coblet fills itself, such as `auth_access_token`,
+    /// an empty name or one with `$`, `{` or `}`, and after `customize`
+    /// returned.
+    pub fn set_placeholder(&self, name: String, value: String) -> Result<(), CobletError> {
+        crate::placeholders::placeholder_name(&name)?;
+        self.with(|edit| edit.placeholders.push((name, value)))
+    }
+
     /// Runs `step` right before the launch step named `anchor`, such as `pre-launch`.
     ///
     /// # Errors
@@ -531,55 +518,17 @@ impl coblet::launch::LaunchCustomizer for ForeignCustomizer {
             return Ok(());
         };
         *profile = edit.profile;
+        for (name, value) in edit.placeholders {
+            ctx.set_placeholder(name, value)?;
+        }
         for pending in edit.steps {
-            let step = Arc::new(ForeignStep {
-                name: pending.step.name(),
-                inner: pending.step,
-            });
+            let step = Arc::new(ForeignStep::new(pending.step));
             match pending.placement {
                 Placement::Before => ctx.add_step_before(pending.anchor, step),
                 Placement::After => ctx.add_step_after(pending.anchor, step),
             }
         }
         Ok(())
-    }
-}
-
-/// Runs a foreign step as a Rust launch step.
-struct ForeignStep {
-    name: String,
-    inner: Arc<dyn LaunchStep>,
-}
-
-impl coblet::launch::LaunchStep for ForeignStep {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn run<'a>(&'a self, cx: &'a mut LaunchContext) -> BoxFuture<'a, Result<(), LaunchError>> {
-        let info = StepInfo {
-            data_root: cx.layout.data_root().to_string_lossy().into_owned(),
-            game_dir: cx.layout.game_directory().to_string_lossy().into_owned(),
-            java: cx
-                .java
-                .as_ref()
-                .map(|java| java.executable.to_string_lossy().into_owned()),
-            natives_dir: cx
-                .natives_directory
-                .as_ref()
-                .map(|dir| dir.to_string_lossy().into_owned()),
-        };
-        let inner = Arc::clone(&self.inner);
-        Box::pin(async move {
-            let failed = |message: String| LaunchError::Step {
-                step: self.name.clone(),
-                message,
-            };
-            tokio::task::spawn_blocking(move || inner.run(info))
-                .await
-                .map_err(|error| failed(format!("the step stopped: {error}")))?
-                .map_err(|error| failed(error.to_string()))
-        })
     }
 }
 
@@ -602,10 +551,9 @@ mod tests {
     };
     use coblet::types::{Arch, ExtensionId, OsFamily, Platform, PlayerName};
 
-    use super::{
-        ForeignCustomizer, LaunchCustomizer, LaunchStep, LibrarySpec, ProfileEditor, StepInfo,
-    };
+    use super::{ForeignCustomizer, LaunchCustomizer, LibrarySpec, ProfileEditor};
     use crate::{CobletError, ErrorKind};
+    use crate::{LaunchStep, StepContext};
 
     fn platform() -> Platform {
         Platform::new(OsFamily::Linux, Arch::X86_64)
@@ -625,7 +573,7 @@ mod tests {
     /// Records what the step saw.
     #[derive(Default)]
     struct Probe {
-        seen: Mutex<Vec<StepInfo>>,
+        seen: Mutex<Vec<(String, Option<String>)>>,
     }
 
     impl LaunchStep for Probe {
@@ -633,8 +581,8 @@ mod tests {
             "acme-probe".to_owned()
         }
 
-        fn run(&self, info: StepInfo) -> Result<(), CobletError> {
-            self.seen.lock().unwrap().push(info);
+        fn run(&self, cx: Arc<StepContext>) -> Result<(), CobletError> {
+            self.seen.lock().unwrap().push((cx.game_dir()?, cx.java()?));
             Ok(())
         }
     }
@@ -876,8 +824,7 @@ mod tests {
         let cx = launch(script, false).await.unwrap();
         let seen = probe.seen.lock().unwrap();
         assert_eq!(seen.len(), 1);
-        assert_eq!(seen[0].game_dir, "/game");
-        assert_eq!(seen[0].java, None);
+        assert_eq!(seen[0], ("/game".to_owned(), None));
         assert!(
             cx.profile
                 .explain()

@@ -322,7 +322,7 @@ unsafe fn start(
     let game = Box::into_raw(Box::new(CobletGame {
         op: session.operation(),
         runtime: handle.runtime.handle().clone(),
-        report: session.profile().explain(),
+        report: session.profile().explain() + &session.placeholders().explain(),
         killer: session.killer(),
         session: Mutex::new(Some(session)),
         logs: tokio::sync::Mutex::new(logs),

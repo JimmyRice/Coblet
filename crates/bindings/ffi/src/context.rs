@@ -207,7 +207,7 @@ mod tests {
     #[test]
     #[allow(unsafe_code, reason = "calls the C ABI")]
     fn creates_and_frees_an_sdk_and_reports_bad_arguments() {
-        assert_eq!(coblet_abi_version(), 15);
+        assert_eq!(coblet_abi_version(), 16);
         let dir = tempfile::tempdir().unwrap();
         let root = CString::new(dir.path().to_str().unwrap()).unwrap();
         let agent = CString::new("coblet-ffi-test/1.0").unwrap();

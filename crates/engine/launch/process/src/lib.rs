@@ -18,9 +18,12 @@ mod launcher;
 mod layout;
 mod log;
 mod natives;
+mod placeholder_sources;
+mod placeholders;
 mod request;
 mod session;
 mod step;
+pub mod step_names;
 mod steps;
 
 pub use buffer::{DEFAULT_LOG_CAPACITY, LogBuffer, LogItem, LogStream};
@@ -30,10 +33,12 @@ pub use error::LaunchError;
 pub use launcher::Launcher;
 pub use layout::GameLayout;
 pub use log::{LogParser, Redact};
+pub use placeholder_sources::{PlaceholderCtx, PlaceholderSource, PlaceholderSources};
+pub use placeholders::{PlaceholderOrigin, Placeholders, check_placeholder_name};
 pub use request::{LaunchHook, LaunchRequest};
 pub use session::{GameExit, GameKiller, GameSession};
 pub use step::{LaunchContext, LaunchServices, LaunchStep};
 pub use steps::{
-    BuildCommand, ClientJar, LegacyFmlLibs, LoggingConfig, PreLaunch, PrepareNatives, SelectJava,
-    Spawn, VerifyFiles, builtin_steps,
+    BuildCommand, ClientJar, LegacyFmlLibs, LoggingConfig, PreLaunch, PrepareNatives,
+    ResolvePlaceholders, SelectJava, Spawn, VerifyFiles, builtin_steps,
 };
