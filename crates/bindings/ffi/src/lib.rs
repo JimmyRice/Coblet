@@ -32,7 +32,15 @@
 //! callback tables (`CobletTraitSource`) that answer through a
 //! `CobletTraitCtx` handle, or TOML and JSON tables
 //! (`coblet_builder_add_trait_table_toml`); `coblet_version_traits_json`
-//! reports a version's traits and where each came from. Events (launch steps, file transfers, game
+//! reports a version's traits and where each came from. Launch steps are
+//! callback tables (`CobletStep`) that write launch state back through a
+//! `CobletStepCtx` handle; `coblet_builder_add_step`,
+//! `coblet_builder_replace_step` and `coblet_builder_remove_step` change
+//! the step list every launch runs, and `coblet_launch_steps_json` lists
+//! it. `${name}` placeholders get values from the builder
+//! (`coblet_builder_add_placeholder`), customizers and steps, and from
+//! callback tables (`CobletPlaceholderSource`) that answer through a
+//! `CobletPlaceholderCtx` handle. Events (launch steps, file transfers, game
 //! starts, logs and exits) are read with `coblet_events_next` as fixed
 //! layout `CobletEvent` structs. The header `include/coblet.h` is generated with
 //! `cargo xtask gen-header`.
@@ -48,9 +56,13 @@ mod guard;
 mod java;
 mod loaders;
 mod login;
+mod placeholders;
 mod profile;
 mod secrets;
 mod sources;
+mod steps;
+#[cfg(test)]
+mod testing;
 mod traits;
 mod types;
 mod version_sources;
@@ -76,11 +88,10 @@ pub use context::{
     coblet_string_free, coblet_versions_json,
 };
 pub use customize::{
-    CobletArgKind, CobletCustomizer, CobletProfileEdit, CobletStep, CobletStepFailure,
-    coblet_edit_add_arg, coblet_edit_add_library, coblet_edit_add_native_path,
-    coblet_edit_add_step, coblet_edit_fail, coblet_edit_info_json, coblet_edit_remove_arg,
-    coblet_edit_remove_library, coblet_edit_set_env, coblet_edit_set_java_major,
-    coblet_edit_set_main_class, coblet_step_fail,
+    CobletArgKind, CobletCustomizer, CobletProfileEdit, coblet_edit_add_arg,
+    coblet_edit_add_library, coblet_edit_add_native_path, coblet_edit_add_step, coblet_edit_fail,
+    coblet_edit_info_json, coblet_edit_remove_arg, coblet_edit_remove_library, coblet_edit_set_env,
+    coblet_edit_set_java_major, coblet_edit_set_main_class, coblet_edit_set_placeholder,
 };
 pub use events::{
     CobletEvent, CobletEventKind, CobletEvents, CobletTransferKind, coblet_event_clear,
@@ -112,6 +123,13 @@ pub use login::{
     CobletLogin, CobletLoginInteraction, coblet_login_begin, coblet_login_cancel,
     coblet_login_finish, coblet_login_free, coblet_login_prompt_json, coblet_login_submit_redirect,
 };
+pub use placeholders::{
+    COBLET_PLACEHOLDER_REPLACE, CobletPlaceholderCtx, CobletPlaceholderSource,
+    CobletUnknownPlaceholders, coblet_builder_add_placeholder,
+    coblet_builder_add_placeholder_source, coblet_builder_remove_placeholder_source,
+    coblet_builder_set_unknown_placeholders, coblet_placeholder_ctx_fail,
+    coblet_placeholder_ctx_set_result, coblet_placeholder_sources_json,
+};
 pub use profile::{
     CobletJavaMatch, CobletJavaSource, CobletMatchFailure, CobletNatives, CobletPlatformProfile,
     CobletProfileDraft, CobletRule, CobletRules, coblet_draft_add_library,
@@ -128,6 +146,12 @@ pub use secrets::{
     coblet_secret_call_fail, coblet_secret_call_set_value,
 };
 pub use sources::{CobletRewrite, CobletUrlRewriter, coblet_rewrite_set_url};
+pub use steps::{
+    CobletStep, CobletStepCtx, coblet_builder_add_step, coblet_builder_remove_step,
+    coblet_builder_replace_step, coblet_launch_steps_json, coblet_step_ctx_add_jvm_arg,
+    coblet_step_ctx_fail, coblet_step_ctx_set_client_jar, coblet_step_ctx_set_game_assets,
+    coblet_step_ctx_set_java, coblet_step_ctx_set_natives_dir, coblet_step_ctx_set_placeholder,
+};
 pub use traits::{
     COBLET_TRAITS_REPLACE, CobletTraitCtx, CobletTraitSource, coblet_builder_add_trait_source,
     coblet_builder_add_trait_table_json, coblet_builder_add_trait_table_toml,

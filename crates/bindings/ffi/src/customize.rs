@@ -2,15 +2,16 @@ use std::ffi::{CString, c_char, c_void};
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-use coblet::launch::{CustomizeCtx, LaunchContext, LaunchError};
+use coblet::launch::{CustomizeCtx, LaunchError};
 use coblet::mojang::{VersionTrait, VersionTraits};
 use coblet::platform::{
     EffectiveLaunchProfile, EffectiveLibrary, EnvValue, FileSource, LibraryFile, ProfileArg,
 };
-use coblet::runtime::{BoxFuture, Extension};
+use coblet::runtime::Extension;
 use coblet::types::{ExtensionId, MavenCoordinate, Sha1Digest};
 
 use crate::guard::{guard, put};
+use crate::steps::{CobletStep, ForeignStep};
 use crate::types::{CobletError, CobletStatus, CobletString, Failure, text};
 
 /// Callback table of a launch customizer written in C.
@@ -41,32 +42,6 @@ pub struct CobletCustomizer {
     pub free: Option<unsafe extern "C" fn(user_data: *mut c_void)>,
 }
 
-/// Callback table of an extra launch step written in C.
-///
-/// The library owns `user_data` from the call that receives the table,
-/// even when that call fails, and calls `free` once after the launch.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct CobletStep {
-    /// Step name such as `acme-start-proxy`.
-    pub name: *const c_char,
-    /// Passed to every callback.
-    pub user_data: *mut c_void,
-    /// Runs the step on a worker thread. `info_json` is
-    /// `{"schema":1,"data_root","game_dir","java","natives_dir"}`, with
-    /// `null` for values not known yet. Returning false stops the launch;
-    /// call `coblet_step_fail` first to give the reason.
-    pub run: Option<
-        unsafe extern "C" fn(
-            user_data: *mut c_void,
-            info_json: *const c_char,
-            failure: *mut CobletStepFailure,
-        ) -> bool,
-    >,
-    /// Releases `user_data`; may be NULL.
-    pub free: Option<unsafe extern "C" fn(user_data: *mut c_void)>,
-}
-
 /// Argument list a `coblet_edit_*_arg` call works on.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,12 +50,6 @@ pub enum CobletArgKind {
     Jvm = 0,
     /// Game arguments.
     Game = 1,
-}
-
-/// Reason a step failed, given with `coblet_step_fail`.
-#[derive(Debug, Default)]
-pub struct CobletStepFailure {
-    message: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -125,6 +94,7 @@ struct PendingStep {
 pub struct CobletProfileEdit {
     profile: EffectiveLaunchProfile,
     steps: Vec<PendingStep>,
+    placeholders: Vec<(String, String)>,
     failure: Option<String>,
     info: serde_json::Value,
 }
@@ -540,19 +510,14 @@ pub unsafe extern "C" fn coblet_edit_add_step(
     step: CobletStep,
     out_err: *mut *mut CobletError,
 ) -> CobletStatus {
-    let owned = Owned {
-        user_data: step.user_data,
-        free: step.free,
-    };
+    // SAFETY: the caller guarantees the table; the adapter owns the user
+    // data from here on.
+    let adapter = unsafe { ForeignStep::new(&step) };
     // SAFETY: forwarded from the caller's guarantees.
     unsafe {
         guard(out_err, || {
             let edit = edit_mut(edit)?;
             let anchor = text(anchor, "anchor")?.to_owned();
-            let name = text(step.name, "step.name")?.to_owned();
-            let run = step
-                .run
-                .ok_or_else(|| Failure::argument("step.run", "is NULL"))?;
             edit.steps.push(PendingStep {
                 anchor,
                 placement: if after {
@@ -560,12 +525,37 @@ pub unsafe extern "C" fn coblet_edit_add_step(
                 } else {
                     Placement::Before
                 },
-                step: ForeignStep {
-                    name,
-                    run,
-                    owned: Arc::new(owned),
-                },
+                step: adapter?,
             });
+            Ok(CobletStatus::Ok)
+        })
+    }
+}
+
+/// Sets `${name}` to `value` in this launch, replacing the value of an
+/// earlier customizer. A name coblet fills itself, such as
+/// `auth_access_token`, an empty name or one with `$`, `{` or `}` fails
+/// with `COBLET_STATUS_INVALID_ARGUMENT`.
+///
+/// # Safety
+///
+/// `edit` must be the handle of the running `customize` callback; strings
+/// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+#[allow(unsafe_code, reason = "exported C symbol")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn coblet_edit_set_placeholder(
+    edit: *mut CobletProfileEdit,
+    name: *const c_char,
+    value: *const c_char,
+    out_err: *mut *mut CobletError,
+) -> CobletStatus {
+    // SAFETY: forwarded from the caller's guarantees.
+    unsafe {
+        guard(out_err, || {
+            let edit = edit_mut(edit)?;
+            let name = crate::placeholders::check_name(text(name, "name")?)?;
+            edit.placeholders
+                .push((name, text(value, "value")?.to_owned()));
             Ok(CobletStatus::Ok)
         })
     }
@@ -587,30 +577,6 @@ pub unsafe extern "C" fn coblet_edit_fail(
     unsafe {
         guard(std::ptr::null_mut(), || {
             edit_mut(edit)?.failure = Some(text(message, "message")?.to_owned());
-            Ok(CobletStatus::Ok)
-        })
-    }
-}
-
-/// Gives the reason the running step `run` callback is about to return false.
-///
-/// # Safety
-///
-/// `failure` must be the handle passed to the running `run` callback;
-/// `message` must be NULL or NUL-terminated.
-#[allow(unsafe_code, reason = "exported C symbol")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn coblet_step_fail(
-    failure: *mut CobletStepFailure,
-    message: *const c_char,
-) -> CobletStatus {
-    // SAFETY: forwarded from the caller's guarantees.
-    unsafe {
-        guard(std::ptr::null_mut(), || {
-            let failure = failure
-                .as_mut()
-                .ok_or_else(|| Failure::argument("failure", "is NULL"))?;
-            failure.message = Some(text(message, "message")?.to_owned());
             Ok(CobletStatus::Ok)
         })
     }
@@ -695,6 +661,7 @@ impl coblet::launch::LaunchCustomizer for ForeignCustomizer {
         let mut edit = CobletProfileEdit {
             profile: profile.clone(),
             steps: Vec::new(),
+            placeholders: Vec::new(),
             failure: None,
             info: serde_json::json!({
                 "schema": 1,
@@ -717,6 +684,9 @@ impl coblet::launch::LaunchCustomizer for ForeignCustomizer {
             });
         }
         *profile = edit.profile;
+        for (name, value) in edit.placeholders {
+            ctx.set_placeholder(name, value)?;
+        }
         for pending in edit.steps {
             let step = Arc::new(pending.step);
             match pending.placement {
@@ -725,60 +695,6 @@ impl coblet::launch::LaunchCustomizer for ForeignCustomizer {
             }
         }
         Ok(())
-    }
-}
-
-/// C step run as a Rust launch step.
-struct ForeignStep {
-    name: String,
-    run: unsafe extern "C" fn(*mut c_void, *const c_char, *mut CobletStepFailure) -> bool,
-    owned: Arc<Owned>,
-}
-
-impl coblet::launch::LaunchStep for ForeignStep {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    #[allow(unsafe_code, reason = "calls the C callback")]
-    fn run<'a>(&'a self, cx: &'a mut LaunchContext) -> BoxFuture<'a, Result<(), LaunchError>> {
-        let info = serde_json::json!({
-            "schema": 1,
-            "data_root": cx.layout.data_root().to_string_lossy(),
-            "game_dir": cx.layout.game_directory().to_string_lossy(),
-            "java": cx.java.as_ref().map(|java| java.executable.to_string_lossy().into_owned()),
-            "natives_dir": cx
-                .natives_directory
-                .as_ref()
-                .map(|dir| dir.to_string_lossy().into_owned()),
-        });
-        let json = c_text(&info.to_string());
-        let run = self.run;
-        let owned = Arc::clone(&self.owned);
-        Box::pin(async move {
-            let failed = |message: String| LaunchError::Step {
-                step: self.name.clone(),
-                message,
-            };
-            let (ok, failure) = tokio::task::spawn_blocking(move || {
-                let mut failure = CobletStepFailure::default();
-                // SAFETY: the callback and user data are valid until `free`,
-                // which `owned` delays; the string and failure live for the call.
-                let ok = unsafe { run(owned.user_data, json.as_ptr(), &raw mut failure) };
-                (ok, failure)
-            })
-            .await
-            .map_err(|error| failed(format!("the step stopped: {error}")))?;
-            if ok {
-                Ok(())
-            } else {
-                Err(failed(
-                    failure
-                        .message
-                        .unwrap_or_else(|| "the step failed".to_owned()),
-                ))
-            }
-        })
     }
 }
 
@@ -806,15 +722,16 @@ mod tests {
     use coblet::types::{Arch, ExtensionId, OsFamily, Platform, PlayerName};
 
     use super::{
-        CobletArgKind, CobletCustomizer, CobletProfileEdit, CobletStep, CobletStepFailure,
-        ForeignCustomizer, coblet_edit_add_arg, coblet_edit_add_library, coblet_edit_add_step,
-        coblet_edit_fail, coblet_edit_info_json, coblet_edit_remove_library, coblet_edit_set_env,
-        coblet_edit_set_main_class, coblet_step_fail,
+        CobletArgKind, CobletCustomizer, CobletProfileEdit, ForeignCustomizer, coblet_edit_add_arg,
+        coblet_edit_add_library, coblet_edit_add_step, coblet_edit_fail, coblet_edit_info_json,
+        coblet_edit_remove_library, coblet_edit_set_env, coblet_edit_set_main_class,
+        coblet_edit_set_placeholder,
     };
     use crate::builder::{
         coblet_builder_add_customizer, coblet_builder_allow_auth_changes, coblet_builder_build,
         coblet_builder_free, coblet_builder_new,
     };
+    use crate::steps::{CobletStep, CobletStepCtx, coblet_step_ctx_fail};
     use crate::types::{CobletStatus, CobletString};
 
     /// State behind `user_data`, as a C program would keep it.
@@ -841,8 +758,8 @@ mod tests {
 
     unsafe extern "C" fn run_step(
         user_data: *mut c_void,
+        ctx: *mut CobletStepCtx,
         info_json: *const c_char,
-        failure: *mut CobletStepFailure,
     ) -> bool {
         let state = state(user_data);
         state.step_runs.fetch_add(1, Ordering::SeqCst);
@@ -851,8 +768,8 @@ mod tests {
         info.clone_into(&mut state.last_info.lock().unwrap());
         if state.fail {
             let message = CString::new("proxy did not start").unwrap();
-            // SAFETY: the failure handle of this call.
-            unsafe { coblet_step_fail(failure, message.as_ptr()) };
+            // SAFETY: the context handle of this call.
+            unsafe { coblet_step_ctx_fail(ctx, message.as_ptr()) };
             return false;
         }
         true
@@ -860,6 +777,31 @@ mod tests {
 
     unsafe extern "C" fn free_step(user_data: *mut c_void) {
         state(user_data).step_frees.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Sets one placeholder and tries one coblet fills itself.
+    ///
+    /// # Safety
+    ///
+    /// `edit` must be the handle of the running callback.
+    unsafe fn set_placeholders(edit: *mut CobletProfileEdit) {
+        let null = std::ptr::null_mut();
+        // SAFETY: forwarded from the caller's guarantee; the strings are static.
+        unsafe {
+            assert_eq!(
+                coblet_edit_set_placeholder(edit, c"acme_user".as_ptr(), c"Steve".as_ptr(), null),
+                CobletStatus::Ok
+            );
+            assert_eq!(
+                coblet_edit_set_placeholder(
+                    edit,
+                    c"auth_access_token".as_ptr(),
+                    c"x".as_ptr(),
+                    null
+                ),
+                CobletStatus::InvalidArgument
+            );
+        }
     }
 
     unsafe extern "C" fn customize(user_data: *mut c_void, edit: *mut CobletProfileEdit) -> bool {
@@ -939,6 +881,7 @@ mod tests {
                 CobletStatus::Ok
             );
             assert!(removed);
+            set_placeholders(edit);
             let (env, one) = (text("ACME"), text("1"));
             assert_eq!(
                 coblet_edit_set_env(edit, env.as_ptr(), one.as_ptr(), null),
@@ -1022,6 +965,8 @@ mod tests {
         assert_eq!(profile.jvm_args[0].value, "-javaagent:/opt/fix.jar");
         assert_eq!(profile.libraries[0].name.to_string(), "acme:fix:1.0");
         assert_eq!(ctx.extra_steps(), ["acme-probe"]);
+        let shown = format!("{ctx:?}");
+        assert!(shown.contains("placeholders: [\"acme_user\"]"), "{shown}");
         drop(ctx);
         assert_eq!(state.step_frees.load(Ordering::SeqCst), 1);
         assert_eq!(state.frees.load(Ordering::SeqCst), 0);
