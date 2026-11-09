@@ -189,6 +189,12 @@ pub struct LoginOptions {
     pub login_hint: Option<String>,
     /// How the user signs in.
     pub interaction: Interaction,
+    /// Inputs a method defines for itself, such as the address of a login
+    /// server; the built-in methods ignore them.
+    pub params: BTreeMap<String, String>,
+    /// Sensitive inputs a method defines for itself, such as a password;
+    /// the built-in methods ignore them.
+    pub secrets: Credentials,
 }
 
 impl LoginOptions {
@@ -209,6 +215,20 @@ impl LoginOptions {
     #[must_use]
     pub fn with_interaction(mut self, interaction: Interaction) -> Self {
         self.interaction = interaction;
+        self
+    }
+
+    /// Adds or replaces an input of the method.
+    #[must_use]
+    pub fn with_param(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.params.insert(name.into(), value.into());
+        self
+    }
+
+    /// Adds or replaces a sensitive input of the method.
+    #[must_use]
+    pub fn with_secret(mut self, name: impl Into<String>, secret: Secret) -> Self {
+        self.secrets.insert(name, secret);
         self
     }
 }
@@ -347,5 +367,30 @@ impl Refreshed {
     #[must_use]
     pub fn new(update: AccountUpdate, session: Option<LaunchSession>) -> Self {
         Self { update, session }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use coblet_runtime::Secret;
+
+    use super::LoginOptions;
+
+    #[test]
+    fn method_inputs_keep_secrets_out_of_debug_output() {
+        let options = LoginOptions::new()
+            .with_hint("steve@example.com")
+            .with_param("server", "https://skin.example/api/yggdrasil")
+            .with_secret("password", Secret::new("hunter2"));
+        assert_eq!(
+            options.params["server"],
+            "https://skin.example/api/yggdrasil"
+        );
+        assert_eq!(options.secrets.get("password").unwrap().expose(), "hunter2");
+        let shown = format!("{options:?}");
+        assert!(
+            shown.contains("skin.example") && !shown.contains("hunter2"),
+            "{shown}"
+        );
     }
 }
