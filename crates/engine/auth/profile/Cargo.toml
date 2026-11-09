@@ -16,6 +16,7 @@ coblet-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+toml.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 uuid = { workspace = true, features = ["v4"] }
 

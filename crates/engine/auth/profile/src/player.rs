@@ -9,7 +9,7 @@ use coblet_types::{ExtensionId, PlayerName};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::http::{Reply, send, url};
+use crate::http::{Reply, multipart, send, url};
 use crate::{AppearanceCaps, AppearanceCtx, AppearanceService, PlayerError, check_skin_png};
 
 const PROFILE: &str = "https://api.minecraftservices.com/minecraft/profile";
@@ -141,7 +141,10 @@ impl MinecraftServices {
             SkinSource::Png(png) => {
                 check_skin_png(&png)?;
                 let boundary = format!("coblet-{}", uuid::Uuid::new_v4().simple());
-                Body::Multipart(boundary.clone(), multipart(&boundary, model, &png))
+                Body::Multipart(
+                    boundary.clone(),
+                    multipart(&boundary, "variant", model.as_str(), &png),
+                )
             }
             SkinSource::Url(skin) => {
                 Body::Json(json!({ "variant": model.as_str(), "url": skin.as_str() }))
@@ -361,18 +364,6 @@ enum Body {
     Multipart(String, Vec<u8>),
 }
 
-fn multipart(boundary: &str, model: SkinModel, png: &[u8]) -> Vec<u8> {
-    let mut body = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"variant\"\r\n\r\n{model}\r\n\
-         --{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"skin.png\"\r\n\
-         Content-Type: image/png\r\n\r\n"
-    )
-    .into_bytes();
-    body.extend_from_slice(png);
-    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-    body
-}
-
 fn profile(reply: &Reply) -> Result<PlayerProfile, PlayerError> {
     PlayerProfile::from_services_json(&reply.body).map_err(|error| PlayerError::InvalidResponse {
         endpoint: reply.endpoint,
@@ -380,7 +371,7 @@ fn profile(reply: &Reply) -> Result<PlayerProfile, PlayerError> {
     })
 }
 
-fn public_player(reply: &Reply) -> Result<PublicPlayer, PlayerError> {
+pub(crate) fn public_player(reply: &Reply) -> Result<PublicPlayer, PlayerError> {
     let invalid = |message: String| PlayerError::InvalidResponse {
         endpoint: reply.endpoint,
         message,

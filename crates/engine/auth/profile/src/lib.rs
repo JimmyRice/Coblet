@@ -6,6 +6,8 @@
 //! reads the appearance, uploads skins from a file or a URL, switches
 //! between the Classic and Slim models, resets the skin and shows or hides
 //! capes. It also looks up any player's public skin by name.
+//! [`YggdrasilAppearance`], defined in TOML or JSON, serves skin sites that
+//! follow the authlib-injector specification.
 //!
 //! [`SkinLibrary`] keeps skins on disk in `data_root/skins/` with their
 //! names, models and origins, for online and offline accounts alike.
@@ -19,9 +21,11 @@ mod library;
 mod mock;
 mod player;
 mod png;
+mod yggdrasil;
 
 pub use appearance::{AppearanceCaps, AppearanceCtx, AppearanceService};
 pub use error::PlayerError;
 pub use library::{LibrarySkin, SkinLibrary, SkinOrigin};
 pub use player::{MinecraftServices, PublicPlayer, SkinSource};
 pub use png::{MAX_SKIN_BYTES, check_skin_png};
+pub use yggdrasil::YggdrasilAppearance;

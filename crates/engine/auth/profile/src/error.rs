@@ -20,6 +20,9 @@ pub enum PlayerError {
         /// What was asked, such as `reset skins`.
         operation: &'static str,
     },
+    /// An appearance service definition is malformed.
+    #[error("invalid appearance service definition: {0}")]
+    Definition(String),
     /// The skin image is not a 64x64 or 64x32 PNG.
     #[error("invalid skin image: {0}")]
     InvalidSkin(String),
