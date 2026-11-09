@@ -158,8 +158,12 @@ fn auth_kind(error: &AuthError) -> ErrorKind {
 fn player_kind(error: &PlayerError) -> ErrorKind {
     match error {
         PlayerError::Unauthorized => ErrorKind::Auth,
-        PlayerError::Offline => ErrorKind::Unsupported,
-        PlayerError::InvalidSkin(_) | PlayerError::CapeNotOwned(_) => ErrorKind::InvalidArgument,
+        PlayerError::Offline | PlayerError::Unsupported { .. } | PlayerError::NoService(_) => {
+            ErrorKind::Unsupported
+        }
+        PlayerError::Definition(_) | PlayerError::InvalidSkin(_) | PlayerError::CapeNotOwned(_) => {
+            ErrorKind::InvalidArgument
+        }
         PlayerError::NoSkin => ErrorKind::InvalidState,
         PlayerError::UnknownPlayer(_) | PlayerError::UnknownSkin(_) => ErrorKind::NotFound,
         PlayerError::Transport { .. }

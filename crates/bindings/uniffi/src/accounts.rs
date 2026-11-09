@@ -9,8 +9,8 @@ use coblet::types::{ExtensionId, PlayerName};
 use crate::account::account_id;
 use crate::java::extension_id;
 use crate::{
-    AccountInfo, AuthMethodInfo, Coblet, CobletError, ErrorKind, GameHandle, LoginFlow,
-    LoginInteraction, PlayerInfo, SkinModel,
+    AccountInfo, AppearanceCapabilities, AppearanceServiceInfo, AuthMethodInfo, Coblet,
+    CobletError, ErrorKind, GameHandle, LoginFlow, LoginInteraction, PlayerInfo, SkinModel,
 };
 
 fn invalid(error: &dyn std::fmt::Display) -> CobletError {
@@ -308,6 +308,39 @@ impl Coblet {
         Ok(self.inner.download_texture(&url).await?)
     }
 
+    /// Lists the appearance services, such as
+    /// `coblet:minecraft-services` and those added with
+    /// `CobletBuilder.add_appearance_service`.
+    #[must_use]
+    pub fn appearance_services(&self) -> Vec<AppearanceServiceInfo> {
+        self.inner
+            .appearance_services()
+            .iter()
+            .map(|service| AppearanceServiceInfo {
+                id: service.id().to_string(),
+                name: service.display_name().to_owned(),
+            })
+            .collect()
+    }
+
+    /// Returns what the account's appearance service can change, so the
+    /// launcher shows only the controls that work; all off for accounts
+    /// without a service, such as offline ones.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `NotFound` for an unknown account.
+    pub async fn appearance_capabilities(
+        &self,
+        id: String,
+    ) -> Result<AppearanceCapabilities, CobletError> {
+        let caps = self
+            .inner
+            .appearance_capabilities(&account_id(&id)?)
+            .await?;
+        Ok(caps.into())
+    }
+
     /// Uploads a PNG skin, 64x64 or 64x32, and wears it. Like the other
     /// skin and cape calls it returns the new player profile and saves it.
     ///
@@ -327,7 +360,8 @@ impl Coblet {
         Ok(PlayerInfo::from(&profile))
     }
 
-    /// Wears the skin at a public URL, which Minecraft services download.
+    /// Wears the skin at a public URL, which the account's appearance
+    /// service downloads.
     ///
     /// # Errors
     ///

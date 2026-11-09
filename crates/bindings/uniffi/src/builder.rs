@@ -5,6 +5,7 @@ use coblet::platform::{DataProfile, ProfileEngine, ProfileLayer};
 use coblet::runtime::{Extension, UserAgent};
 use coblet::types::{ExtensionId, Platform};
 
+use crate::appearance::ForeignAppearance;
 use crate::auth_methods::ForeignAuthMethod;
 use crate::customize::ForeignCustomizer;
 use crate::java::{ForeignJavaLocator, ForeignJavaProvider, extension_id};
@@ -19,9 +20,9 @@ use crate::version_sources::{
     ForeignGameVersions, ForeignLoaderVersions, GameVersionSource, LoaderVersionSource,
 };
 use crate::{
-    ArtifactKind, AuthMethod, Coblet, CobletError, ErrorKind, JavaLocator, JavaProvider,
-    LaunchCustomizer, LaunchStep, ModLoader, PlaceholderSource, PlatformInfo, PlatformProfile,
-    SecretStore, TraitSource, UnknownPlaceholders, UrlRewriter,
+    AppearanceService, ArtifactKind, AuthMethod, Coblet, CobletError, ErrorKind, JavaLocator,
+    JavaProvider, LaunchCustomizer, LaunchStep, ModLoader, PlaceholderSource, PlatformInfo,
+    PlatformProfile, SecretStore, TraitSource, UnknownPlaceholders, UrlRewriter,
 };
 
 /// Where tokens are kept.
@@ -40,6 +41,7 @@ struct Settings {
     platform: Option<Platform>,
     msa_client_id: Option<MsaClientId>,
     auth_methods: Vec<(Arc<dyn coblet::auth::AuthMethod>, bool)>,
+    appearance: Vec<AppearanceSetting>,
     secrets: Secrets,
     rewriters: Vec<Arc<dyn coblet::runtime::UrlRewriter>>,
     mirror_fallback: bool,
@@ -49,6 +51,15 @@ struct Settings {
     java: Vec<JavaChange>,
     traits: Vec<TraitChange>,
     launch: Vec<LaunchChange>,
+}
+
+/// One appearance service change, applied in order.
+enum AppearanceSetting {
+    Add(Arc<dyn coblet::player::AppearanceService>, bool),
+    Remove(ExtensionId),
+    Toml(String),
+    Json(String),
+    Bind(ExtensionId, ExtensionId),
 }
 
 /// One launch step or placeholder change, applied in order.
@@ -97,6 +108,31 @@ enum JavaChange {
 }
 
 /// Applies launch step and placeholder changes in order.
+fn apply_auth(
+    mut builder: coblet::CobletBuilder<coblet::WithRoot>,
+    methods: Vec<(Arc<dyn coblet::auth::AuthMethod>, bool)>,
+    appearance: Vec<AppearanceSetting>,
+) -> coblet::CobletBuilder<coblet::WithRoot> {
+    for (method, replace) in methods {
+        builder = if replace {
+            builder.replace_auth_method(method)
+        } else {
+            builder.auth_method(method)
+        };
+    }
+    for change in appearance {
+        builder = match change {
+            AppearanceSetting::Add(service, false) => builder.appearance_service(service),
+            AppearanceSetting::Add(service, true) => builder.replace_appearance_service(service),
+            AppearanceSetting::Remove(id) => builder.without_appearance_service(id),
+            AppearanceSetting::Toml(definition) => builder.appearance_service_toml(definition),
+            AppearanceSetting::Json(definition) => builder.appearance_service_json(definition),
+            AppearanceSetting::Bind(method, service) => builder.appearance_for(method, service),
+        };
+    }
+    builder
+}
+
 fn apply_launch(
     mut builder: coblet::CobletBuilder<coblet::WithRoot>,
     changes: Vec<LaunchChange>,
@@ -260,6 +296,13 @@ impl CobletBuilder {
         })
     }
 
+    fn appearance_change(&self, change: AppearanceSetting) -> Result<(), CobletError> {
+        self.with(|settings| {
+            settings.appearance.push(change);
+            Ok(())
+        })
+    }
+
     fn launch_change(&self, change: LaunchChange) -> Result<(), CobletError> {
         self.with(|settings| {
             settings.launch.push(change);
@@ -311,6 +354,7 @@ impl CobletBuilder {
                 traits: Vec::new(),
                 launch: Vec::new(),
                 auth_methods: Vec::new(),
+                appearance: Vec::new(),
             })),
         }))
     }
@@ -449,6 +493,87 @@ impl CobletBuilder {
     /// Fails for a malformed ID and after `build`.
     pub fn replace_auth_method(&self, method: Arc<dyn AuthMethod>) -> Result<(), CobletError> {
         self.auth_method_change(method, true)
+    }
+
+    /// Adds a service written in this language that shows and changes
+    /// skins and capes, such as a skin site with its own API. Auth methods
+    /// name it, or `set_appearance_for` binds one to it.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`; `build` fails when the
+    /// ID is taken.
+    pub fn add_appearance_service(
+        &self,
+        service: Arc<dyn AppearanceService>,
+    ) -> Result<(), CobletError> {
+        let service = Arc::new(ForeignAppearance::new(service)?);
+        self.appearance_change(AppearanceSetting::Add(service, false))
+    }
+
+    /// Puts an appearance service written in this language in place of the
+    /// one with the same ID, such as `coblet:minecraft-services`.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`.
+    pub fn replace_appearance_service(
+        &self,
+        service: Arc<dyn AppearanceService>,
+    ) -> Result<(), CobletError> {
+        let service = Arc::new(ForeignAppearance::new(service)?);
+        self.appearance_change(AppearanceSetting::Add(service, true))
+    }
+
+    /// Removes an appearance service; an unknown ID is ignored.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`.
+    pub fn remove_appearance_service(&self, id: &str) -> Result<(), CobletError> {
+        let id = extension_id("appearance service", id)?;
+        self.appearance_change(AppearanceSetting::Remove(id))
+    }
+
+    /// Adds an appearance service from a TOML definition, such as a skin
+    /// site that follows the authlib-injector specification:
+    ///
+    /// ```toml
+    /// id = "acme:skins"
+    /// kind = "yggdrasil"
+    /// api_root = "https://skins.example/api/yggdrasil"
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Fails after `build`; `build` fails with `InvalidArgument` for a
+    /// malformed definition.
+    pub fn add_appearance_service_toml(&self, definition: String) -> Result<(), CobletError> {
+        self.appearance_change(AppearanceSetting::Toml(definition))
+    }
+
+    /// Adds an appearance service from a JSON definition with the fields
+    /// of the TOML form.
+    ///
+    /// # Errors
+    ///
+    /// Fails after `build`; `build` fails with `InvalidArgument` for a
+    /// malformed definition.
+    pub fn add_appearance_service_json(&self, definition: String) -> Result<(), CobletError> {
+        self.appearance_change(AppearanceSetting::Json(definition))
+    }
+
+    /// Shows and changes the skins and capes of `method`'s accounts with
+    /// `service`, instead of the service the method names.
+    ///
+    /// # Errors
+    ///
+    /// Fails for malformed IDs and after `build`; `build` fails with
+    /// `Unsupported` when no service has the ID.
+    pub fn set_appearance_for(&self, method: &str, service: &str) -> Result<(), CobletError> {
+        let method = extension_id("auth method", method)?;
+        let service = extension_id("appearance service", service)?;
+        self.appearance_change(AppearanceSetting::Bind(method, service))
     }
 
     /// Keeps refresh tokens and other secrets in a store written in the
@@ -1140,13 +1265,7 @@ impl CobletBuilder {
         if let Some(client_id) = settings.msa_client_id {
             builder = builder.msa_client_id(client_id);
         }
-        for (method, replace) in settings.auth_methods {
-            builder = if replace {
-                builder.replace_auth_method(method)
-            } else {
-                builder.auth_method(method)
-            };
-        }
+        builder = apply_auth(builder, settings.auth_methods, settings.appearance);
         for rewriter in settings.rewriters {
             builder = builder.url_rewriter(rewriter);
         }
