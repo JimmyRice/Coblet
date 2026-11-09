@@ -6,7 +6,9 @@
 //! login; `GameHandle` streams the log, kills and waits; `EventStream`
 //! delivers launch progress, file transfers, game starts, logs and exits. Foreign code can
 //! implement `PlatformProfile` to adapt launches to a platform,
-//! `LaunchCustomizer` and `LaunchStep` to change single launches, and
+//! `LaunchCustomizer` to change single launches, `LaunchStep` to add,
+//! replace or remove launch steps (`StepContext` hands their results to
+//! the next steps), and
 //! `SecretStore` to keep tokens in a system keychain, `UrlRewriter` to
 //! point requests at mirrors, `JavaProvider` and `JavaLocator` to add
 //! places Java is downloaded from and found in, `ModLoader` to add a Mod
@@ -37,6 +39,7 @@ mod placeholders;
 mod profile;
 mod secrets;
 mod sources;
+mod steps;
 #[cfg(test)]
 mod testing;
 mod traits;
@@ -48,7 +51,7 @@ pub use account::{
 };
 pub use builder::CobletBuilder;
 pub use context::{Coblet, LaunchMode, LaunchOptions, PlatformInfo, VersionInfo};
-pub use customize::{LaunchCustomizer, LaunchStep, LibrarySpec, ProfileEditor, StepInfo};
+pub use customize::{LaunchCustomizer, LibrarySpec, ProfileEditor};
 pub use error::{CobletError, ErrorKind};
 pub use events::{CobletEvent, EventStream, Outcome, TransferKind, generate_operation_id};
 pub use game::{GameExitInfo, GameHandle, LogLine};
@@ -69,6 +72,7 @@ pub use profile::{
 };
 pub use secrets::{SecretStore, generate_secret_key};
 pub use sources::{ArtifactKind, UrlRewriter};
+pub use steps::{LaunchStep, StepContext};
 pub use traits::{
     TraitChangeInfo, TraitReportInfo, TraitSource, TraitSourceContext, TraitSourceInfo,
     TraitVersionInfo, builtin_version_traits_toml,

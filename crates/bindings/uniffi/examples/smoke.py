@@ -61,8 +61,8 @@ class Step(coblet.LaunchStep):
     def name(self) -> str:
         return "coblet-smoke-step"
 
-    def run(self, info: coblet.StepInfo) -> None:
-        print(f"extra step ran: {info}")
+    def run(self, cx: coblet.StepContext) -> None:
+        print(f"extra step ran: java {cx.java()}, natives {cx.natives_dir()}")
         self.ran = True
 
 
