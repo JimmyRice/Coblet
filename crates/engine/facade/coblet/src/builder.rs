@@ -1387,7 +1387,7 @@ impl CobletBuilder<WithRoot> {
         #[cfg(feature = "auth-msa")]
         let skins = coblet_player::SkinLibrary::new(
             Arc::clone(&storage),
-            coblet_player::Player::new(Arc::clone(&transport)),
+            coblet_player::MinecraftServices::new(Arc::clone(&transport)),
             data_root.join("skins"),
         );
         #[cfg(feature = "mojang")]

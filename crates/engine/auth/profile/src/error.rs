@@ -1,4 +1,5 @@
 use coblet_runtime::{StorageError, TransportError};
+use coblet_types::ExtensionId;
 
 /// Failure of a skin, cape or player lookup call.
 #[non_exhaustive]
@@ -10,6 +11,15 @@ pub enum PlayerError {
     /// The account is offline and cannot change its skin on Minecraft services.
     #[error("offline accounts have no online skins or capes")]
     Offline,
+    /// The account's appearance service cannot make this change, or the
+    /// account has no appearance service.
+    #[error("appearance service `{service}` cannot {operation}")]
+    Unsupported {
+        /// ID of the service.
+        service: ExtensionId,
+        /// What was asked, such as `reset skins`.
+        operation: &'static str,
+    },
     /// The skin image is not a 64x64 or 64x32 PNG.
     #[error("invalid skin image: {0}")]
     InvalidSkin(String),

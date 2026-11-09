@@ -2,7 +2,7 @@ use std::future::Future;
 
 use coblet_auth::{Account, AccountId, PlayerProfile, RefreshMode, SkinModel};
 use coblet_launch_command::Credential;
-use coblet_player::{Player, PlayerError, SkinLibrary, SkinSource};
+use coblet_player::{MinecraftServices as Player, PlayerError, SkinLibrary, SkinSource};
 use coblet_runtime::HttpUrl;
 
 use crate::accounts::auth_error;

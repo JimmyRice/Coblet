@@ -2,15 +2,15 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use coblet_auth::{PlayerProfile, SkinModel};
+use coblet_auth::{MINECRAFT_SERVICES, PlayerProfile, SkinModel};
 use coblet_launch_command::Credential;
-use coblet_runtime::{HttpUrl, Method, Request, Transport};
-use coblet_types::PlayerName;
+use coblet_runtime::{BoxFuture, Extension, HttpUrl, Method, Request, Transport};
+use coblet_types::{ExtensionId, PlayerName};
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::http::{Reply, send, url};
-use crate::{PlayerError, check_skin_png};
+use crate::{AppearanceCaps, AppearanceCtx, AppearanceService, PlayerError, check_skin_png};
 
 const PROFILE: &str = "https://api.minecraftservices.com/minecraft/profile";
 const NAME_LOOKUP: &str = "https://api.mojang.com/users/profiles/minecraft";
@@ -42,16 +42,18 @@ pub struct PublicPlayer {
     pub cape: Option<HttpUrl>,
 }
 
-/// Skins and capes on Minecraft services.
+/// Skins and capes on Minecraft services, the built-in
+/// [`AppearanceService`] with ID [`MINECRAFT_SERVICES`].
 ///
-/// Calls take the Minecraft access token of an online session, for example
+/// Its own calls take the Minecraft access token of an online session, for example
 /// [`LaunchSession::access_token`](coblet_auth::LaunchSession::access_token).
 /// Changes return the updated profile, which the caller can save with
 /// [`AccountStore::set_profile`](coblet_auth::AccountStore::set_profile).
 /// [`PlayerError::Unauthorized`] means the token expired: refresh the
 /// account and repeat the call.
 #[derive(Clone)]
-pub struct Player {
+pub struct MinecraftServices {
+    id: ExtensionId,
     transport: Arc<dyn Transport>,
 }
 
@@ -99,11 +101,14 @@ struct RawMetadata {
     model: Option<String>,
 }
 
-impl Player {
+impl MinecraftServices {
     /// Creates the service.
     #[must_use]
     pub fn new(transport: Arc<dyn Transport>) -> Self {
-        Self { transport }
+        Self {
+            id: ExtensionId::new(MINECRAFT_SERVICES).unwrap_or_else(|_| unreachable!()),
+            transport,
+        }
     }
 
     /// Returns the profile with all skins and capes and which are active.
@@ -290,9 +295,64 @@ impl Player {
     }
 }
 
-impl std::fmt::Debug for Player {
+impl Extension for MinecraftServices {
+    fn id(&self) -> &ExtensionId {
+        &self.id
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Minecraft services"
+    }
+}
+
+impl AppearanceService for MinecraftServices {
+    fn capabilities(&self) -> AppearanceCaps {
+        AppearanceCaps::all()
+    }
+
+    fn appearance<'a>(
+        &'a self,
+        cx: &'a AppearanceCtx,
+    ) -> BoxFuture<'a, Result<PlayerProfile, PlayerError>> {
+        Box::pin(async move { Self::appearance(self, cx.access_token()?).await })
+    }
+
+    fn upload_skin<'a>(
+        &'a self,
+        cx: &'a AppearanceCtx,
+        source: SkinSource,
+        model: SkinModel,
+    ) -> BoxFuture<'a, Result<PlayerProfile, PlayerError>> {
+        Box::pin(async move { Self::upload_skin(self, cx.access_token()?, source, model).await })
+    }
+
+    fn set_model<'a>(
+        &'a self,
+        cx: &'a AppearanceCtx,
+        model: SkinModel,
+    ) -> BoxFuture<'a, Result<PlayerProfile, PlayerError>> {
+        Box::pin(async move { Self::set_model(self, cx.access_token()?, model).await })
+    }
+
+    fn reset_skin<'a>(
+        &'a self,
+        cx: &'a AppearanceCtx,
+    ) -> BoxFuture<'a, Result<PlayerProfile, PlayerError>> {
+        Box::pin(async move { Self::reset_skin(self, cx.access_token()?).await })
+    }
+
+    fn set_cape<'a>(
+        &'a self,
+        cx: &'a AppearanceCtx,
+        cape: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<PlayerProfile, PlayerError>> {
+        Box::pin(async move { Self::set_cape(self, cx.access_token()?, cape).await })
+    }
+}
+
+impl std::fmt::Debug for MinecraftServices {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Player").finish_non_exhaustive()
+        f.debug_struct("MinecraftServices").finish_non_exhaustive()
     }
 }
 
@@ -377,7 +437,7 @@ mod tests {
     use coblet_runtime::{HttpUrl, Method};
     use coblet_types::PlayerName;
 
-    use super::{Player, SkinSource};
+    use super::{MinecraftServices, SkinSource};
     use crate::PlayerError;
     use crate::mock::Mock;
     use crate::png::sample;
@@ -404,7 +464,7 @@ mod tests {
     async fn reads_the_appearance_with_the_token() {
         let mock = Mock::new();
         mock.on(Method::Get, PROFILE, 200, profile_json("CLASSIC", true));
-        let profile = Player::new(mock.clone())
+        let profile = MinecraftServices::new(mock.clone())
             .appearance(&token())
             .await
             .unwrap();
@@ -420,7 +480,7 @@ mod tests {
         let mock = Mock::new();
         mock.on(Method::Get, PROFILE, 401, "");
         assert!(matches!(
-            Player::new(mock).appearance(&token()).await,
+            MinecraftServices::new(mock).appearance(&token()).await,
             Err(PlayerError::Unauthorized)
         ));
     }
@@ -429,7 +489,7 @@ mod tests {
     async fn uploads_skins_from_files_and_urls() {
         let mock = Mock::new();
         mock.on(Method::Post, SKINS, 200, profile_json("SLIM", false));
-        let player = Player::new(mock.clone());
+        let player = MinecraftServices::new(mock.clone());
         let png = sample(64, 64);
         let profile = player
             .upload_skin(&token(), SkinSource::Png(png.clone()), SkinModel::Slim)
@@ -475,7 +535,7 @@ mod tests {
         let mock = Mock::new();
         mock.on(Method::Get, PROFILE, 200, profile_json("CLASSIC", false))
             .on(Method::Post, SKINS, 200, profile_json("SLIM", false));
-        let player = Player::new(mock.clone());
+        let player = MinecraftServices::new(mock.clone());
         let profile = player.set_model(&token(), SkinModel::Slim).await.unwrap();
         assert_eq!(profile.active_skin().unwrap().model, SkinModel::Slim);
         let post = &mock.seen_with(Method::Post)[0];
@@ -497,7 +557,9 @@ mod tests {
         r#"{"id": "069a79f444e94726a5befca90e38aaf5", "name": "Notch", "skins": [], "capes": []}"#,
     );
         assert!(matches!(
-            Player::new(mock).set_model(&token(), SkinModel::Slim).await,
+            MinecraftServices::new(mock)
+                .set_model(&token(), SkinModel::Slim)
+                .await,
             Err(PlayerError::NoSkin)
         ));
     }
@@ -519,7 +581,7 @@ mod tests {
             200,
             profile_json("CLASSIC", false),
         );
-        let player = Player::new(mock.clone());
+        let player = MinecraftServices::new(mock.clone());
         player.reset_skin(&token()).await.unwrap();
         assert_eq!(mock.seen_with(Method::Delete)[0].url, ACTIVE_SKIN);
 
@@ -568,7 +630,7 @@ mod tests {
         404,
         "",
     );
-        let player = Player::new(mock);
+        let player = MinecraftServices::new(mock);
         let notch = player
             .lookup(&PlayerName::new("Notch").unwrap())
             .await
