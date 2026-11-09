@@ -3,7 +3,7 @@
  *
  * Threading: every function may be called from any thread. Functions that
  * wait (coblet_versions_json, coblet_launch, coblet_launch_account,
- * coblet_login_begin, coblet_login_finish, coblet_account_*,
+ * coblet_login_begin, coblet_login_begin_with, coblet_login_finish, coblet_account_*,
  * coblet_game_next_log, coblet_game_wait) block the calling thread while the Coblet handle's own runtime
  * threads do the work. A CobletGame must not be used from two threads at
  * once; coblet_game_kill is the exception and may be called concurrently.
@@ -24,6 +24,34 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+// Flag of `coblet_builder_add_appearance_service`: put the service in
+// place of the one with the same ID, such as `coblet:minecraft-services`,
+// instead of failing when the `Coblet` is built.
+#define COBLET_APPEARANCE_REPLACE 1
+
+// Capability of a `CobletAppearanceService`: uploads skins from PNG bytes.
+#define COBLET_APPEARANCE_CAN_UPLOAD_PNG 1
+
+// Capability: uploads skins from a public URL.
+#define COBLET_APPEARANCE_CAN_UPLOAD_URL (1 << 1)
+
+// Capability: switches between the Classic and Slim models.
+#define COBLET_APPEARANCE_CAN_SET_MODEL (1 << 2)
+
+// Capability: goes back to the default skin.
+#define COBLET_APPEARANCE_CAN_RESET_SKIN (1 << 3)
+
+// Capability: shows one of the capes the account owns.
+#define COBLET_APPEARANCE_CAN_CHOOSE_CAPE (1 << 4)
+
+// Capability: hides the cape.
+#define COBLET_APPEARANCE_CAN_HIDE_CAPE (1 << 5)
+
+// Flag of `coblet_builder_add_auth_method`: put the method in place of
+// the one with the same ID, such as `coblet:offline`, instead of failing
+// when the `Coblet` is built.
+#define COBLET_AUTH_REPLACE 1
 
 // Flag of `coblet_builder_add_mirror`: metadata documents from the mirror
 // that do not match their hash are used when nothing else worked.
@@ -54,7 +82,7 @@
 #define COBLET_TRAITS_REPLACE 1
 
 // Version of the C ABI; it grows with every incompatible change.
-#define COBLET_ABI_VERSION 16
+#define COBLET_ABI_VERSION 17
 
 // Flag of `coblet_builder_add_version_source`,
 // `coblet_builder_add_loader_version_source` and the data forms: put the
@@ -248,6 +276,12 @@ typedef enum CobletJavaMatch {
 // Library handle: the Rust `Coblet` and the runtime its work runs on.
 typedef struct Coblet Coblet;
 
+// One running appearance callback: its account and its answer.
+typedef struct CobletAppearanceCtx CobletAppearanceCtx;
+
+// One running `login` or `refresh` callback: its requests and its answer.
+typedef struct CobletAuthCtx CobletAuthCtx;
+
 // Settings of a `Coblet` handle before it is built.
 //
 // Created with `coblet_builder_new`; `coblet_builder_build` turns it into
@@ -271,7 +305,8 @@ typedef struct CobletJavaCtx CobletJavaCtx;
 // One running Mod Loader callback: its requests and its answer.
 typedef struct CobletLoaderCtx CobletLoaderCtx;
 
-// Microsoft login in progress, from `coblet_login_begin`.
+// Login in progress, from `coblet_login_begin` or
+// `coblet_login_begin_with`.
 typedef struct CobletLogin CobletLogin;
 
 // Reason the `matches` callback cannot decide, given with `coblet_match_fail`.
@@ -338,6 +373,93 @@ typedef struct CobletBytes {
   // Number of bytes.
   size_t len;
 } CobletBytes;
+
+// Callback table of a service that shows and changes skins and capes,
+// written in C, such as a skin site with its own API.
+//
+// `id`, `name` and `capabilities` (`COBLET_APPEARANCE_CAN_*` flags) are
+// copied when the table is added; the library asks only for what the
+// flags allow and checks skin images first. `call` runs on a library
+// worker thread where blocking is fine, gets a `CobletAppearanceCtx`
+// handle valid only during the call and a request as JSON:
+// `{"schema":1,"op","account"}` with the account in the format of
+// `coblet_accounts_json` and `op` one of `appearance`, `upload_skin_png`
+// (with `model`; read the image with `coblet_appearance_ctx_png`),
+// `upload_skin_url` (with `url` and `model`), `set_model` (with `model`),
+// `reset_skin` and `set_cape` (with `cape`, an ID or null to hide it).
+// `model` is `classic` or `slim`. It answers with the player profile as
+// it is afterwards, in the format of `coblet_accounts_json`, through
+// `coblet_appearance_ctx_set_result` and returns true, or fails with
+// `coblet_appearance_ctx_fail` and returns false;
+// `COBLET_ERROR_KIND_AUTH` makes the library renew the token and ask
+// once more. Ownership of `user_data` is as for `CobletAuthMethod`.
+typedef struct CobletAppearanceService {
+  // Passed to every callback.
+  void *user_data;
+  // Namespaced ID, such as `acme:skins`.
+  const char *id;
+  // Name shown to users.
+  const char *name;
+  // `COBLET_APPEARANCE_CAN_*` flags.
+  uint32_t capabilities;
+  // Reads or changes the appearance. Returns false on failure.
+  bool (*call)(void *user_data, struct CobletAppearanceCtx *ctx, const char *request_json);
+  // Releases `user_data`; may be NULL.
+  void (*free)(void *user_data);
+} CobletAppearanceService;
+
+// Callback table of a way of signing in written in C, such as a login
+// server that follows the authlib-injector specification.
+//
+// `id`, `name` and `appearance_service` (the ID of the service for the
+// accounts' skins and capes, or NULL) are copied when the table is added.
+// Both callbacks run on a library worker thread where blocking is fine,
+// get a `CobletAuthCtx` handle valid only during the call and a request
+// as JSON, answer with `coblet_auth_ctx_set_result` and return true, or
+// give a reason with `coblet_auth_ctx_fail` and return false.
+//
+// `login` gets `{"schema":1,"login_hint","interaction","params",
+// "secrets"}`: `interaction` is `{"type":"device_code"}`,
+// `{"type":"browser_loopback","host","port","path"}` or
+// `{"type":"browser_redirect","redirect_uri"}`; `params` and `secrets` are
+// string maps the launcher passed to `coblet_login_begin_with`. It calls
+// `coblet_auth_ctx_show_prompt` once when the user has something to do;
+// the launcher gets the prompt while `login` keeps running. Its result is
+// the account change: `{"player","state","session_expires_at","data",
+// "secrets"}` with `player` null or in the format of
+// `coblet_accounts_json`, `state` such as `ready`, `session_expires_at`
+// in Unix seconds or null, and string maps `data` (kept with the account)
+// and `secrets` (saved in the secret store).
+//
+// `refresh` gets `{"schema":1,"account","mode"}` with the account in the
+// format of `coblet_accounts_json` and `mode` `if-needed`, `force` or
+// `recheck`. It reads and saves secrets with `coblet_auth_ctx_secret` and
+// `coblet_auth_ctx_put_secret`, and answers `{"change","session"}` with
+// an account change and a session, or null when the account cannot
+// play: `{"player_name","uuid","access_token","xuid","client_id",
+// "user_type","jvm_args","expires_at"}`, where a null `access_token`
+// launches offline and `jvm_args` such as a `-javaagent` are added to the
+// launch. Failing with `COBLET_ERROR_KIND_AUTH` means the user has to
+// sign in again.
+//
+// The library owns `user_data` from the call that receives the table,
+// even when it fails, and calls `free` once when the `Coblet` is freed.
+typedef struct CobletAuthMethod {
+  // Passed to every callback.
+  void *user_data;
+  // Namespaced ID, such as `acme:login`.
+  const char *id;
+  // Name shown to users.
+  const char *name;
+  // ID of the appearance service of the accounts, or NULL.
+  const char *appearance_service;
+  // Signs in. Returns false on failure.
+  bool (*login)(void *user_data, struct CobletAuthCtx *ctx, const char *request_json);
+  // Returns a session to launch with. Returns false on failure.
+  bool (*refresh)(void *user_data, struct CobletAuthCtx *ctx, const char *request_json);
+  // Releases `user_data`; may be NULL.
+  void (*free)(void *user_data);
+} CobletAuthMethod;
 
 // Callback table of a Platform Profile written in C.
 //
@@ -717,7 +839,7 @@ extern "C" {
 
 // Lists the saved accounts as JSON: `{"schema":1,"default","accounts":[
 // {"id","method","state","player","session_expires_at","license",
-// "license_checked_at","owns_game"}]}`.
+// "license_checked_at","owns_game","data"}]}`.
 //
 // `default` is the default account's ID or null. `state` is `ready`,
 // `needs-refresh`, `needs-reauth`, `no-license` or `no-profile`. `player`
@@ -728,7 +850,9 @@ extern "C" {
 // subscription) or `missing`, and null for offline or never checked
 // accounts; `license_checked_at` is its time in Unix seconds or null.
 // `owns_game` is true when `license` is `purchased`, like Prism
-// Launcher's "owns Minecraft". On success `*out_json` receives a string
+// Launcher's "owns Minecraft". `data` holds the string values the
+// account's auth method keeps, such as the address of its login server.
+// On success `*out_json` receives a string
 // to free with `coblet_string_free`.
 //
 // Reading the list needs no network. Each `player` is the snapshot from
@@ -892,9 +1016,9 @@ enum CobletStatus coblet_account_upload_skin(const struct Coblet *coblet,
                                              struct CobletString *out_json,
                                              struct CobletError **out_err);
 
-// Wears the skin at a public URL, which Minecraft services download, and
-// returns the player as the `player` object of `coblet_accounts_json`
-// with a `schema` field.
+// Wears the skin at a public URL, which the account's appearance service
+// downloads, and returns the player as the `player` object of
+// `coblet_accounts_json` with a `schema` field.
 //
 // # Safety
 //
@@ -942,6 +1066,300 @@ enum CobletStatus coblet_account_set_cape(const struct Coblet *coblet,
                                           const char *cape_id,
                                           struct CobletString *out_json,
                                           struct CobletError **out_err);
+
+// Points `*out_png` and `*out_len` at the image of an `upload_skin_png`
+// request; the bytes stay valid during the call. Fails with
+// `COBLET_ERROR_KIND_INVALID_STATE` for other requests.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; the
+// out-parameters must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_appearance_ctx_png(struct CobletAppearanceCtx *ctx,
+                                            const uint8_t **out_png,
+                                            size_t *out_len,
+                                            struct CobletError **out_err);
+
+// Returns the access token of the account's current session. On success
+// `*out_token` receives a string to free with `coblet_string_free`.
+// Fails with `COBLET_ERROR_KIND_UNSUPPORTED` for offline sessions.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `out_token`
+// must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_appearance_ctx_access_token(struct CobletAppearanceCtx *ctx,
+                                                     struct CobletString *out_token,
+                                                     struct CobletError **out_err);
+
+// Sends an HTTP request like `coblet_auth_ctx_send`.
+//
+// # Safety
+//
+// As for `coblet_auth_ctx_send`, with an appearance context.
+enum CobletStatus coblet_appearance_ctx_send(struct CobletAppearanceCtx *ctx,
+                                             const char *request_json,
+                                             const uint8_t *body,
+                                             size_t body_len,
+                                             struct CobletString *out_response_json,
+                                             struct CobletBytes *out_body,
+                                             struct CobletError **out_err);
+
+// Hands the player profile the running appearance callback answers with
+// to the library, which copies it.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `json` must be
+// NULL or NUL-terminated.
+enum CobletStatus coblet_appearance_ctx_set_result(struct CobletAppearanceCtx *ctx,
+                                                   const char *json);
+
+// Gives the kind and reason of the failure the running appearance
+// callback is about to return false for.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `message` must
+// be NULL or NUL-terminated.
+enum CobletStatus coblet_appearance_ctx_fail(struct CobletAppearanceCtx *ctx,
+                                             enum CobletErrorKind kind,
+                                             const char *message);
+
+// Adds a service written in C that shows and changes skins and capes.
+// Auth methods name it, or `coblet_builder_set_appearance_for` binds one
+// to it.
+//
+// `flags` is 0 or `COBLET_APPEARANCE_REPLACE`. Ownership and failures are
+// as for `coblet_builder_add_auth_method`.
+//
+// # Safety
+//
+// As for `coblet_builder_add_auth_method`.
+enum CobletStatus coblet_builder_add_appearance_service(struct CobletBuilder *builder,
+                                                        struct CobletAppearanceService service,
+                                                        uint32_t flags,
+                                                        struct CobletError **out_err);
+
+// Removes an appearance service, such as `coblet:minecraft-services`; an
+// unknown ID is ignored.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `id` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_remove_appearance_service(struct CobletBuilder *builder,
+                                                           const char *id,
+                                                           struct CobletError **out_err);
+
+// Adds an appearance service from a TOML definition, such as a skin site
+// that follows the authlib-injector specification: `id`, `name`
+// (optional), `kind = "yggdrasil"` and `api_root`. A malformed definition
+// fails `coblet_builder_build` with `COBLET_ERROR_KIND_INVALID_ARGUMENT`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; `definition` must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_appearance_service_toml(struct CobletBuilder *builder,
+                                                             const char *definition,
+                                                             struct CobletError **out_err);
+
+// Adds an appearance service from a JSON definition with the fields of
+// the TOML form.
+//
+// # Safety
+//
+// As for `coblet_builder_add_appearance_service_toml`.
+enum CobletStatus coblet_builder_add_appearance_service_json(struct CobletBuilder *builder,
+                                                             const char *definition,
+                                                             struct CobletError **out_err);
+
+// Shows and changes the skins and capes of `method`'s accounts with
+// `service`, instead of the service the method names. A service ID that
+// is not registered fails `coblet_builder_build` with
+// `COBLET_ERROR_KIND_UNSUPPORTED`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; strings must be NULL or
+// NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_set_appearance_for(struct CobletBuilder *builder,
+                                                    const char *method,
+                                                    const char *service,
+                                                    struct CobletError **out_err);
+
+// Lists the appearance services as JSON:
+// `{"schema":1,"services":[{"id","name"}]}`. On success `*out_json`
+// receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `out_json` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_appearance_services_json(const struct Coblet *coblet,
+                                                  struct CobletString *out_json,
+                                                  struct CobletError **out_err);
+
+// Returns what the account's appearance service can change as JSON:
+// `{"schema":1,"upload_png","upload_url","set_model","reset_skin",
+// "choose_cape","hide_cape"}`, all false for accounts without a service.
+// On success `*out_json` receives a string to free with
+// `coblet_string_free`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `account_id` must be NULL or
+// NUL-terminated; `out_json` must be writable; `out_err` must be NULL or
+// writable.
+enum CobletStatus coblet_appearance_capabilities_json(const struct Coblet *coblet,
+                                                      const char *account_id,
+                                                      struct CobletString *out_json,
+                                                      struct CobletError **out_err);
+
+// Hands the launcher what the user has to do, as JSON in the format of
+// `coblet_login_prompt_json` without `schema`; `login` keeps running.
+//
+// Fails with `COBLET_ERROR_KIND_INVALID_STATE` on a second call and in
+// `refresh`.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `prompt_json`
+// must be NULL or NUL-terminated; `out_err` must be NULL or writable.
+enum CobletStatus coblet_auth_ctx_show_prompt(struct CobletAuthCtx *ctx,
+                                              const char *prompt_json,
+                                              struct CobletError **out_err);
+
+// Waits for the URI the browser was redirected to, which the launcher
+// passes to `coblet_login_submit_redirect`. On success `*out_uri`
+// receives a string to free with `coblet_string_free`.
+//
+// Fails with `COBLET_ERROR_KIND_INVALID_STATE` unless the login waits for
+// a redirect (`browser_redirect`) or when called twice, and with
+// `COBLET_ERROR_KIND_CANCELLED` when the launcher cancels the login.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback, used on that
+// callback's thread; `out_uri` must be writable; `out_err` must be NULL
+// or writable.
+enum CobletStatus coblet_auth_ctx_wait_redirect(struct CobletAuthCtx *ctx,
+                                                struct CobletString *out_uri,
+                                                struct CobletError **out_err);
+
+// Reports whether the launcher cancelled or dropped the login, or stopped
+// waiting for the refresh; false for a NULL handle.
+//
+// # Safety
+//
+// `ctx` must be NULL or the handle passed to the running callback.
+bool coblet_auth_ctx_is_cancelled(struct CobletAuthCtx *ctx);
+
+// Sends an HTTP request through the library's transport and waits for
+// the answer; any status comes back as a response.
+//
+// `request_json` is `{"method","url","headers":[[name,value]]}`; `body`
+// may be NULL. On success `*out_response_json` receives
+// `{"schema":1,"status","headers":[[name,value]]}` to free with
+// `coblet_string_free`, and `*out_body` the body, at most 1 MiB, to free
+// with `coblet_bytes_free`.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback, used on that
+// callback's thread; `request_json` must be NULL or NUL-terminated;
+// `body` must be NULL or readable for `body_len` bytes; the out-parameters
+// must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_auth_ctx_send(struct CobletAuthCtx *ctx,
+                                       const char *request_json,
+                                       const uint8_t *body,
+                                       size_t body_len,
+                                       struct CobletString *out_response_json,
+                                       struct CobletBytes *out_body,
+                                       struct CobletError **out_err);
+
+// Reads a secret saved for the account, such as `refresh_token`, in
+// `refresh`. On success `*out_found` tells whether it exists and
+// `*out_value` receives it, or an empty value, to free with
+// `coblet_string_free`.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback, used on that
+// callback's thread; `name` must be NULL or NUL-terminated; the
+// out-parameters must be writable; `out_err` must be NULL or writable.
+enum CobletStatus coblet_auth_ctx_secret(struct CobletAuthCtx *ctx,
+                                         const char *name,
+                                         bool *out_found,
+                                         struct CobletString *out_value,
+                                         struct CobletError **out_err);
+
+// Saves a secret for the account at once in `refresh`, so a rotated
+// token survives a failure later in the refresh.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback, used on that
+// callback's thread; strings must be NULL or NUL-terminated; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_auth_ctx_put_secret(struct CobletAuthCtx *ctx,
+                                             const char *name,
+                                             const char *value,
+                                             struct CobletError **out_err);
+
+// Hands the answer of the running auth callback to the library, which
+// copies it.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `json` must be
+// NULL or NUL-terminated.
+enum CobletStatus coblet_auth_ctx_set_result(struct CobletAuthCtx *ctx, const char *json);
+
+// Gives the kind and reason of the failure the running auth callback is
+// about to return false for; `COBLET_ERROR_KIND_AUTH` means the user has
+// to sign in again.
+//
+// # Safety
+//
+// `ctx` must be the handle passed to the running callback; `message` must
+// be NULL or NUL-terminated.
+enum CobletStatus coblet_auth_ctx_fail(struct CobletAuthCtx *ctx,
+                                       enum CobletErrorKind kind,
+                                       const char *message);
+
+// Adds a way of signing in written in C; start a login with
+// `coblet_login_begin_with`.
+//
+// `flags` is 0 or `COBLET_AUTH_REPLACE`. The library owns the table's
+// `user_data` from this call on, even when it fails. A table without its
+// callbacks, a malformed ID or an unknown flag fails with
+// `COBLET_STATUS_INVALID_ARGUMENT`; an ID already registered without the
+// flag fails `coblet_builder_build`.
+//
+// # Safety
+//
+// `builder` must be a live builder handle; the table's strings must be
+// NULL or NUL-terminated and its callbacks must stay valid until its
+// `free` runs; `out_err` must be NULL or writable.
+enum CobletStatus coblet_builder_add_auth_method(struct CobletBuilder *builder,
+                                                 struct CobletAuthMethod method,
+                                                 uint32_t flags,
+                                                 struct CobletError **out_err);
+
+// Lists the auth methods, such as `coblet:offline`, `coblet:microsoft`
+// and those added with `coblet_builder_add_auth_method`, as JSON:
+// `{"schema":1,"methods":[{"id","name"}]}`. On success `*out_json`
+// receives a string to free with `coblet_string_free`.
+//
+// # Safety
+//
+// `coblet` must be a live handle; `out_json` must be writable; `out_err`
+// must be NULL or writable.
+enum CobletStatus coblet_auth_methods_json(const struct Coblet *coblet,
+                                           struct CobletString *out_json,
+                                           struct CobletError **out_err);
 
 // Starts building a `Coblet` handle with the default transport.
 //
@@ -2016,6 +2434,30 @@ enum CobletStatus coblet_login_begin(const struct Coblet *coblet,
                                      const char *login_hint,
                                      struct CobletLogin **out_login,
                                      struct CobletError **out_err);
+
+// Starts a login with any auth method, such as `coblet:microsoft` or one
+// added with `coblet_builder_add_auth_method`.
+//
+// `options_json` may be NULL or `{"interaction","login_hint","params",
+// "secrets"}`, every field optional: `interaction` is
+// `{"type":"device_code"}` (the default), `{"type":"browser"}`,
+// `{"type":"browser_loopback","host","port","path"}` or
+// `{"type":"browser_redirect","redirect_uri"}`; `params` and `secrets`
+// are string maps the method defines, such as the address of a login
+// server and a password. On success `*out_login` receives a handle as
+// from `coblet_login_begin`. Fails with `COBLET_ERROR_KIND_NOT_FOUND` for
+// an unknown method.
+//
+// # Safety
+//
+// `coblet` must be a live handle that outlives the login; strings must be
+// NULL or NUL-terminated; `out_login` must be writable; `out_err` must be
+// NULL or writable.
+enum CobletStatus coblet_login_begin_with(const struct Coblet *coblet,
+                                          const char *method,
+                                          const char *options_json,
+                                          struct CobletLogin **out_login,
+                                          struct CobletError **out_err);
 
 // Returns what the user has to do as JSON: `{"schema":1,"type":"device_code",
 // "user_code","verification_uri","expires_at","message"}`,

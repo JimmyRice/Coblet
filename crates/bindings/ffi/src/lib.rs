@@ -11,7 +11,11 @@
 //! through a `CobletProfileEdit` handle. Accounts, Microsoft logins
 //! (`CobletLogin`), skins and capes are managed with `coblet_account_*`
 //! and `coblet_login_*`; a secret store written in C is a callback table
-//! (`CobletSecretStore`). Mirrors are prefix rules
+//! (`CobletSecretStore`). Other ways of signing in are callback tables
+//! (`CobletAuthMethod`) that work through a `CobletAuthCtx` handle and
+//! start with `coblet_login_begin_with`; skins and capes elsewhere come
+//! from callback tables (`CobletAppearanceService`) or TOML and JSON
+//! definitions (`coblet_builder_add_appearance_service_toml`). Mirrors are prefix rules
 //! (`coblet_builder_add_mirror`) or callback tables (`CobletUrlRewriter`),
 //! and game versions come from Mojang's manifest, other manifests
 //! (`coblet_builder_add_version_manifest`) and callback tables
@@ -47,12 +51,15 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod accounts;
+mod appearance;
+mod auth_methods;
 mod builder;
 mod context;
 mod customize;
 mod events;
 mod game;
 mod guard;
+mod http;
 mod java;
 mod loaders;
 mod login;
@@ -73,6 +80,23 @@ pub use accounts::{
     coblet_account_set_cape, coblet_account_set_default, coblet_account_set_skin_model,
     coblet_account_upload_skin, coblet_account_upload_skin_url, coblet_account_verify_license,
     coblet_accounts_json, coblet_any_account_owns_game, coblet_bytes_free, coblet_download_texture,
+};
+pub use appearance::{
+    COBLET_APPEARANCE_CAN_CHOOSE_CAPE, COBLET_APPEARANCE_CAN_HIDE_CAPE,
+    COBLET_APPEARANCE_CAN_RESET_SKIN, COBLET_APPEARANCE_CAN_SET_MODEL,
+    COBLET_APPEARANCE_CAN_UPLOAD_PNG, COBLET_APPEARANCE_CAN_UPLOAD_URL, COBLET_APPEARANCE_REPLACE,
+    CobletAppearanceCtx, CobletAppearanceService, coblet_appearance_capabilities_json,
+    coblet_appearance_ctx_access_token, coblet_appearance_ctx_fail, coblet_appearance_ctx_png,
+    coblet_appearance_ctx_send, coblet_appearance_ctx_set_result, coblet_appearance_services_json,
+    coblet_builder_add_appearance_service, coblet_builder_add_appearance_service_json,
+    coblet_builder_add_appearance_service_toml, coblet_builder_remove_appearance_service,
+    coblet_builder_set_appearance_for,
+};
+pub use auth_methods::{
+    COBLET_AUTH_REPLACE, CobletAuthCtx, CobletAuthMethod, coblet_auth_ctx_fail,
+    coblet_auth_ctx_is_cancelled, coblet_auth_ctx_put_secret, coblet_auth_ctx_secret,
+    coblet_auth_ctx_send, coblet_auth_ctx_set_result, coblet_auth_ctx_show_prompt,
+    coblet_auth_ctx_wait_redirect, coblet_auth_methods_json, coblet_builder_add_auth_method,
 };
 pub use builder::{
     COBLET_MIRROR_TRUST_METADATA, CobletBuilder, coblet_builder_add_customizer,
@@ -120,8 +144,9 @@ pub use loaders::{
     coblet_loader_versions_json, coblet_loaders_json, coblet_plan_launch_json,
 };
 pub use login::{
-    CobletLogin, CobletLoginInteraction, coblet_login_begin, coblet_login_cancel,
-    coblet_login_finish, coblet_login_free, coblet_login_prompt_json, coblet_login_submit_redirect,
+    CobletLogin, CobletLoginInteraction, coblet_login_begin, coblet_login_begin_with,
+    coblet_login_cancel, coblet_login_finish, coblet_login_free, coblet_login_prompt_json,
+    coblet_login_submit_redirect,
 };
 pub use placeholders::{
     COBLET_PLACEHOLDER_REPLACE, CobletPlaceholderCtx, CobletPlaceholderSource,

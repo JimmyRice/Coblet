@@ -73,7 +73,7 @@ fn unix_seconds(time: SystemTime) -> Option<u64> {
 }
 
 /// Describes an account as `{"id","method","state","player",
-/// "session_expires_at","license","license_checked_at","owns_game"}`.
+/// "session_expires_at","license","license_checked_at","owns_game","data"}`.
 pub(crate) fn account_value(account: &Account) -> serde_json::Value {
     serde_json::json!({
         "id": account.id.as_str(),
@@ -84,6 +84,7 @@ pub(crate) fn account_value(account: &Account) -> serde_json::Value {
         "license": account.license.map(|check| check.license.as_str()),
         "license_checked_at": account.license.and_then(|check| unix_seconds(check.checked_at)),
         "owns_game": account.owns_game(),
+        "data": account.data,
     })
 }
 
@@ -138,7 +139,7 @@ unsafe fn optional_account_id(id: *const c_char) -> Result<Option<AccountId>, Fa
 
 /// Lists the saved accounts as JSON: `{"schema":1,"default","accounts":[
 /// {"id","method","state","player","session_expires_at","license",
-/// "license_checked_at","owns_game"}]}`.
+/// "license_checked_at","owns_game","data"}]}`.
 ///
 /// `default` is the default account's ID or null. `state` is `ready`,
 /// `needs-refresh`, `needs-reauth`, `no-license` or `no-profile`. `player`
@@ -149,7 +150,9 @@ unsafe fn optional_account_id(id: *const c_char) -> Result<Option<AccountId>, Fa
 /// subscription) or `missing`, and null for offline or never checked
 /// accounts; `license_checked_at` is its time in Unix seconds or null.
 /// `owns_game` is true when `license` is `purchased`, like Prism
-/// Launcher's "owns Minecraft". On success `*out_json` receives a string
+/// Launcher's "owns Minecraft". `data` holds the string values the
+/// account's auth method keeps, such as the address of its login server.
+/// On success `*out_json` receives a string
 /// to free with `coblet_string_free`.
 ///
 /// Reading the list needs no network. Each `player` is the snapshot from
@@ -596,9 +599,9 @@ pub unsafe extern "C" fn coblet_account_upload_skin(
     }
 }
 
-/// Wears the skin at a public URL, which Minecraft services download, and
-/// returns the player as the `player` object of `coblet_accounts_json`
-/// with a `schema` field.
+/// Wears the skin at a public URL, which the account's appearance service
+/// downloads, and returns the player as the `player` object of
+/// `coblet_accounts_json` with a `schema` field.
 ///
 /// # Safety
 ///

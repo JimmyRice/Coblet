@@ -15,7 +15,7 @@ bytes.workspace = true
 coblet = { workspace = true, default-features = true, features = ["auth-msa", "auth-loopback", "encrypted-secrets"] }
 serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
 tracing.workspace = true
 
 [dev-dependencies]
