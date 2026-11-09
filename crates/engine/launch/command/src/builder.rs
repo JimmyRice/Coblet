@@ -210,7 +210,8 @@ impl<State> LaunchCommandBuilder<State> {
         self
     }
 
-    /// Overrides `${user_type}`; `msa` for online sessions and `legacy` otherwise by default.
+    /// Overrides `${user_type}`; by default it is the session's own user
+    /// type or `msa` for online sessions, and `legacy` otherwise.
     pub fn user_type(mut self, user_type: impl Into<String>) -> Self {
         self.parts.user_type = Some(user_type.into());
         self
@@ -327,6 +328,7 @@ impl Parts {
                     "user_type",
                     self.user_type
                         .clone()
+                        .or_else(|| session.user_type.clone())
                         .unwrap_or_else(|| "msa".to_owned())
                         .into(),
                 );
@@ -665,6 +667,26 @@ mod tests {
         let exposed = command.expose_secrets().to_string();
         assert!(exposed.contains("eyJ.secret.token"));
         assert_eq!(args(&command)[2], "eyJ.secret.token");
+    }
+
+    #[test]
+    fn the_session_picks_its_user_type_and_the_builder_wins() {
+        let session = OnlineSession::new(
+            steve(),
+            "0123456789abcdef0123456789abcdef",
+            Credential::new("token"),
+        )
+        .with_user_type("mojang");
+        let build = |builder: LaunchCommandBuilder<Ready>| {
+            builder
+                .game_args(["--userType", "${user_type}"])
+                .build()
+                .unwrap()
+        };
+        let command = build(base(LaunchAuth::online(session.clone())));
+        assert_eq!(args(&command)[1..], ["--userType", "mojang"]);
+        let command = build(base(LaunchAuth::online(session)).user_type("custom"));
+        assert_eq!(args(&command)[1..], ["--userType", "custom"]);
     }
 
     #[test]
