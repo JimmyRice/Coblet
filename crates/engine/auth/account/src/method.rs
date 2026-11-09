@@ -6,13 +6,14 @@ use coblet_runtime::{
     AuthPrompt, BoxFuture, CancellationToken, Clock, Event, EventBus, Extension, Secret,
     SystemClock, Transport,
 };
+use coblet_types::ExtensionId;
 
 use crate::{
     Account, AccountSecrets, AccountState, AuthError, AuthFlow, LaunchSession, LicenseCheck,
     PlayerProfile,
 };
 
-/// Way of signing in, registered under an [`ExtensionId`](coblet_types::ExtensionId).
+/// Way of signing in, registered under an [`ExtensionId`].
 ///
 /// coblet ships `coblet:offline` and, with the `msa` feature,
 /// `coblet:microsoft`. A third-party login service, such as an
@@ -45,6 +46,14 @@ pub trait AuthMethod: Extension {
         secrets: &'a AccountSecrets,
         mode: RefreshMode,
     ) -> BoxFuture<'a, Result<Refreshed, AuthError>>;
+
+    /// Returns the ID of the service that shows and changes the skins and
+    /// capes of this method's accounts, such as
+    /// [`MINECRAFT_SERVICES`](crate::MINECRAFT_SERVICES); `None`, the
+    /// default, when there is none.
+    fn appearance_service(&self) -> Option<ExtensionId> {
+        None
+    }
 }
 
 /// Services available to an auth method.
