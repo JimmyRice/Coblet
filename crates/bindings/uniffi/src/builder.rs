@@ -5,6 +5,7 @@ use coblet::platform::{DataProfile, ProfileEngine, ProfileLayer};
 use coblet::runtime::{Extension, UserAgent};
 use coblet::types::{ExtensionId, Platform};
 
+use crate::auth_methods::ForeignAuthMethod;
 use crate::customize::ForeignCustomizer;
 use crate::java::{ForeignJavaLocator, ForeignJavaProvider, extension_id};
 use crate::loaders::{ForeignLoader, loader_id};
@@ -18,9 +19,9 @@ use crate::version_sources::{
     ForeignGameVersions, ForeignLoaderVersions, GameVersionSource, LoaderVersionSource,
 };
 use crate::{
-    ArtifactKind, Coblet, CobletError, ErrorKind, JavaLocator, JavaProvider, LaunchCustomizer,
-    LaunchStep, ModLoader, PlaceholderSource, PlatformInfo, PlatformProfile, SecretStore,
-    TraitSource, UnknownPlaceholders, UrlRewriter,
+    ArtifactKind, AuthMethod, Coblet, CobletError, ErrorKind, JavaLocator, JavaProvider,
+    LaunchCustomizer, LaunchStep, ModLoader, PlaceholderSource, PlatformInfo, PlatformProfile,
+    SecretStore, TraitSource, UnknownPlaceholders, UrlRewriter,
 };
 
 /// Where tokens are kept.
@@ -38,6 +39,7 @@ struct Settings {
     profiles: Vec<Arc<dyn coblet::platform::PlatformProfile>>,
     platform: Option<Platform>,
     msa_client_id: Option<MsaClientId>,
+    auth_methods: Vec<(Arc<dyn coblet::auth::AuthMethod>, bool)>,
     secrets: Secrets,
     rewriters: Vec<Arc<dyn coblet::runtime::UrlRewriter>>,
     mirror_fallback: bool,
@@ -246,6 +248,18 @@ impl CobletBuilder {
         ))
     }
 
+    fn auth_method_change(
+        &self,
+        method: Arc<dyn AuthMethod>,
+        replace: bool,
+    ) -> Result<(), CobletError> {
+        let method = Arc::new(ForeignAuthMethod::new(method)?);
+        self.with(|settings| {
+            settings.auth_methods.push((method, replace));
+            Ok(())
+        })
+    }
+
     fn launch_change(&self, change: LaunchChange) -> Result<(), CobletError> {
         self.with(|settings| {
             settings.launch.push(change);
@@ -296,6 +310,7 @@ impl CobletBuilder {
                 java: Vec::new(),
                 traits: Vec::new(),
                 launch: Vec::new(),
+                auth_methods: Vec::new(),
             })),
         }))
     }
@@ -411,6 +426,29 @@ impl CobletBuilder {
             settings.msa_client_id = Some(client_id);
             Ok(())
         })
+    }
+
+    /// Adds a way of signing in written in this language, such as a login
+    /// server that follows the authlib-injector specification; start a
+    /// login with `Coblet.begin_login`.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`; `build` fails when the
+    /// ID is taken.
+    pub fn add_auth_method(&self, method: Arc<dyn AuthMethod>) -> Result<(), CobletError> {
+        self.auth_method_change(method, false)
+    }
+
+    /// Puts an auth method written in this language in place of the one
+    /// with the same ID, such as `coblet:offline`; accounts already saved
+    /// with that ID use it from then on.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a malformed ID and after `build`.
+    pub fn replace_auth_method(&self, method: Arc<dyn AuthMethod>) -> Result<(), CobletError> {
+        self.auth_method_change(method, true)
     }
 
     /// Keeps refresh tokens and other secrets in a store written in the
@@ -1101,6 +1139,13 @@ impl CobletBuilder {
         }
         if let Some(client_id) = settings.msa_client_id {
             builder = builder.msa_client_id(client_id);
+        }
+        for (method, replace) in settings.auth_methods {
+            builder = if replace {
+                builder.replace_auth_method(method)
+            } else {
+                builder.auth_method(method)
+            };
         }
         for rewriter in settings.rewriters {
             builder = builder.url_rewriter(rewriter);

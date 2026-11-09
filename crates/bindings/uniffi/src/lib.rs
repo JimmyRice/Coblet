@@ -26,12 +26,14 @@ uniffi::setup_scaffolding!();
 
 mod account;
 mod accounts;
+mod auth_methods;
 mod builder;
 mod context;
 mod customize;
 mod error;
 mod events;
 mod game;
+mod http;
 mod java;
 mod loaders;
 mod login;
@@ -49,12 +51,17 @@ pub use account::{
     AccountInfo, AccountState, CapeInfo, GameLicense, LoginInteraction, LoginPrompt, PlayerInfo,
     SkinInfo, SkinModel,
 };
+pub use auth_methods::{
+    AccountChange, AuthMethod, AuthMethodInfo, LoginContext, LoginRequest, RefreshContext,
+    RefreshMode, RefreshResult, SessionInfo,
+};
 pub use builder::CobletBuilder;
 pub use context::{Coblet, LaunchMode, LaunchOptions, PlatformInfo, VersionInfo};
 pub use customize::{LaunchCustomizer, LibrarySpec, ProfileEditor};
 pub use error::{CobletError, ErrorKind};
 pub use events::{CobletEvent, EventStream, Outcome, TransferKind, generate_operation_id};
 pub use game::{GameExitInfo, GameHandle, LogLine};
+pub use http::{HttpHeader, HttpRequest, HttpResponse};
 pub use java::{
     JavaExtensionInfo, JavaInstallInfo, JavaLocator, JavaPackageInfo, JavaProvider,
     JavaProviderAnswer, JavaProviderContext, JavaQueryInfo,

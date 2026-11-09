@@ -51,7 +51,6 @@ impl CobletError {
     }
 
     /// Returns the category.
-    #[cfg(test)]
     pub(crate) fn kind(&self) -> ErrorKind {
         let Self::Failed { kind, .. } = self;
         *kind
