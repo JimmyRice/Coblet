@@ -75,4 +75,7 @@ pub enum PlayerError {
     /// The skin library index is damaged or newer than this version.
     #[error("skin library index is not usable: {0}")]
     Library(String),
+    /// A third-party appearance service failed.
+    #[error("{0}")]
+    Failed(String),
 }
